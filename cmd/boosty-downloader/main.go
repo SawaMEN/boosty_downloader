@@ -2,14 +2,27 @@ package main
 
 import (
 	"github.com/SawaMEN/boosty_downloader/internal/server"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 func main() {
 	cfg := server.FromEnv()
+	if len(os.Args) > 1 && os.Args[1] == "reset-admin-password" {
+		password, err := io.ReadAll(io.LimitReader(os.Stdin, 2049))
+		if err != nil || len(password) > 2048 {
+			log.Fatal("не удалось прочитать новый пароль")
+		}
+		if err = server.ResetAdminPassword(cfg.DataDir, cfg.AdminUser, cfg.AdminPassword, strings.TrimSpace(string(password))); err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Пароль администратора обновлён, старые сессии завершены")
+		return
+	}
 	app, err := server.New(cfg)
 	if err != nil {
 		log.Fatal(err)

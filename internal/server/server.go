@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +16,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,36 +30,92 @@ type Config struct {
 	AdminUser     string
 	AdminPassword string
 	SecretKey     string
+	SyncInterval  time.Duration
 }
 type App struct {
-	cfg    Config
-	store  *Storage
-	boosty *boosty.Client
-	queue  chan string
+	cfg                Config
+	store              *Storage
+	accounts           *Accounts
+	clients            map[string]*boosty.Client
+	clientsMu          sync.Mutex
+	queue              chan string
+	importQueue        chan string
+	subscriptionSource func(context.Context, string) (boosty.SubscriptionList, error)
+	feedSource         func(context.Context, string, string, string) (boosty.FeedResult, error)
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
 }
 
 func New(cfg Config) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
-		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD длиной от 12 символов")
+		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
-	s, e := newStorage(cfg.DataDir, cfg.SecretKey)
-	if e != nil {
-		return nil, e
+	s, err := newStorage(cfg.DataDir, cfg.SecretKey)
+	if err != nil {
+		return nil, err
 	}
-	t, e := s.loadTokens()
-	if e != nil {
-		return nil, e
+	accounts, err := newAccounts(cfg.DataDir, cfg.AdminUser, cfg.AdminPassword)
+	if err != nil {
+		return nil, err
 	}
-	a := &App{cfg: cfg, store: s, boosty: boosty.New(t, s.saveTokens), queue: make(chan string, 128)}
-	go a.worker()
+	if err = s.migrateLegacyAuth(); err != nil {
+		return nil, err
+	}
+	if err = s.migrateLegacyJobs(); err != nil {
+		return nil, err
+	}
+	if err = s.migrateArchiveTimestamps(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), ctx: ctx, cancel: cancel}
+	a.wg.Add(3)
+	go func() { defer a.wg.Done(); a.worker() }()
+	go func() { defer a.wg.Done(); a.importWorker() }()
+	go func() { defer a.wg.Done(); a.syncLoop() }()
 	for _, id := range s.queued() {
-		a.queue <- id
+		a.queueJob(id)
+	}
+	for _, id := range s.queuedImports() {
+		a.importQueue <- id
 	}
 	return a, nil
 }
+func (a *App) client(owner string) (*boosty.Client, error) {
+	a.clientsMu.Lock()
+	defer a.clientsMu.Unlock()
+	if c := a.clients[owner]; c != nil {
+		return c, nil
+	}
+	t, err := a.store.loadUserTokens(owner)
+	if err != nil {
+		return nil, err
+	}
+	c := boosty.New(t, func(t boosty.Tokens) error { return a.store.saveUserTokens(owner, t) })
+	a.clients[owner] = c
+	return c, nil
+}
+
+// Close stops discovery, streaming downloads and scheduled work. Persisted
+// queued jobs are picked up by the next service process.
+func (a *App) Close() { a.cancel(); a.wg.Wait() }
+func (a *App) queueJob(id string) bool {
+	select {
+	case <-a.ctx.Done():
+		return false
+	case a.queue <- id:
+		return true
+	}
+}
 func (a *App) worker() {
-	for id := range a.queue {
-		a.runJob(id)
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case id := <-a.queue:
+			a.runJob(id)
+		}
 	}
 }
 func reply(w http.ResponseWriter, code int, data any) {
@@ -71,33 +127,55 @@ func reply(w http.ResponseWriter, code int, data any) {
 func fail(w http.ResponseWriter, code int, msg string) {
 	reply(w, code, map[string]string{"error": msg})
 }
+
+type accountContext struct{}
+
+func principal(r *http.Request) Account {
+	v, _ := r.Context().Value(accountContext{}).(Account)
+	return v
+}
 func (a *App) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		ah := sha256.Sum256([]byte(u))
-		bh := sha256.Sum256([]byte(a.cfg.AdminUser))
-		ph := sha256.Sum256([]byte(p))
-		qh := sha256.Sum256([]byte(a.cfg.AdminPassword))
-		if !ok || subtle.ConstantTimeCompare(ah[:], bh[:]) != 1 || subtle.ConstantTimeCompare(ph[:], qh[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Boosty Downloader"`)
-			w.Header().Set("Cache-Control", "no-store")
-			http.Error(w, "Authentication required", http.StatusUnauthorized)
+		u, ok := a.accounts.current(sessionToken(r))
+		if !ok {
+			fail(w, 401, "войдите в учётную запись загрузчика")
 			return
 		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), accountContext{}, u)))
+	})
+}
+func (a *App) stateChangeGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+			if r.Header.Get("X-BD-Request") != "1" {
+				fail(w, 403, "неверный CSRF-заголовок")
+				return
+			}
+			if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+				fail(w, 403, "запрос другого сайта запрещён")
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }
 func (a *App) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, map[string]string{"status": "ok"}) })
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	public := http.NewServeMux()
+	public.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, map[string]string{"status": "ok"}) })
+	public.HandleFunc("GET /api/public-config", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, 200, map[string]bool{"registrationOpen": a.accounts.registration()})
+	})
+	public.HandleFunc("POST /api/account/login", a.login)
+	public.HandleFunc("POST /api/account/register", a.register)
+	public.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; media-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		b, e := ui.ReadFile("ui/index.html")
 		if e != nil {
@@ -105,59 +183,89 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(b)
+		_, _ = w.Write(b)
 	})
-	mux.HandleFunc("GET /ui/app.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		b, _ := ui.ReadFile("ui/app.js")
-		w.Write(b)
-	})
-	mux.HandleFunc("GET /ui/style.css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		b, _ := ui.ReadFile("ui/style.css")
-		w.Write(b)
-	})
-	mux.HandleFunc("GET /api/auth", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, 200, map[string]bool{"connected": a.boosty.HasToken()})
-	})
-	mux.HandleFunc("POST /api/auth", func(w http.ResponseWriter, r *http.Request) {
-		var t boosty.Tokens
-		if e := decodeRequest(w, r, &t); e != nil {
+	public.HandleFunc("GET /ui/{asset}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("asset")
+		switch name {
+		case "app.js", "library.js", "player.js", "subscriptions.js":
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "style.css":
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		default:
+			http.NotFound(w, r)
 			return
 		}
-		if len(t.AccessToken) > 16384 || len(t.RefreshToken) > 16384 || len(t.DeviceID) > 1024 {
-			fail(w, 400, "слишком длинный токен")
+		b, e := ui.ReadFile("ui/" + name)
+		if e != nil {
+			http.NotFound(w, r)
 			return
 		}
-		if e := a.boosty.SetTokens(t); e != nil {
-			fail(w, 500, "не удалось сохранить авторизацию")
-			return
-		}
-		reply(w, 200, map[string]bool{"connected": t.AccessToken != ""})
+		w.Header().Set("Cache-Control", "public, max-age=180")
+		_, _ = w.Write(b)
 	})
-	mux.HandleFunc("GET /api/post", a.preview)
-	mux.HandleFunc("GET /api/stream", a.stream)
-	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
+	private := http.NewServeMux()
+	private.HandleFunc("GET /api/account", func(w http.ResponseWriter, r *http.Request) {
+		u := principal(r)
+		reply(w, 200, map[string]any{"id": u.ID, "username": u.Username, "admin": u.Admin})
+	})
+	private.HandleFunc("POST /api/account/logout", func(w http.ResponseWriter, r *http.Request) {
+		_ = a.accounts.logout(sessionToken(r))
+		setSessionCookie(w, "", -1)
+		reply(w, 200, map[string]bool{"ok": true})
+	})
+	private.HandleFunc("GET /api/admin/registration", a.adminRegistration)
+	private.HandleFunc("POST /api/admin/registration", a.adminRegistration)
+	private.HandleFunc("GET /api/subscriptions", a.subscribedAuthors)
+	private.HandleFunc("POST /api/subscriptions/import", a.importSubscriptions)
+	private.HandleFunc("GET /api/imports", a.importsForUser)
+	private.HandleFunc("POST /api/imports/{id}/cancel", a.cancelImport)
+	private.HandleFunc("GET /api/auth", a.boostyAuth)
+	private.HandleFunc("POST /api/auth", a.boostyAuth)
+	private.HandleFunc("DELETE /api/auth", a.boostyAuth)
+	private.HandleFunc("GET /api/post", a.postDetails)
+	private.HandleFunc("GET /api/comments", a.postComments)
+	private.HandleFunc("GET /api/feed", a.feed)
+	private.HandleFunc("GET /api/settings", a.settings)
+	private.HandleFunc("GET /api/stream", a.stream)
+	private.HandleFunc("GET /api/shared", a.sharedJobs)
+	private.HandleFunc("GET /api/authors", a.authors)
+	private.HandleFunc("POST /api/authors", a.authors)
+	private.HandleFunc("DELETE /api/authors/{author}", a.unpinAuthor)
+	private.HandleFunc("DELETE /api/authors/{author}/archives", a.deleteAuthorArchives)
+	private.HandleFunc("GET /api/jobs/{id}/shares", a.jobShares)
+	private.HandleFunc("POST /api/jobs/{id}/shares", a.jobShares)
+	private.HandleFunc("DELETE /api/jobs/{id}/shares", a.jobShares)
+	private.HandleFunc("PUT /api/jobs/{id}/visibility", a.setJobVisibility)
+	private.HandleFunc("DELETE /api/jobs/{id}", a.deleteJob)
+	private.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
+		owner := principal(r).ID
 		jobs := a.store.all()
-		sort.Slice(jobs, func(i, j int) bool { return jobs[i].CreatedAt.After(jobs[j].CreatedAt) })
-		reply(w, 200, jobs)
+		selected := make([]Job, 0)
+		for _, j := range jobs {
+			if j.OwnerID == owner {
+				selected = append(selected, j)
+			}
+		}
+		sort.Slice(selected, func(i, j int) bool { return selected[i].CreatedAt.After(selected[j].CreatedAt) })
+		reply(w, 200, selected)
 	})
-	mux.HandleFunc("POST /api/jobs", a.newJob)
-	mux.HandleFunc("GET /library/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-		http.StripPrefix("/library/", http.FileServer(http.Dir(filepath.Join(a.cfg.DataDir, "library")))).ServeHTTP(w, r)
-	})
-	protected := a.auth(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
-			mux.ServeHTTP(w, r)
+	private.HandleFunc("POST /api/jobs", a.newJob)
+	private.HandleFunc("POST /api/jobs/{id}/retry", a.retryJob)
+	private.HandleFunc("GET /api/jobs/{id}/zip", a.zipJob)
+	private.HandleFunc("GET /api/jobs/{id}/manifest", a.jobManifest)
+	private.HandleFunc("GET /library/{id}/{file...}", a.libraryFile)
+	secured := a.auth(private)
+	return a.stateChangeGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/ui/") || r.URL.Path == "/healthz" || r.URL.Path == "/api/public-config" || r.URL.Path == "/api/account/login" || r.URL.Path == "/api/account/register" {
+			public.ServeHTTP(w, r)
 			return
 		}
-		protected.ServeHTTP(w, r)
-	})
+		secured.ServeHTTP(w, r)
+	}))
 }
 func decodeRequest(w http.ResponseWriter, r *http.Request, v any) error {
-	if r.Header.Get("Content-Type") != "application/json" {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		fail(w, 415, "требуется application/json")
 		return errors.New("content-type")
 	}
@@ -174,32 +282,178 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, v any) error {
 	}
 	return nil
 }
-func (a *App) preview(w http.ResponseWriter, r *http.Request) {
-	author, id, e := boosty.PostURL(r.URL.Query().Get("url"))
-	if e != nil {
-		fail(w, 400, e.Error())
+func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if decodeRequest(w, r, &v) != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	post, e := a.boosty.Post(ctx, author, id)
-	if e != nil {
-		fail(w, 502, e.Error())
+	acc, err := a.accounts.authenticate(v.Username, v.Password, r.RemoteAddr)
+	if err != nil {
+		fail(w, 401, err.Error())
 		return
 	}
-	type item struct {
-		Index int    `json:"index"`
-		Type  string `json:"type"`
-		Title string `json:"title"`
-		Size  int64  `json:"size"`
+	token, err := a.accounts.session(acc.ID)
+	if err != nil {
+		fail(w, 500, "не удалось открыть сессию")
+		return
 	}
-	medias := boosty.ExtractMedia(post)
-	items := make([]item, 0, len(medias))
-	for i, m := range medias {
-		items = append(items, item{i, m.Type, m.Title, m.Size})
-	}
-	reply(w, 200, map[string]any{"title": post.Title, "author": author, "postId": id, "hasAccess": post.HasAccess, "media": items, "comments": post.Count.Comments})
+	setSessionCookie(w, token, int(sessionTTL.Seconds()))
+	reply(w, 200, map[string]any{"username": acc.Username, "admin": acc.Admin})
 }
+func (a *App) register(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if decodeRequest(w, r, &v) != nil {
+		return
+	}
+	acc, err := a.accounts.register(v.Username, v.Password)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	token, err := a.accounts.session(acc.ID)
+	if err != nil {
+		fail(w, 500, "не удалось открыть сессию")
+		return
+	}
+	setSessionCookie(w, token, int(sessionTTL.Seconds()))
+	reply(w, 201, map[string]any{"username": acc.Username, "admin": false})
+}
+func (a *App) adminRegistration(w http.ResponseWriter, r *http.Request) {
+	if !principal(r).Admin {
+		fail(w, 403, "только администратор")
+		return
+	}
+	if r.Method == "GET" {
+		reply(w, 200, map[string]bool{"registrationOpen": a.accounts.registration()})
+		return
+	}
+	var v struct {
+		RegistrationOpen bool `json:"registrationOpen"`
+	}
+	if decodeRequest(w, r, &v) != nil {
+		return
+	}
+	if err := a.accounts.setRegistration(v.RegistrationOpen); err != nil {
+		fail(w, 500, "не удалось сохранить настройки")
+		return
+	}
+	reply(w, 200, map[string]bool{"registrationOpen": v.RegistrationOpen})
+}
+func (a *App) boostyAuth(w http.ResponseWriter, r *http.Request) {
+	c, err := a.client(principal(r).ID)
+	if err != nil {
+		fail(w, 500, "ошибка хранилища Boosty")
+		return
+	}
+	if r.Method == "GET" {
+		reply(w, 200, map[string]bool{"connected": c.HasToken()})
+		return
+	}
+	if r.Method == "DELETE" {
+		if err = c.SetTokens(boosty.Tokens{}); err != nil {
+			fail(w, 500, "не удалось очистить токены")
+			return
+		}
+		reply(w, 200, map[string]bool{"connected": false})
+		return
+	}
+	var v struct {
+		Method       string `json:"method"`
+		Value        string `json:"value"`
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		DeviceID     string `json:"deviceId"`
+	}
+	if decodeRequest(w, r, &v) != nil {
+		return
+	}
+	t := boosty.Tokens{AccessToken: strings.TrimSpace(v.AccessToken), RefreshToken: strings.TrimSpace(v.RefreshToken), DeviceID: strings.TrimSpace(v.DeviceID)}
+	if v.Method == "cookie" || v.Method == "json" {
+		cookie := strings.TrimSpace(v.Value)
+		if strings.HasPrefix(cookie, "auth=") {
+			cookie = strings.SplitN(strings.TrimPrefix(cookie, "auth="), ";", 2)[0]
+		}
+		if decoded, e := url.PathUnescape(cookie); e == nil {
+			cookie = decoded
+		}
+		var raw struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+			DeviceID     string `json:"deviceId"`
+		}
+		if e := json.Unmarshal([]byte(cookie), &raw); e != nil {
+			fail(w, 400, "неверный JSON cookie Boosty")
+			return
+		}
+		t = boosty.Tokens{AccessToken: raw.AccessToken, RefreshToken: raw.RefreshToken, DeviceID: raw.DeviceID}
+	} else if v.Method != "" && v.Method != "tokens" {
+		fail(w, 400, "неподдерживаемый способ входа")
+		return
+	}
+	if len(t.AccessToken) == 0 || len(t.AccessToken) > 16384 || len(t.RefreshToken) > 16384 || len(t.DeviceID) > 1024 {
+		fail(w, 400, "укажите действительный access token")
+		return
+	}
+	if err = c.SetTokens(t); err != nil {
+		fail(w, 500, "не удалось сохранить токены")
+		return
+	}
+	reply(w, 200, map[string]bool{"connected": true})
+}
+func (a *App) ownedJob(r *http.Request) (Job, bool) {
+	j, ok := a.store.get(r.PathValue("id"))
+	return j, ok && j.OwnerID == principal(r).ID
+}
+func (a *App) libraryFile(w http.ResponseWriter, r *http.Request) {
+	j, ok := a.readableJob(r)
+	if !ok || (j.State != "done" && j.State != "partial") {
+		http.NotFound(w, r)
+		return
+	}
+	file := r.PathValue("file")
+	if file == "" {
+		file = "index.html"
+	}
+	if file != "index.html" {
+		if !strings.HasPrefix(file, "media/") || strings.Contains(file, "/") && strings.Count(file, "/") != 1 {
+			http.NotFound(w, r)
+			return
+		}
+		var man ArchiveManifest
+		b, e := os.ReadFile(filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), "manifest.json"))
+		if e != nil || json.Unmarshal(b, &man) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		allowed := false
+		for _, asset := range man.Assets {
+			if "media/"+asset.Filename == file {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	path := filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), file)
+	if info, e := os.Lstat(path); e != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeFile(w, r, path)
+}
+func (a *App) preview(w http.ResponseWriter, r *http.Request) { a.postDetails(w, r) }
 func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	author, id, e := boosty.PostURL(r.URL.Query().Get("url"))
 	if e != nil {
@@ -211,9 +465,14 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "недопустимый номер медиа")
 		return
 	}
+	c, e := a.client(principal(r).ID)
+	if e != nil {
+		fail(w, 500, "ошибка авторизации Boosty")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Hour)
 	defer cancel()
-	p, e := a.boosty.Post(ctx, author, id)
+	p, e := c.Post(ctx, author, id)
 	if e != nil {
 		fail(w, 502, e.Error())
 		return
@@ -228,7 +487,23 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := medias[i]
-	res, e := a.boosty.MediaGet(ctx, boosty.MediaURL(p, m), r.Header.Get("Range"))
+	mediaURL := boosty.MediaURL(p, m)
+	quality := r.URL.Query().Get("quality")
+	if m.Type == "ok_video" && quality != "" {
+		found := false
+		for _, u := range m.PlayerURLs {
+			if u.Type == quality && u.URL != "" {
+				mediaURL = u.URL
+				found = true
+				break
+			}
+		}
+		if !found {
+			fail(w, 400, "указанное качество недоступно")
+			return
+		}
+	}
+	res, e := c.MediaGet(ctx, mediaURL, r.Header.Get("Range"))
 	if e != nil {
 		fail(w, 502, "ошибка CDN: "+redactNetError(e))
 		return
@@ -239,11 +514,15 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, key := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
-		if value := res.Header.Get(key); value != "" {
-			w.Header().Set(key, value)
+		if v := res.Header.Get(key); v != "" {
+			w.Header().Set(key, v)
 		}
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", boosty.MediaName(m, i)))
+	if r.URL.Query().Get("inline") == "1" && (m.Type == "ok_video" || m.Type == "audio_file" || m.Type == "image") {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", boosty.MediaName(m, i)))
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(res.StatusCode)
 	_, _ = io.Copy(w, res.Body)
@@ -255,8 +534,9 @@ func (a *App) newJob(w http.ResponseWriter, r *http.Request) {
 		IncludeFiles    bool   `json:"includeFiles"`
 		IncludeVideos   bool   `json:"includeVideos"`
 		IncludeAudio    bool   `json:"includeAudio"`
+		AutoSync        bool   `json:"autoSync"`
 	}
-	if e := decodeRequest(w, r, &body); e != nil {
+	if decodeRequest(w, r, &body) != nil {
 		return
 	}
 	author, id, e := boosty.PostURL(body.URL)
@@ -273,13 +553,18 @@ func (a *App) newJob(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "невозможно создать задачу")
 		return
 	}
-	j := Job{ID: hex.EncodeToString(buf), Author: author, PostID: id, URL: "https://boosty.to/" + url.PathEscape(author) + "/posts/" + url.PathEscape(id), State: "queued", CreatedAt: time.Now().UTC(), IncludeComments: body.IncludeComments, IncludeFiles: body.IncludeFiles, IncludeVideos: body.IncludeVideos, IncludeAudio: body.IncludeAudio}
-	if e := a.store.upsert(j); e != nil {
+	j := Job{ID: hex.EncodeToString(buf), OwnerID: principal(r).ID, Author: author, PostID: id, URL: "https://boosty.to/" + url.PathEscape(author) + "/posts/" + url.PathEscape(id), State: "queued", CreatedAt: time.Now().UTC(), IncludeComments: body.IncludeComments, IncludeFiles: body.IncludeFiles, IncludeVideos: body.IncludeVideos, IncludeAudio: body.IncludeAudio, AutoSync: body.AutoSync}
+	createdJob, created, err := a.store.createUniqueJob(j)
+	if err != nil {
 		fail(w, 500, "не удалось создать задачу")
 		return
 	}
-	a.queue <- j.ID
-	reply(w, 202, j)
+	if !created {
+		reply(w, 200, createdJob)
+		return
+	}
+	a.queueJob(createdJob.ID)
+	reply(w, 202, createdJob)
 }
 func FromEnv() Config {
 	addr := os.Getenv("BD_LISTEN")
@@ -294,5 +579,5 @@ func FromEnv() Config {
 	if user == "" {
 		user = "admin"
 	}
-	return Config{Address: addr, DataDir: data, AdminUser: user, AdminPassword: os.Getenv("BD_ADMIN_PASSWORD"), SecretKey: os.Getenv("BD_SECRET_KEY")}
+	return Config{Address: addr, DataDir: data, AdminUser: user, AdminPassword: os.Getenv("BD_ADMIN_PASSWORD"), SecretKey: os.Getenv("BD_SECRET_KEY"), SyncInterval: normalizeInterval(os.Getenv("BD_SYNC_INTERVAL_HOURS"))}
 }

@@ -15,6 +15,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check interface scripts
+        run: node --check internal/server/ui/app.js && node --check internal/server/ui/library.js && node --check internal/server/ui/subscriptions.js && python3 tests/ui_contract.py
       - name: Check formatting
         run: test -z "$(gofmt -l ./cmd ./internal)"
       - name: Check shell syntax
@@ -43,3 +48,39 @@ jobs:
         with:
           name: boosty-downloader-linux-${{ matrix.arch }}
           path: dist/*
+  installation-smoke:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [native, docker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install ${{ matrix.mode }} on a clean CI host
+        env:
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          sudo env PATH="$PATH" BD_PUBLIC_HOST=127.0.0.1 BD_PORT=18443 \
+            BD_TLS_MODE=selfsigned BD_BUILD_FROM_SOURCE=1 \
+            BD_ADMIN_USER=admin BD_ADMIN_PASSWORD='test-admin-password-123' \
+            bash install.sh --mode "$MODE"
+          for attempt in $(seq 1 30); do
+            if curl -kfsS https://127.0.0.1:18443/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -kfsS https://127.0.0.1:18443/healthz
+          status="$(curl -ksS -o /dev/null -w '%{http_code}' https://127.0.0.1:18443/api/jobs)"
+          test "$status" = 401
+          curl -kfsS -c "$RUNNER_TEMP/boosty-cookies.txt" \
+            -H 'X-BD-Request: 1' -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"test-admin-password-123"}' \
+            https://127.0.0.1:18443/api/account/login
+          curl -kfsS -b "$RUNNER_TEMP/boosty-cookies.txt" https://127.0.0.1:18443/api/jobs
+          sudo bdy status
+          sudo bdy uninstall

@@ -420,3 +420,53 @@ func (c *Client) MediaGet(ctx context.Context, raw string, rangeHeader string) (
 	}
 	return c.media.Do(req)
 }
+
+// Feed is a compact view of an author's recent posts. It deliberately never
+// returns signed URLs or raw embedded media credentials to browsers.
+type FeedPost struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	HasAccess   bool   `json:"hasAccess"`
+	PublishTime int64  `json:"publishTime"`
+	Comments    int    `json:"comments"`
+	MediaCount  int    `json:"mediaCount"`
+	URL         string `json:"url"`
+}
+type FeedResult struct {
+	Posts      []FeedPost `json:"posts"`
+	NextOffset string     `json:"nextOffset,omitempty"`
+	HasMore    bool       `json:"hasMore"`
+}
+
+func ValidBlog(name string) bool { return safeSegment(name) }
+func (c *Client) Feed(ctx context.Context, blog, offset string) (FeedResult, error) {
+	if !safeSegment(blog) {
+		return FeedResult{}, errors.New("недопустимое имя автора")
+	}
+	endpoint := "/v1/blog/" + url.PathEscape(blog) + "/post/?limit=20&reply_limit=0&comments_limit=0"
+	if len(offset) > 200 || strings.ContainsAny(offset, "\r\n") {
+		return FeedResult{}, errors.New("неверный offset")
+	}
+	if offset != "" {
+		endpoint += "&offset=" + url.QueryEscape(offset)
+	}
+	var result struct {
+		Data  []json.RawMessage `json:"data"`
+		Extra struct {
+			Offset string `json:"offset"`
+			IsLast bool   `json:"isLast"`
+		} `json:"extra"`
+	}
+	if err := c.doJSON(ctx, endpoint, &result); err != nil {
+		return FeedResult{}, err
+	}
+	out := FeedResult{Posts: []FeedPost{}, NextOffset: result.Extra.Offset, HasMore: !result.Extra.IsLast}
+	for _, raw := range result.Data {
+		var p Post
+		if json.Unmarshal(raw, &p) != nil || !safeSegment(p.ID) {
+			continue
+		}
+		out.Posts = append(out.Posts, FeedPost{ID: p.ID, Title: p.Title, HasAccess: p.HasAccess, PublishTime: p.PublishTime, Comments: p.Count.Comments, MediaCount: len(ExtractMedia(&p)), URL: "https://boosty.to/" + url.PathEscape(blog) + "/posts/" + url.PathEscape(p.ID)})
+	}
+	return out, nil
+}

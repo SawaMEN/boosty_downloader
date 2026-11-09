@@ -19,18 +19,33 @@ operate() {
 reset_password() {
  command -v openssl >/dev/null || { echo 'Требуется openssl.' >&2;return 1; }
  [[ -r "$ETC/environment" ]] || { echo 'Панель не установлена.' >&2;return 1; }
- local password tmp
+ local password tmp previous
  password="$(openssl rand -hex 18)"
+ previous="$(mode)"
+ case "$previous" in
+ native)
+   systemctl stop boosty-downloader.service
+   if ! (set -a; source "$ETC/environment"; set +a; printf '%s' "$password" | runuser -u boosty-downloader -- /usr/local/boosty-downloader/boosty-downloader reset-admin-password);then
+     systemctl start boosty-downloader.service || true
+     echo 'Ошибка смены пароля' >&2;return 1
+   fi
+   systemctl start boosty-downloader.service;;
+ docker)
+   docker_cmd stop
+   if ! (printf '%s' "$password" | docker_cmd run --rm -T --no-deps boosty-downloader reset-admin-password);then
+     docker_cmd up -d || true
+     echo 'Ошибка смены пароля' >&2;return 1
+   fi
+   docker_cmd up -d;;
+ *) echo 'Установка не найдена.' >&2;return 1;;
+ esac
  tmp="$(mktemp "$ETC/.environment-XXXXXXXX")"
  sed "s/^BD_ADMIN_PASSWORD=.*/BD_ADMIN_PASSWORD=\"$password\"/" "$ETC/environment" > "$tmp"
- chown root:boosty-downloader "$tmp"
- chmod 0640 "$tmp"
- mv -f "$tmp" "$ETC/environment"
- if [[ "$(mode)" == docker ]];then docker_cmd up -d --force-recreate
- else systemctl restart boosty-downloader.service;fi
+ chown root:boosty-downloader "$tmp";chmod 0640 "$tmp";mv -f "$tmp" "$ETC/environment"
  echo "Новый пароль администратора: $password"
- echo 'Сохраните пароль, он не выводится повторно.'
+ echo 'Все прежние сессии администратора завершены.'
 }
+
 need_root
 case "${1:-menu}" in
  status|logs|start|stop|restart) operate "$1";;

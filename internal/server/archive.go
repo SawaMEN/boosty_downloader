@@ -45,7 +45,7 @@ type commentView struct {
 	Level  int
 }
 
-const postHTML = `<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}pre{white-space:pre-wrap;overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><p><a href="/">← Медиатека</a></p><header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Сохранено {{.CapturedAt.Format "02.01.2006 15:04"}}</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header><section class="panel">{{range .Body}}<p>{{.}}</p>{{end}}{{if not .Body}}<p class="dim">В исходном посте не найден текст.</p>{{end}}</section>{{range .Assets}}<section class="panel"><p>{{.Title}}</p>{{if eq .Type "ok_video"}}<video controls preload="metadata" src="media/{{.Filename}}"></video>{{else if eq .Type "audio_file"}}<audio controls src="media/{{.Filename}}"></audio>{{else if eq .Type "image"}}<img loading="lazy" src="media/{{.Filename}}" alt="{{.Title}}">{{else}}<a href="media/{{.Filename}}" download>Скачать вложение</a>{{end}}</section>{{end}}<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong><p>{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>{{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}</main></body></html>`
+const postHTML = `<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}pre{white-space:pre-wrap;overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><p><a href="/">← Медиатека</a></p><header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Обновление архива: {{.CapturedAt.Format "02.01.2006 15:04"}} UTC</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header><section class="panel">{{range .Body}}<p>{{.}}</p>{{end}}{{if not .Body}}<p class="dim">В исходном посте не найден текст.</p>{{end}}</section>{{range .Assets}}<section class="panel"><p>{{.Title}}</p>{{if eq .Type "ok_video"}}<video controls preload="metadata" src="media/{{.Filename}}"></video>{{else if eq .Type "audio_file"}}<audio controls src="media/{{.Filename}}"></audio>{{else if eq .Type "image"}}<img loading="lazy" src="media/{{.Filename}}" alt="{{.Title}}">{{else}}<a href="media/{{.Filename}}" download>Скачать вложение</a>{{end}}</section>{{end}}<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong><p>{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>{{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}</main></body></html>`
 
 var pageTemplate = template.Must(template.New("post").Parse(postHTML))
 
@@ -189,17 +189,18 @@ func downloadFile(ctx context.Context, client *boosty.Client, raw, dest string) 
 	return n + existing, nil
 }
 func (a *App) runJob(id string) {
-	job, ok := a.store.get(id)
+	job, ok := a.store.claimQueued(id)
 	if !ok {
 		return
 	}
-	job.State = "running"
 	job.Error = ""
-	_ = a.store.upsert(job)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
+	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Hour)
 	defer cancel()
 	err := a.archive(ctx, &job)
-	if err != nil && job.CommentsPartial {
+	if a.ctx.Err() != nil {
+		job.State = "queued"
+		job.Error = ""
+	} else if err != nil && job.CommentsPartial {
 		job.State = "partial"
 		job.Error = err.Error()
 	} else if err != nil {
@@ -213,7 +214,11 @@ func (a *App) runJob(id string) {
 	_ = a.store.upsert(job)
 }
 func (a *App) archive(ctx context.Context, j *Job) error {
-	p, e := a.boosty.Post(ctx, j.Author, j.PostID)
+	c, e := a.client(j.OwnerID)
+	if e != nil {
+		return e
+	}
+	p, e := c.Post(ctx, j.Author, j.PostID)
 	if e != nil {
 		return e
 	}
@@ -221,7 +226,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return errors.New("нет доступа к этому посту: необходима действующая подписка")
 	}
 	j.Title = p.Title
-	folder := a.store.archiveDir(j.Author, j.PostID)
+	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	mediaFolder := filepath.Join(folder, "media")
 	if e = os.MkdirAll(mediaFolder, 0700); e != nil {
 		return e
@@ -232,7 +237,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	}
 	var comments boosty.CommentResult
 	if j.IncludeComments {
-		comments, e = a.boosty.Comments(ctx, j.Author, j.PostID, p.Count.Comments)
+		comments, e = c.Comments(ctx, j.Author, j.PostID, p.Count.Comments)
 		if e != nil {
 			man.CommentsStatus = "ошибка получения"
 			man.Failures = append(man.Failures, "Комментарии: "+e.Error())
@@ -280,7 +285,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			_ = a.store.upsert(*j)
 			continue
 		}
-		size, err := downloadFile(ctx, a.boosty, boosty.MediaURL(p, m), dest)
+		size, err := downloadFile(ctx, c, boosty.MediaURL(p, m), dest)
 		if err != nil {
 			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(err)))
 			continue
@@ -303,6 +308,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if j.IncludeComments {
 		appendComments(&cv, comments.Comments, 0)
 	}
+	// A completed archive has its own immutable capture date, independent of
+	// the task's UpdatedAt (which changes on shares, retries and progress).
+	man.CapturedAt = time.Now().UTC()
 	if e = writeJSON(filepath.Join(folder, "manifest.json"), man); e != nil {
 		return e
 	}
@@ -317,6 +325,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if e = f.Close(); e != nil {
 		return e
 	}
+	j.ArchiveUpdatedAt = man.CapturedAt
 	if len(man.Failures) > 0 {
 		j.CommentsPartial = true
 		return fmt.Errorf("архив частичный: %d ошибок; подробности в manifest.json", len(man.Failures))
