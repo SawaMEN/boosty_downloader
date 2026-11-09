@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/SawaMEN/boosty_downloader/internal/boosty"
@@ -38,6 +39,7 @@ type AuthorImport struct {
 	IncludeVideos   bool      `json:"includeVideos"`
 	IncludeAudio    bool      `json:"includeAudio"`
 	AutoSync        bool      `json:"autoSync"`
+	Incremental     bool      `json:"incremental,omitempty"` // Scheduled catch-up stops at the first previously discovered post.
 }
 
 const importHardLimit = 2000
@@ -253,6 +255,160 @@ func (s *Storage) importCanceled(id string) bool {
 	v := s.imports[id]
 	return v == nil || v.State == "canceled"
 }
+
+// importSchedule lets the archive owner enable or disable future author scans.
+// Existing archived post refresh follows the same flag, so one toggle controls
+// both discovery and updates for that author.
+func (a *App) importSchedule(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		AutoSync bool `json:"autoSync"`
+	}
+	if decodeRequest(w, r, &input) != nil {
+		return
+	}
+	if err := a.store.setImportSchedule(principal(r).ID, r.PathValue("id"), input.AutoSync); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	reply(w, 200, map[string]bool{"ok": true, "autoSync": input.AutoSync})
+}
+
+func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.imports[id]
+	if v == nil || v.OwnerID != owner {
+		return errors.New("импорт не найден")
+	}
+	if v.State != "done" {
+		return errors.New("изменить расписание можно после завершения поиска")
+	}
+	old := v.AutoSync
+	v.AutoSync = enabled
+	previous := make(map[string]bool)
+	for jobID, j := range s.jobs {
+		if j.OwnerID == owner && strings.EqualFold(j.Author, v.Author) {
+			previous[jobID] = j.AutoSync
+			j.AutoSync = enabled
+		}
+	}
+	rollback := func() {
+		v.AutoSync = old
+		for jobID, enabled := range previous {
+			s.jobs[jobID].AutoSync = enabled
+		}
+		_ = s.saveJobsLocked()
+		_ = s.saveImportsLocked()
+	}
+	if err := s.saveJobsLocked(); err != nil {
+		rollback()
+		return err
+	}
+	if err := s.saveImportsLocked(); err != nil {
+		rollback()
+		return err
+	}
+	return nil
+}
+
+// scheduleDueImports reuses the latest import per author instead of creating
+// unbounded history entries every polling interval. The first catch-up pass
+// starts from the newest posts and stops on an already known post.
+func (s *Storage) scheduleDueImports(now time.Time, interval time.Duration, limit int) ([]string, error) {
+	if interval <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest := map[string]*AuthorImport{}
+	busy := map[string]bool{}
+	for _, v := range s.imports {
+		key := v.OwnerID + "/" + strings.ToLower(v.Author)
+		if old := latest[key]; old == nil || old.CreatedAt.Before(v.CreatedAt) || (old.CreatedAt.Equal(v.CreatedAt) && old.ID < v.ID) {
+			latest[key] = v
+		}
+		if v.State == "queued" || v.State == "running" {
+			busy[key] = true
+		}
+	}
+	candidates := make([]*AuthorImport, 0, len(latest))
+	for key, v := range latest {
+		if !busy[key] && v.State == "done" && v.AutoSync && !v.UpdatedAt.IsZero() && now.Sub(v.UpdatedAt) >= interval {
+			candidates = append(candidates, v)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].UpdatedAt.Before(candidates[j].UpdatedAt) })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	backups := make([]AuthorImport, len(candidates))
+	ids := make([]string, 0, len(candidates))
+	for i, v := range candidates {
+		backups[i] = *v
+		v.State = "queued"
+		v.Error = ""
+		v.NextOffset = ""
+		v.Scanned, v.Queued, v.Skipped = 0, 0, 0
+		v.Limited = false
+		v.Incremental = true
+		v.UpdatedAt = now
+		if v.MaxPosts == 0 || v.MaxPosts > 50 {
+			v.MaxPosts = 50
+		}
+		ids = append(ids, v.ID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := s.saveImportsLocked(); err != nil {
+		for i, v := range candidates {
+			*v = backups[i]
+		}
+		return nil, err
+	}
+	return ids, nil
+}
+
+// The interval is deliberately the same as archive sync; no extra setting is
+// necessary for initial deployment. Queue space is bounded by the existing
+// worker channel and the scheduler chooses the oldest due authors first.
+func (a *App) importSyncLoop() {
+	if a.cfg.SyncInterval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	a.scheduleAutoImports(time.Now().UTC())
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			a.scheduleAutoImports(time.Now().UTC())
+		}
+	}
+}
+func (a *App) scheduleAutoImports(now time.Time) {
+	slots := cap(a.importQueue) - len(a.importQueue)
+	if slots < 1 {
+		return
+	}
+	if slots > 10 {
+		slots = 10
+	}
+	ids, err := a.store.scheduleDueImports(now, a.cfg.SyncInterval, slots)
+	if err != nil {
+		return
+	} // Next tick will retry, keeping the existing import intact.
+	for _, id := range ids {
+		select {
+		case <-a.ctx.Done():
+			return
+		case a.importQueue <- id:
+		}
+	}
+}
+
 func (a *App) cancelImport(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.cancelImport(principal(r).ID, r.PathValue("id")); err != nil {
 		fail(w, 409, err.Error())
@@ -386,6 +542,11 @@ func (a *App) runImport(v *AuthorImport) error {
 				}
 			} else {
 				v.Skipped++
+				if v.Incremental {
+					// Existing newest-to-oldest posts mark the catch-up boundary.
+					// Later manual full reimport can fill any older gaps.
+					return a.store.updateImport(*v)
+				}
 			}
 		}
 		if err := a.store.updateImport(*v); err != nil {

@@ -70,10 +70,11 @@ func New(cfg Config) (*App, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), ctx: ctx, cancel: cancel}
-	a.wg.Add(3)
+	a.wg.Add(4)
 	go func() { defer a.wg.Done(); a.worker() }()
 	go func() { defer a.wg.Done(); a.importWorker() }()
 	go func() { defer a.wg.Done(); a.syncLoop() }()
+	go func() { defer a.wg.Done(); a.importSyncLoop() }()
 	for _, id := range s.queued() {
 		a.queueJob(id)
 	}
@@ -220,6 +221,7 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("POST /api/subscriptions/import", a.importSubscriptions)
 	private.HandleFunc("GET /api/imports", a.importsForUser)
 	private.HandleFunc("POST /api/imports/{id}/cancel", a.cancelImport)
+	private.HandleFunc("PUT /api/imports/{id}/schedule", a.importSchedule)
 	private.HandleFunc("GET /api/auth", a.boostyAuth)
 	private.HandleFunc("POST /api/auth", a.boostyAuth)
 	private.HandleFunc("DELETE /api/auth", a.boostyAuth)

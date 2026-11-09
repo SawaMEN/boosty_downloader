@@ -64,9 +64,19 @@ async function refreshImports(){
       if(item.limited)status+=' · достигнут выбранный лимит';
       info.append(text('div',`${status} · просмотрено ${item.scanned}, добавлено ${item.queued}, пропущено ${item.skipped}`,'muted small'));
       info.append(text('div',`Изменено: ${new Date(item.updatedAt).toLocaleString('ru-RU')}`,'muted small'));
+      if(item.autoSync)info.append(text('div','Автопроверка новых публикаций включена','muted small'));
       if(item.error)info.append(text('div',item.error,'error'));
       card.append(info);
       const b=text('button','Открыть автора','tiny-btn');b.onclick=()=>chooseAuthor(item.author);card.append(b);
+      if(item.state==='done'){
+        const toggle=text('button',item.autoSync?'Выключить автопроверку':'Включить автопроверку','tiny-btn secondary');
+        toggle.onclick=async()=>{
+          toggle.disabled=true;
+          try{await api('/api/imports/'+encodeURIComponent(item.id)+'/schedule',{method:'PUT',body:{autoSync:!item.autoSync}});await refreshImports();toast(item.autoSync?'Автопроверка отключена':'Автопроверка включена');}
+          catch(e){toast(e.message,true);toggle.disabled=false;}
+        };
+        card.append(toggle);
+      }
       if(item.state==='running'||item.state==='queued'){const cancel=text('button','Остановить поиск','tiny-btn delete');cancel.onclick=async()=>{if(!confirm('Остановить поиск новых постов автора? Уже поставленные в очередь загрузки останутся.'))return;try{await api('/api/imports/'+encodeURIComponent(item.id)+'/cancel',{method:'POST'});refreshImports()}catch(e){toast(e.message,true)}};card.append(cancel)}
       target.append(card);
     }
