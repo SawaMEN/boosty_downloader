@@ -256,6 +256,7 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("POST /api/jobs/{id}/retry", a.retryJob)
 	private.HandleFunc("GET /api/jobs/{id}/zip", a.zipJob)
 	private.HandleFunc("GET /api/jobs/{id}/manifest", a.jobManifest)
+	private.HandleFunc("POST /api/jobs/{id}/verify", a.verifyJob)
 	private.HandleFunc("GET /library/{id}/{file...}", a.libraryFile)
 	secured := a.auth(private)
 	return a.stateChangeGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -505,7 +506,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, e := c.MediaGet(ctx, mediaURL, r.Header.Get("Range"))
+	res, e := c.MediaGet(ctx, mediaURL, r.Header.Get("Range"), "")
 	if e != nil {
 		fail(w, 502, "ошибка CDN: "+redactNetError(e))
 		return

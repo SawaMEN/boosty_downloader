@@ -43,7 +43,10 @@ function buildJob(j, shared=false){const item=el('article','job-item');item.appe
  if(!shared && ['done','partial','failed'].includes(j.state)){
   const b=text('button','⟳ Обновить','tiny-btn');b.onclick=async()=>{try{await api(`/api/jobs/${j.id}/retry`,{method:'POST'});toast('Задача добавлена в очередь');refreshJobs()}catch(e){toast(e.message,true)}};actions.append(b)
  }
- if(!shared && ['done','partial'].includes(j.state)) actions.append(libraryAction('Поделиться',()=>openShareDialog(j)));
+ if(!shared && ['done','partial'].includes(j.state)) {
+  actions.append(libraryAction('Проверить файлы',()=>verifyArchiveUI(j)));
+  actions.append(libraryAction('Поделиться',()=>openShareDialog(j)));
+ }
  if(!shared && !['queued','running'].includes(j.state)) actions.append(libraryAction('Удалить',()=>deleteArchivedPost(j),'delete'));
  if(actions.children.length)body.append(actions);
  item.append(body);const badge=text('span',jobState(j),`status-badge ${j.state}`);item.append(badge);return item;

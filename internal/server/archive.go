@@ -1,14 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/SawaMEN/boosty_downloader/internal/boosty"
 	"html/template"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ type ArchiveAsset struct {
 	Type     string `json:"type"`
 	Title    string `json:"title"`
 	Size     int64  `json:"size"`
+	SHA256   string `json:"sha256,omitempty"`
 }
 type ArchiveManifest struct {
 	Title           string         `json:"title"`
@@ -130,64 +130,6 @@ func writeJSON(p string, val any) error {
 	}
 	return writeAtomic(p, b)
 }
-func downloadFile(ctx context.Context, client *boosty.Client, raw, dest string) (int64, error) {
-	if raw == "" {
-		return 0, errors.New("медиа без URL")
-	}
-	tmp := dest + ".part"
-	var existing int64
-	if info, e := os.Stat(tmp); e == nil {
-		existing = info.Size()
-	}
-	rangeHeader := ""
-	if existing > 0 {
-		rangeHeader = fmt.Sprintf("bytes=%d-", existing)
-	}
-	res, e := client.MediaGet(ctx, raw, rangeHeader)
-	if e != nil {
-		return 0, e
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusPartialContent {
-		return 0, fmt.Errorf("CDN HTTP %d", res.StatusCode)
-	}
-	if existing > 0 && res.StatusCode == http.StatusOK {
-		existing = 0
-	}
-	if existing > 0 && res.StatusCode == http.StatusPartialContent {
-		if !strings.HasPrefix(res.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", existing)) {
-			return 0, errors.New("неверный Content-Range")
-		}
-	}
-	mode := os.O_CREATE | os.O_WRONLY
-	if existing > 0 {
-		mode |= os.O_APPEND
-	} else {
-		mode |= os.O_TRUNC
-	}
-	f, e := os.OpenFile(tmp, mode, 0600)
-	if e != nil {
-		return 0, e
-	}
-	defer f.Close()
-	n, e := io.Copy(f, &io.LimitedReader{R: res.Body, N: 10 << 30})
-	if e != nil {
-		return n, e
-	}
-	if e = f.Sync(); e != nil {
-		return n, e
-	}
-	if res.ContentLength >= 0 && n != res.ContentLength {
-		return n, errors.New("неполный ответ CDN")
-	}
-	if n >= 10<<30 {
-		return n, errors.New("превышен максимальный размер файла 10 GiB")
-	}
-	if e = os.Rename(tmp, dest); e != nil {
-		return n, e
-	}
-	return n + existing, nil
-}
 func (a *App) runJob(id string) {
 	job, ok := a.store.claimQueued(id)
 	if !ok {
@@ -260,6 +202,17 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			}
 		}
 	}
+	// Read the previous manifest solely as a verification baseline. Existing
+	// media without a digest cannot be trusted, even if it has a nonzero size.
+	prior := map[string]ArchiveAsset{}
+	if b, err := os.ReadFile(filepath.Join(folder, "manifest.json")); err == nil {
+		var old ArchiveManifest
+		if json.Unmarshal(b, &old) == nil {
+			for _, asset := range old.Assets {
+				prior[asset.Filename] = asset
+			}
+		}
+	}
 	rawMedia := boosty.ExtractMedia(p)
 	for _, m := range rawMedia {
 		if m.Type == "file" && !j.IncludeFiles || m.Type == "ok_video" && !j.IncludeVideos || m.Type == "audio_file" && !j.IncludeAudio {
@@ -279,13 +232,20 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		}
 		name := boosty.MediaName(m, i)
 		dest := filepath.Join(mediaFolder, name)
-		if info, err := os.Stat(dest); err == nil && info.Size() > 0 {
-			man.Assets = append(man.Assets, ArchiveAsset{Filename: name, Type: m.Type, Title: m.Title, Size: info.Size()})
-			j.DoneFiles++
-			_ = a.store.upsert(*j)
-			continue
+		if previous, known := prior[name]; known && previous.Type == m.Type {
+			valid, err := verifyAsset(dest, previous)
+			if err == nil && valid && (m.Size <= 0 || m.Size == previous.Size) {
+				man.Assets = append(man.Assets, previous)
+				j.DoneFiles++
+				_ = a.store.upsert(*j)
+				continue
+			}
 		}
-		size, err := downloadFile(ctx, c, boosty.MediaURL(p, m), dest)
+		expectedSize := m.Size
+		if m.Type == "ok_video" {
+			expectedSize = 0 // Boosty may report a different resolution’s size.
+		}
+		size, digest, err := downloadFile(ctx, c.MediaGet, boosty.MediaURL(p, m), dest, expectedSize)
 		if err != nil {
 			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(err)))
 			continue
@@ -294,7 +254,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		if title == "" {
 			title = m.Type
 		}
-		man.Assets = append(man.Assets, ArchiveAsset{Filename: name, Type: m.Type, Title: title, Size: size})
+		man.Assets = append(man.Assets, ArchiveAsset{Filename: name, Type: m.Type, Title: title, Size: size, SHA256: digest})
 		j.DoneFiles++
 		_ = a.store.upsert(*j)
 	}
@@ -314,15 +274,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if e = writeJSON(filepath.Join(folder, "manifest.json"), man); e != nil {
 		return e
 	}
-	f, e := os.OpenFile(filepath.Join(folder, "index.html"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if e != nil {
+	var html bytes.Buffer
+	if e = pageTemplate.Execute(&html, renderData{ArchiveManifest: man, Body: body, Comments: cv}); e != nil {
 		return e
 	}
-	if e = pageTemplate.Execute(f, renderData{ArchiveManifest: man, Body: body, Comments: cv}); e != nil {
-		f.Close()
-		return e
-	}
-	if e = f.Close(); e != nil {
+	if e = writeAtomic(filepath.Join(folder, "index.html"), html.Bytes()); e != nil {
 		return e
 	}
 	j.ArchiveUpdatedAt = man.CapturedAt

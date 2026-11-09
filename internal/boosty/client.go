@@ -406,7 +406,7 @@ func safeFilename(s string) string {
 	}
 	return b.String()
 }
-func (c *Client) MediaGet(ctx context.Context, raw string, rangeHeader string) (*http.Response, error) {
+func (c *Client) MediaGet(ctx context.Context, raw string, rangeHeader string, ifRange string) (*http.Response, error) {
 	if err := validateMediaURL(raw); err != nil {
 		return nil, err
 	}
@@ -415,6 +415,10 @@ func (c *Client) MediaGet(ctx context.Context, raw string, rangeHeader string) (
 		return nil, e
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept-Encoding", "identity")
+	if ifRange != "" {
+		req.Header.Set("If-Range", ifRange)
+	}
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
 	}

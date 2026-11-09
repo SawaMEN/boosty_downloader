@@ -66,6 +66,14 @@ async function chooseAuthor(name) {
   nav('browse');
   await loadFeed(true);
 }
+async function verifyArchiveUI(job) {
+  try {
+    toast('Проверяем контрольные суммы файлов…');
+    const result = await api(`/api/jobs/${encodeURIComponent(job.id)}/verify`,{method:'POST'});
+    if(result.valid) toast(result.partial?`Все ${result.verified} сохранённых файлов исправны, но копия публикации частичная`:`Архив проверен: ${result.verified} файлов, ошибок нет`,Boolean(result.partial));
+    else toast(`Проверка: исправно ${result.verified}; повреждено ${result.damaged}; отсутствует ${result.missing}; без SHA-256 ${result.unchecked}. Для исправления нажмите «Обновить».`,true);
+  } catch(err) { toast(err.message,true); }
+}
 async function deleteArchivedPost(job) {
   if (!confirm(`Удалить локальную копию «${job.title||job.postId}» (${job.author})? Совместный доступ также будет отозван. Восстановить удалённые файлы нельзя.`)) return;
   try {
