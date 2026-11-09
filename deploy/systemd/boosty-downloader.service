@@ -1,0 +1,25 @@
+[Unit]
+Description=Boosty Downloader private media archive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=boosty-downloader
+Group=boosty-downloader
+EnvironmentFile=/etc/boosty-downloader/environment
+ExecStart=/usr/local/boosty-downloader/boosty-downloader
+Restart=on-failure
+RestartSec=4
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/boosty-downloader
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

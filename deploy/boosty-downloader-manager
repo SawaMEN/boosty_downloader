@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ETC=/etc/boosty-downloader
+MODE_FILE="$ETC/mode"
+PROJECT=/opt/boosty-downloader
+mode() { if [[ -r "$MODE_FILE" ]]; then cat "$MODE_FILE"; else echo none; fi; }
+need_root() { if [[ ${EUID:-$(id -u)} -ne 0 ]]; then echo 'Запустите через sudo.' >&2; exit 1; fi; }
+docker_cmd() { docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" "$@"; }
+operate() {
+ local cmd="$1" kind; kind="$(mode)"
+ case "$kind" in
+ native)
+   case "$cmd" in status) systemctl --no-pager status boosty-downloader.service || true;;logs) journalctl -u boosty-downloader.service -n 100 -f;;start|stop|restart) systemctl "$cmd" boosty-downloader.service;;esac;;
+ docker)
+   case "$cmd" in status) docker_cmd ps;;logs) docker_cmd logs --tail 100 -f;;start) docker_cmd up -d;;stop) docker_cmd stop;;restart) docker_cmd restart;;esac;;
+ *) echo 'Boosty Downloader ещё не установлен.';return 1;;
+ esac
+}
+need_root
+case "${1:-menu}" in
+ status|logs|start|stop|restart) operate "$1";;
+ uninstall)
+   echo 'Остановка и удаление Boosty Downloader (без удаления архива по умолчанию)...'
+   systemctl disable --now boosty-downloader.service >/dev/null 2>&1 || true
+   if command -v docker >/dev/null && [[ -f "$PROJECT/compose.yaml" ]]; then docker_cmd down || true; fi
+   rm -f /etc/systemd/system/boosty-downloader.service
+   systemctl daemon-reload >/dev/null 2>&1 || true
+   rm -rf -- /usr/local/boosty-downloader "$PROJECT"
+   rm -f -- "$MODE_FILE"
+   if [[ "${2:-}" == --purge ]]; then
+      read -r -p 'Безвозвратно удалить токены, архивы и настройки? Напишите DELETE: ' confirmation </dev/tty
+      if [[ "$confirmation" == DELETE ]]; then rm -rf -- /var/lib/boosty-downloader /etc/boosty-downloader; echo 'Данные удалены.';else echo 'Данные сохранены.';fi
+   fi
+   echo 'Удалено. Данные и сертификаты сохранены, если не указан --purge.';;
+ update) echo 'Обновление: скачайте новую версию репозитория и повторно запустите sudo bash install.sh. Данные сохраняются.';;
+ menu)
+    echo 'Boosty Downloader — управление'
+    echo '1) Статус  2) Запуск  3) Остановка  4) Перезапуск'
+    echo '5) Логи    6) Удалить   0) Выход'
+    read -r -p 'Выбор: ' answer </dev/tty
+    case "$answer" in 1) operate status;;2) operate start;;3) operate stop;;4) operate restart;;5) operate logs;;6) "$0" uninstall;;0) exit 0;;*) echo 'Неизвестная команда';exit 1;;esac;;
+ *) echo 'Команды: status, start, stop, restart, logs, update, uninstall [--purge]';exit 2;;
+esac
