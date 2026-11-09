@@ -59,6 +59,9 @@ func New(cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = accounts.initializePolicy(cfg.SyncInterval); err != nil {
+		return nil, err
+	}
 	if err = s.migrateLegacyAuth(); err != nil {
 		return nil, err
 	}
@@ -189,7 +192,7 @@ func (a *App) Handler() http.Handler {
 	public.HandleFunc("GET /ui/{asset}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("asset")
 		switch name {
-		case "app.js", "library.js", "player.js", "subscriptions.js":
+		case "app.js", "library.js", "player.js", "subscriptions.js", "admin.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "style.css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -208,38 +211,42 @@ func (a *App) Handler() http.Handler {
 	private := http.NewServeMux()
 	private.HandleFunc("GET /api/account", func(w http.ResponseWriter, r *http.Request) {
 		u := principal(r)
-		reply(w, 200, map[string]any{"id": u.ID, "username": u.Username, "admin": u.Admin})
+		reply(w, 200, map[string]any{"id": u.ID, "username": u.Username, "admin": u.Admin, "permissions": a.accounts.effective(u.ID)})
 	})
 	private.HandleFunc("POST /api/account/logout", func(w http.ResponseWriter, r *http.Request) {
 		_ = a.accounts.logout(sessionToken(r))
 		setSessionCookie(w, "", -1)
 		reply(w, 200, map[string]bool{"ok": true})
 	})
+	private.HandleFunc("GET /api/admin/policy", a.adminPolicy)
+	private.HandleFunc("PUT /api/admin/policy", a.adminPolicy)
+	private.HandleFunc("GET /api/admin/users", a.adminUsers)
+	private.HandleFunc("PUT /api/admin/users/{id}/permissions", a.adminUserPermissions)
 	private.HandleFunc("GET /api/admin/registration", a.adminRegistration)
 	private.HandleFunc("POST /api/admin/registration", a.adminRegistration)
-	private.HandleFunc("GET /api/subscriptions", a.subscribedAuthors)
-	private.HandleFunc("POST /api/subscriptions/import", a.importSubscriptions)
+	private.HandleFunc("GET /api/subscriptions", a.require("importAuthors", a.subscribedAuthors))
+	private.HandleFunc("POST /api/subscriptions/import", a.require("importAuthors", a.importSubscriptions))
 	private.HandleFunc("GET /api/imports", a.importsForUser)
 	private.HandleFunc("POST /api/imports/{id}/cancel", a.cancelImport)
 	private.HandleFunc("PUT /api/imports/{id}/schedule", a.importSchedule)
 	private.HandleFunc("GET /api/auth", a.boostyAuth)
-	private.HandleFunc("POST /api/auth", a.boostyAuth)
+	private.HandleFunc("POST /api/auth", a.require("connectBoosty", a.boostyAuth))
 	private.HandleFunc("DELETE /api/auth", a.boostyAuth)
-	private.HandleFunc("GET /api/post", a.postDetails)
-	private.HandleFunc("GET /api/comments", a.postComments)
-	private.HandleFunc("GET /api/feed", a.feed)
+	private.HandleFunc("GET /api/post", a.require("browsePosts", a.postDetails))
+	private.HandleFunc("GET /api/comments", a.require("browsePosts", a.postComments))
+	private.HandleFunc("GET /api/feed", a.require("browsePosts", a.feed))
 	private.HandleFunc("GET /api/settings", a.settings)
-	private.HandleFunc("GET /api/stream", a.stream)
-	private.HandleFunc("GET /api/shared", a.sharedJobs)
+	private.HandleFunc("GET /api/stream", a.require("streamMedia", a.stream))
+	private.HandleFunc("GET /api/shared", a.require("browseShared", a.sharedJobs))
 	private.HandleFunc("GET /api/authors", a.authors)
 	private.HandleFunc("POST /api/authors", a.authors)
 	private.HandleFunc("DELETE /api/authors/{author}", a.unpinAuthor)
-	private.HandleFunc("DELETE /api/authors/{author}/archives", a.deleteAuthorArchives)
+	private.HandleFunc("DELETE /api/authors/{author}/archives", a.require("deleteArchives", a.deleteAuthorArchives))
 	private.HandleFunc("GET /api/jobs/{id}/shares", a.jobShares)
 	private.HandleFunc("POST /api/jobs/{id}/shares", a.jobShares)
 	private.HandleFunc("DELETE /api/jobs/{id}/shares", a.jobShares)
 	private.HandleFunc("PUT /api/jobs/{id}/visibility", a.setJobVisibility)
-	private.HandleFunc("DELETE /api/jobs/{id}", a.deleteJob)
+	private.HandleFunc("DELETE /api/jobs/{id}", a.require("deleteArchives", a.deleteJob))
 	private.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		owner := principal(r).ID
 		jobs := a.store.all()
@@ -252,8 +259,8 @@ func (a *App) Handler() http.Handler {
 		sort.Slice(selected, func(i, j int) bool { return selected[i].CreatedAt.After(selected[j].CreatedAt) })
 		reply(w, 200, selected)
 	})
-	private.HandleFunc("POST /api/jobs", a.newJob)
-	private.HandleFunc("POST /api/jobs/{id}/retry", a.retryJob)
+	private.HandleFunc("POST /api/jobs", a.require("createArchives", a.newJob))
+	private.HandleFunc("POST /api/jobs/{id}/retry", a.require("createArchives", a.retryJob))
 	private.HandleFunc("GET /api/jobs/{id}/zip", a.zipJob)
 	private.HandleFunc("GET /api/jobs/{id}/manifest", a.jobManifest)
 	private.HandleFunc("POST /api/jobs/{id}/verify", a.verifyJob)
@@ -545,6 +552,22 @@ func (a *App) newJob(w http.ResponseWriter, r *http.Request) {
 	author, id, e := boosty.PostURL(body.URL)
 	if e != nil {
 		fail(w, 400, e.Error())
+		return
+	}
+	for _, feature := range []struct {
+		requested bool
+		key       string
+	}{
+		{body.IncludeComments, "saveComments"}, {body.IncludeFiles, "saveFiles"},
+		{body.IncludeVideos, "saveVideos"}, {body.IncludeAudio, "saveAudio"},
+	} {
+		if feature.requested && !a.accounts.allowed(principal(r).ID, feature.key) {
+			fail(w, 403, "тип вложений отключён администратором: "+feature.key)
+			return
+		}
+	}
+	if body.AutoSync && !a.accounts.allowed(principal(r).ID, "autoArchive") {
+		fail(w, 403, "автоматическая архивация отключена администратором")
 		return
 	}
 	if len(a.queue) >= cap(a.queue) {

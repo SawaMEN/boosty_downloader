@@ -125,6 +125,8 @@ async function refreshShares() {
   try {
     const result=await api(`/api/jobs/${encodeURIComponent(activeShareId)}/shares`);
     $('shareEveryone').checked=Boolean(result.everyone);
+    $('shareEveryone').disabled=!permissionValue('sharePublic') && !result.everyone;
+    $('shareForm').hidden=!permissionValue('shareDirect');
     if (!result.users.length) list.append(text('p',result.everyone?'Индивидуальных разрешений пока нет. Общий доступ включён.':'Других пользователей с доступом пока нет.','muted'));
     result.users.forEach(username=>{
       const row=el('div','participant-row');row.append(text('strong',username));

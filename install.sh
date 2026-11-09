@@ -22,6 +22,14 @@ if [[ "$MODE" != native && "$MODE" != docker ]];then
 fi
 if [[ "$MODE" == native ]];then command -v systemctl >/dev/null || { echo 'Нужен systemd.' >&2;exit 1; };fi
 if [[ "$MODE" == docker ]];then command -v docker >/dev/null || { echo 'Требуется Docker Engine с docker compose.' >&2;exit 1; };docker compose version >/dev/null || { echo 'Требуется Docker Compose v2.' >&2;exit 1; };fi
+if [[ "$MODE" == native ]] && ! command -v zstd >/dev/null 2>&1; then
+  echo 'Установка Zstandard для экономного хранения текста и метаданных...'
+  if command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y zstd
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y zstd
+  elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed zstd
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install zstd
+  else echo 'Установите пакет zstd и повторите установку.' >&2; exit 1; fi
+fi
 if ! id boosty-downloader >/dev/null 2>&1;then command -v useradd >/dev/null || { echo 'Требуется useradd.' >&2;exit 1; };useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin boosty-downloader;fi
 install -d -m 0750 -o root -g boosty-downloader "$ETC"
 install -d -m 0700 -o boosty-downloader -g boosty-downloader "$DATA"

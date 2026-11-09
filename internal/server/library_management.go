@@ -27,6 +27,9 @@ func (a *App) readableJob(r *http.Request) (Job, bool) {
 	if j.OwnerID == userID {
 		return j, true
 	}
+	if !a.accounts.allowed(userID, "browseShared") {
+		return Job{}, false
+	}
 	if j.State != "done" && j.State != "partial" {
 		return Job{}, false
 	}
@@ -103,6 +106,10 @@ func (a *App) setJobVisibility(w http.ResponseWriter, r *http.Request) {
 	if decodeRequest(w, r, &input) != nil {
 		return
 	}
+	if input.Everyone && !a.accounts.allowed(principal(r).ID, "sharePublic") {
+		fail(w, 403, "публикация для всех отключена администратором")
+		return
+	}
 	changed, err := a.store.setEveryone(j.ID, j.OwnerID, input.Everyone)
 	if err != nil {
 		fail(w, 409, err.Error())
@@ -158,6 +165,10 @@ func (a *App) jobShares(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 	}
 	if decodeRequest(w, r, &input) != nil {
+		return
+	}
+	if r.Method == "POST" && !a.accounts.allowed(principal(r).ID, "shareDirect") {
+		fail(w, 403, "персональный доступ запрещён администратором")
 		return
 	}
 	target, exists := a.accounts.userByName(strings.TrimSpace(input.Username))
@@ -377,6 +388,9 @@ func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 		if err := os.RemoveAll(move.dst); err != nil {
 			cleanupErr = errors.Join(cleanupErr, err)
 		}
+	}
+	if cleanupErr == nil {
+		cleanupErr = s.collectUnusedBlobs()
 	}
 	if cleanupErr != nil {
 		return len(ids), fmt.Errorf("архивы удалены из медиатеки, но очистка корзины не завершена: %w", cleanupErr)

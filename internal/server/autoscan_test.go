@@ -33,7 +33,7 @@ func TestAuthorAutoMonitoringReschedulesLatestImportOnly(t *testing.T) {
 	}
 	current := s.importsFor("owner")
 	for _, v := range current {
-		if v.ID == "latest" && (!v.Incremental || v.MaxPosts != 50 || v.State != "queued" || v.Scanned != 0) {
+		if v.ID == "latest" && (!v.Incremental || v.MaxPosts != 0 || v.State != "queued" || v.Scanned != 0) {
 			t.Fatalf("bad scheduled import: %+v", v)
 		}
 	}

@@ -263,14 +263,11 @@ func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
-	reply(w, 200, map[string]any{"syncIntervalHours": a.cfg.SyncInterval.Hours(), "queued": len(a.queue), "maxQueued": cap(a.queue)})
+	reply(w, 200, map[string]any{"syncIntervalHours": a.syncInterval().Hours(), "queued": len(a.queue), "maxQueued": cap(a.queue), "maxImportPosts": a.accounts.policy().MaxImportPosts, "maxScanPosts": a.accounts.policy().MaxScanPosts})
 }
 
 func (a *App) syncLoop() {
-	if a.cfg.SyncInterval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(a.cfg.SyncInterval)
+	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
@@ -282,6 +279,10 @@ func (a *App) syncLoop() {
 	}
 }
 func (a *App) syncOnce() {
+	interval := a.syncInterval()
+	if interval <= 0 {
+		return
+	}
 	jobs := a.store.all()
 	sort.Slice(jobs, func(i, j int) bool { return lastArchiveDate(jobs[i]).Before(lastArchiveDate(jobs[j])) })
 	selected := 0
@@ -289,7 +290,7 @@ func (a *App) syncOnce() {
 		if selected >= 20 {
 			return
 		}
-		if j.OwnerID == "" || !j.AutoSync || (j.State != "done" && j.State != "partial") || time.Since(lastArchiveDate(j)) < a.cfg.SyncInterval {
+		if j.OwnerID == "" || !a.accounts.allowed(j.OwnerID, "autoArchive") || !a.accounts.allowed(j.OwnerID, "createArchives") || !j.AutoSync || (j.State != "done" && j.State != "partial") || time.Since(lastArchiveDate(j)) < interval {
 			continue
 		}
 		if len(a.queue) >= cap(a.queue) {
@@ -308,11 +309,11 @@ func (a *App) syncOnce() {
 
 func normalizeInterval(raw string) time.Duration {
 	if raw == "" {
-		return 12 * time.Hour
+		return 24 * time.Hour
 	}
 	h, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || h < 0 || h > 720 {
-		return 12 * time.Hour
+		return 24 * time.Hour
 	}
 	return time.Duration(h) * time.Hour
 }

@@ -40,9 +40,16 @@ type LoginSession struct {
 	Expires time.Time `json:"expires"`
 }
 type accountFile struct {
-	Accounts         map[string]Account      `json:"accounts"`
-	Sessions         map[string]LoginSession `json:"sessions"`
-	RegistrationOpen bool                    `json:"registrationOpen"`
+	Accounts           map[string]Account         `json:"accounts"`
+	Sessions           map[string]LoginSession    `json:"sessions"`
+	RegistrationOpen   bool                       `json:"registrationOpen"`
+	DefaultPermissions map[string]bool            `json:"defaultPermissions,omitempty"`
+	UserPermissions    map[string]map[string]bool `json:"userPermissions,omitempty"`
+	SyncIntervalHours  *int                       `json:"syncIntervalHours,omitempty"`
+	MaxScanPosts       int                        `json:"maxScanPosts,omitempty"`
+	MaxImportPosts     int                        `json:"maxImportPosts,omitempty"`
+	CompressionLevel   *int                       `json:"compressionLevel,omitempty"`
+	DeduplicateMedia   *bool                      `json:"deduplicateMedia,omitempty"`
 }
 type Accounts struct {
 	mu     sync.Mutex

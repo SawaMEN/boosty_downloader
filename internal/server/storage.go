@@ -18,6 +18,7 @@ import (
 
 type Storage struct {
 	mu      sync.Mutex
+	blobMu  sync.Mutex
 	root    string
 	key     []byte
 	jobs    map[string]*Job

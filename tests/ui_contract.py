@@ -23,7 +23,8 @@ html.feed((UI/'index.html').read_text())
 assert '/ui/subscriptions.js' in html.scripts
 assert '/ui/library.js' in html.scripts
 assert '/ui/app.js' in html.scripts
-for script in ('app.js', 'library.js', 'subscriptions.js'):
+assert '/ui/admin.js' in html.scripts
+for script in ('app.js', 'library.js', 'subscriptions.js', 'admin.js'):
     code = (UI/script).read_text()
     needed = set(re.findall(r"\$\(['\"]([^'\"]+)['\"]\)", code))
     missing = sorted(needed - html.ids)

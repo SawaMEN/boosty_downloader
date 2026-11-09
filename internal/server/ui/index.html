@@ -56,7 +56,31 @@
         </section>
         <section id="page-settings" class="page"><div class="page-heading"><div><span class="eyebrow">ПРЕДПОЧТЕНИЯ</span><h1>Настройки</h1><p class="muted">Управление загрузками, доступом к сервису и сохранением постов.</p></div></div>
           <div class="card settings-card"><h2>Архивация по умолчанию</h2><p class="muted">Вы сможете изменить эти параметры перед каждой загрузкой.</p><div class="check-grid"><label class="check"><input id="optionComments" type="checkbox" checked><span><strong>Комментарии и ответы</strong><small>Сохранить всю доступную историю обсуждений</small></span></label><label class="check"><input id="optionFiles" type="checkbox" checked><span><strong>Прикреплённые файлы</strong><small>Документы, архивы и другие вложения</small></span></label><label class="check"><input id="optionVideo" type="checkbox" checked><span><strong>Видео</strong><small>Скачать доступные видеофайлы</small></span></label><label class="check"><input id="optionAudio" type="checkbox" checked><span><strong>Аудио</strong><small>Сохранить аудиозаписи</small></span></label><label class="check"><input id="optionSync" type="checkbox"><span><strong>Автосинхронизация</strong><small>Обновлять копии и находить новые посты по расписанию сервера</small></span></label></div></div>
-          <div class="card" id="adminSettings" hidden><div class="panel-head"><div><h2>Регистрация пользователей</h2><p class="muted">Только администратор может разрешить создание новых аккаунтов.</p></div><label class="switch"><input type="checkbox" id="registrationOpen"><span class="slider"></span></label></div><p class="muted small">По умолчанию регистрация отключена, чтобы посторонние не расходовали пространство VPS.</p></div>
+          <div class="card" id="adminControlPanel" hidden>
+            <div class="panel-head"><div><div class="eyebrow">УПРАВЛЕНИЕ СЕРВЕРОМ</div><h2>Права и автоматизация</h2><p class="muted">Настройки сервера доступны только администратору. Новые значения действуют без перезапуска.</p></div><button class="btn subtle" id="adminReloadPolicy">Обновить</button></div>
+            <div class="policy-controls">
+              <label class="check"><input id="adminRegistration" type="checkbox"><span><strong>Разрешить регистрацию</strong><small>Новые пользователи смогут создавать аккаунты</small></span></label>
+              <label>Интервал проверки (часы)<input id="adminSyncHours" type="number" min="0" max="168" step="1" value="24"><small>24 — раз в сутки; 0 — отключить весь планировщик</small></label>
+              <label>Новых постов за проверку<input id="adminMaxScan" type="number" min="1" max="200" value="50"><small>Ограничение нагрузки при ежедневной синхронизации</small></label>
+              <label>Лимит первичного импорта<input id="adminMaxImport" type="number" min="1" max="2000" value="2000"><small>Максимальное число постов у одного автора</small></label>
+            </div>
+            <h3>Хранилище архивов</h3>
+            <div class="policy-controls">
+              <label>Сжатие текста и метаданных
+                <select id="adminCompressionLevel"><option value="0">Без сжатия</option><option value="1">Zstd 1 — быстро</option><option value="3" selected>Zstd 3 — рекомендуемый баланс</option><option value="9">Zstd 9 — экономный</option><option value="15">Zstd 15 — медленный, высокая плотность</option></select>
+                <small>Видео, MP4, изображения и готовые архивы сохраняются без потери качества и не подвергаются повторному сжатию.</small>
+              </label>
+              <label class="check"><input id="adminDeduplicateMedia" type="checkbox" checked><span><strong>Не хранить одинаковые файлы дважды</strong><small>Одинаковые SHA-256 хранятся одним объектом на диске с отдельными ссылками для постов.</small></span></label>
+            </div>
+            <h3>Разрешения по умолчанию</h3><p class="muted small">Действуют для обычных пользователей, если для них не заданы персональные исключения. Администратор имеет все права.</p>
+            <div id="adminDefaults" class="check-grid policy-grid"></div>
+            <button class="btn primary" id="adminSavePolicy">Сохранить настройки сервера</button>
+            <div class="panel-head user-policy-heading"><div><h3>Индивидуальные разрешения</h3><p class="muted small">Выберите участника и укажите, какие функции ему разрешены или запрещены.</p></div></div>
+            <label>Участник <select id="adminUserPicker"></select></label>
+            <div id="adminUserFeatures" class="user-permission-grid"></div>
+            <button class="btn primary" id="saveUserRights" disabled>Сохранить права участника</button>
+          </div>
+          <div class="card" id="myRightsCard" hidden><h2>Доступные функции</h2><p class="muted small">Доступом и ограничениями управляет администратор сервера.</p><div id="myRights" class="user-permission-grid"></div></div>
           <div class="card"><h2>Безопасность данных</h2><p class="muted">Каждый пользователь видит только свои посты, задания и токены Boosty. Сохранённые копии доступны только после входа.</p><p class="muted small">Выход завершает текущую сессию. Удаление сервера и сброс паролей осуществляются владельцем VPS.</p></div>
         </section>
       </main>
@@ -75,5 +99,6 @@
   <script src="/ui/app.js" defer></script>
   <script src="/ui/library.js" defer></script>
   <script src="/ui/subscriptions.js" defer></script>
+  <script src="/ui/admin.js" defer></script>
 </body>
 </html>

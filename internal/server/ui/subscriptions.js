@@ -4,10 +4,12 @@ let subscriptionItems=[];
 let importRefreshTimer=0;
 
 async function openSubscriptionWizard(){
+  if (!permissionValue('importAuthors')){toast('Импорт запрещён администратором',true);return;}
   if (!state.boosty){toast('Сначала подключите аккаунт Boosty',true);nav('boosty');return;}
   $('subscriptionDialog').hidden=false;
   $('subscriptionError').textContent='';
   $('subscriptionStatus').textContent='Получаем список авторов из Boosty…';
+  try{const settings=await api('/api/settings');for(const option of $('subscriptionMaxPosts').options){if(option.value!=='0')option.disabled=Number(option.value)>settings.maxImportPosts;else option.textContent=`Все разрешённые (до ${settings.maxImportPosts})`;}if($('subscriptionMaxPosts').selectedOptions[0]?.disabled)$('subscriptionMaxPosts').value='0';}catch(e){}
   $('subscriptionList').replaceChildren();
   $('subscriptionSubmit').disabled=true;
   try{
@@ -63,12 +65,12 @@ async function refreshImports(){
       let status={queued:'Ожидает',running:'Поиск постов…',done:'Поиск завершён',failed:'Ошибка поиска',canceled:'Поиск остановлен'}[item.state]||item.state;
       if(item.limited)status+=' · достигнут выбранный лимит';
       info.append(text('div',`${status} · просмотрено ${item.scanned}, добавлено ${item.queued}, пропущено ${item.skipped}`,'muted small'));
-      info.append(text('div',`Изменено: ${new Date(item.updatedAt).toLocaleString('ru-RU')}`,'muted small'));
+      info.append(text('div',`Последняя проверка: ${new Date(item.lastCheckedAt||item.updatedAt).toLocaleString('ru-RU')}`,'muted small'));
       if(item.autoSync)info.append(text('div','Автопроверка новых публикаций включена','muted small'));
       if(item.error)info.append(text('div',item.error,'error'));
       card.append(info);
       const b=text('button','Открыть автора','tiny-btn');b.onclick=()=>chooseAuthor(item.author);card.append(b);
-      if(item.state==='done'){
+      if(['done','failed'].includes(item.state)&&(permissionValue('autoArchive')||item.autoSync)){
         const toggle=text('button',item.autoSync?'Выключить автопроверку':'Включить автопроверку','tiny-btn secondary');
         toggle.onclick=async()=>{
           toggle.disabled=true;

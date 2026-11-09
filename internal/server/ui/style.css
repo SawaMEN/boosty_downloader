@@ -39,3 +39,14 @@
 .subscription-footer{border-top:1px solid var(--stroke);padding-top:17px}.subscription-footer label{max-width:350px}.subscription-footer select{display:block;width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--stroke);border-radius:9px;padding:10px;margin-top:7px}
 .import-item{display:flex;align-items:center;justify-content:space-between;gap:15px;background:#1b2432;border:1px solid var(--stroke);border-radius:10px;padding:14px 16px}.import-main{display:grid;gap:4px;min-width:0}
 @media(max-width:640px){.subscriptions-modal{padding:16px}.subscription-toolbar .btn{flex:1}.subscription-list{max-height:32vh}.import-item{align-items:start;flex-wrap:wrap}}
+/* Server-wide permissions: compact enough for administration on a phone. */
+.policy-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:16px;margin:18px 0 24px;align-items:start}
+.policy-controls>label:not(.check),#adminUserPicker{display:flex;flex-direction:column;gap:8px;font-weight:600}
+.policy-controls small{font-size:12px;font-weight:400;color:var(--muted,#939bb2)}
+.policy-grid{margin:16px 0 22px}.policy-flag{min-width:0}.policy-flag span{display:flex;flex-direction:column;gap:4px}
+.user-policy-heading{margin-top:28px;border-top:1px solid rgba(140,150,180,.2);padding-top:22px}
+.user-permission-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:10px;margin:18px 0}
+.user-permission{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(140,150,180,.2);border-radius:12px}
+.user-permission select{max-width:170px}.rights-item{display:flex;justify-content:space-between;gap:10px;padding:11px;border:1px solid rgba(140,150,180,.15);border-radius:10px}
+.rights-on{color:#65c79a}.rights-off{color:#dc8787}
+@media(max-width:600px){.policy-controls,.user-permission-grid{grid-template-columns:1fr}.user-permission{align-items:start;flex-direction:column}.user-permission select{max-width:none;width:100%}}

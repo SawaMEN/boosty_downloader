@@ -25,6 +25,7 @@ type AuthorImport struct {
 	Author          string    `json:"author"`
 	Title           string    `json:"title"`
 	State           string    `json:"state"` // queued, running, done, failed
+	LastCheckedAt   time.Time `json:"lastCheckedAt,omitempty"`
 	Error           string    `json:"error,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
@@ -85,8 +86,25 @@ func (a *App) importSubscriptions(w http.ResponseWriter, r *http.Request) {
 	if decodeRequest(w, r, &input) != nil {
 		return
 	}
-	if len(input.Authors) < 1 || len(input.Authors) > 20 || input.MaxPosts < 0 || input.MaxPosts > importHardLimit {
-		fail(w, 400, "выберите от 1 до 20 авторов; лимит постов: от 0 до 2000")
+	policy := a.accounts.policy()
+	for _, feature := range []struct {
+		enabled bool
+		key     string
+	}{
+		{input.IncludeComments, "saveComments"}, {input.IncludeFiles, "saveFiles"},
+		{input.IncludeVideos, "saveVideos"}, {input.IncludeAudio, "saveAudio"},
+	} {
+		if feature.enabled && !a.accounts.allowed(principal(r).ID, feature.key) {
+			fail(w, 403, "тип вложений отключён администратором: "+feature.key)
+			return
+		}
+	}
+	if input.AutoSync && !a.accounts.allowed(principal(r).ID, "autoArchive") {
+		fail(w, 403, "автоархивация запрещена администратором")
+		return
+	}
+	if len(input.Authors) < 1 || len(input.Authors) > 20 || input.MaxPosts < 0 || input.MaxPosts > policy.MaxImportPosts {
+		fail(w, 400, fmt.Sprintf("выберите от 1 до 20 авторов; лимит постов: от 0 до %d", policy.MaxImportPosts))
 		return
 	}
 	selected := make(map[string]bool, len(input.Authors))
@@ -266,6 +284,10 @@ func (a *App) importSchedule(w http.ResponseWriter, r *http.Request) {
 	if decodeRequest(w, r, &input) != nil {
 		return
 	}
+	if input.AutoSync && !a.accounts.allowed(principal(r).ID, "autoArchive") {
+		fail(w, 403, "автоархивация запрещена администратором")
+		return
+	}
 	if err := a.store.setImportSchedule(principal(r).ID, r.PathValue("id"), input.AutoSync); err != nil {
 		fail(w, 409, err.Error())
 		return
@@ -280,7 +302,7 @@ func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 	if v == nil || v.OwnerID != owner {
 		return errors.New("импорт не найден")
 	}
-	if v.State != "done" {
+	if v.State != "done" && v.State != "failed" {
 		return errors.New("изменить расписание можно после завершения поиска")
 	}
 	old := v.AutoSync
@@ -315,6 +337,9 @@ func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 // unbounded history entries every polling interval. The first catch-up pass
 // starts from the newest posts and stops on an already known post.
 func (s *Storage) scheduleDueImports(now time.Time, interval time.Duration, limit int) ([]string, error) {
+	return s.scheduleDueImportsAllowed(now, interval, limit, nil)
+}
+func (s *Storage) scheduleDueImportsAllowed(now time.Time, interval time.Duration, limit int, allowed func(string) bool) ([]string, error) {
 	if interval <= 0 || limit <= 0 {
 		return nil, nil
 	}
@@ -333,7 +358,7 @@ func (s *Storage) scheduleDueImports(now time.Time, interval time.Duration, limi
 	}
 	candidates := make([]*AuthorImport, 0, len(latest))
 	for key, v := range latest {
-		if !busy[key] && v.State == "done" && v.AutoSync && !v.UpdatedAt.IsZero() && now.Sub(v.UpdatedAt) >= interval {
+		if !busy[key] && (v.State == "done" || (v.State == "failed" && v.Incremental)) && v.AutoSync && (allowed == nil || allowed(v.OwnerID)) && !v.UpdatedAt.IsZero() && now.Sub(v.UpdatedAt) >= interval {
 			candidates = append(candidates, v)
 		}
 	}
@@ -352,9 +377,7 @@ func (s *Storage) scheduleDueImports(now time.Time, interval time.Duration, limi
 		v.Limited = false
 		v.Incremental = true
 		v.UpdatedAt = now
-		if v.MaxPosts == 0 || v.MaxPosts > 50 {
-			v.MaxPosts = 50
-		}
+		// Keep the initial import limit intact; incremental scans use the admin cap.
 		ids = append(ids, v.ID)
 	}
 	if len(ids) == 0 {
@@ -373,9 +396,6 @@ func (s *Storage) scheduleDueImports(now time.Time, interval time.Duration, limi
 // necessary for initial deployment. Queue space is bounded by the existing
 // worker channel and the scheduler chooses the oldest due authors first.
 func (a *App) importSyncLoop() {
-	if a.cfg.SyncInterval <= 0 {
-		return
-	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	a.scheduleAutoImports(time.Now().UTC())
@@ -389,6 +409,10 @@ func (a *App) importSyncLoop() {
 	}
 }
 func (a *App) scheduleAutoImports(now time.Time) {
+	interval := a.syncInterval()
+	if interval <= 0 {
+		return
+	}
 	slots := cap(a.importQueue) - len(a.importQueue)
 	if slots < 1 {
 		return
@@ -396,7 +420,9 @@ func (a *App) scheduleAutoImports(now time.Time) {
 	if slots > 10 {
 		slots = 10
 	}
-	ids, err := a.store.scheduleDueImports(now, a.cfg.SyncInterval, slots)
+	ids, err := a.store.scheduleDueImportsAllowed(now, interval, slots, func(id string) bool {
+		return a.accounts.allowed(id, "autoArchive") && a.accounts.allowed(id, "importAuthors") && a.accounts.allowed(id, "createArchives")
+	})
 	if err != nil {
 		return
 	} // Next tick will retry, keeping the existing import intact.
@@ -472,7 +498,20 @@ func (a *App) importWorker() {
 		}
 	}
 }
+func (a *App) importLimit(v AuthorImport) int {
+	p := a.accounts.policy()
+	if v.Incremental {
+		return p.MaxScanPosts
+	}
+	if v.MaxPosts == 0 || v.MaxPosts > p.MaxImportPosts {
+		return p.MaxImportPosts
+	}
+	return v.MaxPosts
+}
 func (a *App) runImport(v *AuthorImport) error {
+	if !a.accounts.allowed(v.OwnerID, "importAuthors") || !a.accounts.allowed(v.OwnerID, "createArchives") || (v.Incremental && !a.accounts.allowed(v.OwnerID, "autoArchive")) {
+		return errors.New("архивация автора отключена администратором")
+	}
 	c, err := a.client(v.OwnerID)
 	if err != nil {
 		return err
@@ -481,6 +520,24 @@ func (a *App) runImport(v *AuthorImport) error {
 		return errors.New("аккаунт Boosty отключён")
 	}
 
+	// Automated scans only follow authors the account is still subscribed to.
+	// A failed subscription lookup leaves the existing archive intact.
+	if v.Incremental && a.feedSource == nil {
+		list, e := a.lookupSubscriptions(a.ctx, v.OwnerID)
+		if e != nil {
+			return fmt.Errorf("не удалось проверить активную подписку: %w", e)
+		}
+		subscribed := false
+		for _, author := range list.Authors {
+			if strings.EqualFold(author.Blog, v.Author) && !author.Paused {
+				subscribed = true
+				break
+			}
+		}
+		if !subscribed {
+			return errors.New("автопроверка остановлена: нет активной подписки на автора")
+		}
+	}
 	seenOffsets := map[string]bool{}
 	if v.NextOffset != "" {
 		seenOffsets[v.NextOffset] = true
@@ -492,10 +549,13 @@ func (a *App) runImport(v *AuthorImport) error {
 		if a.store.importCanceled(v.ID) {
 			return errImportCanceled
 		}
+		if !a.accounts.allowed(v.OwnerID, "importAuthors") || !a.accounts.allowed(v.OwnerID, "createArchives") || (v.Incremental && !a.accounts.allowed(v.OwnerID, "autoArchive")) {
+			return errors.New("функция отключена администратором")
+		}
 		if !c.HasToken() && a.feedSource == nil {
 			return errors.New("аккаунт Boosty отключён")
 		}
-		if v.MaxPosts > 0 && v.Scanned >= v.MaxPosts {
+		if a.importLimit(*v) > 0 && v.Scanned >= a.importLimit(*v) {
 			v.Limited = true
 			return nil
 		}
@@ -517,7 +577,7 @@ func (a *App) runImport(v *AuthorImport) error {
 			if a.store.importCanceled(v.ID) {
 				return errImportCanceled
 			}
-			if v.Scanned >= importHardLimit || v.MaxPosts > 0 && v.Scanned >= v.MaxPosts {
+			if v.Scanned >= importHardLimit || a.importLimit(*v) > 0 && v.Scanned >= a.importLimit(*v) {
 				v.Limited = true
 				break
 			}

@@ -26,8 +26,8 @@ async function init(){await publicConfig();try{state.user=await api('/api/accoun
 async function onLogin(event){event.preventDefault();$('authError').textContent='';$('submitLogin').disabled=true;
  try{const method=state.authMode==='register'?'register':'login';await api(`/api/account/${method}`,{method:'POST',body:{username:$('loginUser').value.trim(),password:$('loginPass').value}});state.user=await api('/api/account');$('loginPass').value='';enterApp()}
  catch(e){$('authError').textContent=e.message}finally{$('submitLogin').disabled=false}}
-function enterApp(){$('loginScreen').hidden=true;$('appScreen').hidden=false;$('userName').textContent=state.user.username;$('userInitial').textContent=state.user.username.slice(0,1).toUpperCase();$('userRole').textContent=state.user.admin?'Администратор':'Участник';$('adminSettings').hidden=!state.user.admin;nav('home');refreshAll();if(state.user.admin)loadRegistration()}
-function nav(page){if(!titles[page])return;for(const node of document.querySelectorAll('.page'))node.classList.toggle('active',node.id===`page-${page}`);for(const node of document.querySelectorAll('[data-page]'))node.classList.toggle('active',node.dataset.page===page);$('pageCrumb').textContent=titles[page];$('sidebar').classList.remove('open');if(page==='library'){refreshJobs();loadAuthors()}if(page==='authors'){loadAuthors();refreshImports();}if(page==='shared')refreshShared();if(page==='boosty')refreshBoosty()}
+function enterApp(){$('loginScreen').hidden=true;$('appScreen').hidden=false;$('userName').textContent=state.user.username;$('userInitial').textContent=state.user.username.slice(0,1).toUpperCase();$('userRole').textContent=state.user.admin?'Администратор':'Участник';updatePermissionUI();nav('home');refreshAll();if(state.user.admin)loadAdminPanel()}
+function nav(page){if(!titles[page])return;for(const node of document.querySelectorAll('.page'))node.classList.toggle('active',node.id===`page-${page}`);for(const node of document.querySelectorAll('[data-page]'))node.classList.toggle('active',node.dataset.page===page);$('pageCrumb').textContent=titles[page];$('sidebar').classList.remove('open');if(page==='library'){refreshJobs();loadAuthors()}if(page==='authors'){loadAuthors();refreshImports();}if(page==='shared'&&permissionValue('browseShared'))refreshShared();if(page==='boosty')refreshBoosty();if(page==='settings'&&state.user?.admin)loadAdminPanel()}
 function jobState(j){const states={done:'Готово',partial:'Частично',queued:'В очереди',running:'Загружается',failed:'Ошибка'};return states[j.state]||j.state}
 function buildJob(j, shared=false){const item=el('article','job-item');item.append(text('div','▧','job-icon'));const body=el('div','job-main');body.append(text('div',j.title||j.url,'job-title'));body.append(text('div',`${j.author}${shared?' · от '+j.ownerName:''} · ${j.doneFiles}/${j.totalFiles} файлов`,'job-sub'));
  if(j.archiveUpdatedAt){const when=new Date(j.archiveUpdatedAt);body.append(text('div',`Архив обновлён: ${when.toLocaleString('ru-RU')}`,'job-sub archive-date'));}
@@ -40,14 +40,14 @@ function buildJob(j, shared=false){const item=el('article','job-item');item.appe
    actions.append(safeLink('Открыть копию ↗',`/library/${encodeURIComponent(j.id)}/index.html`));
    actions.append(safeLink('Скачать ZIP',`/api/jobs/${encodeURIComponent(j.id)}/zip`,true));
  }
- if(!shared && ['done','partial','failed'].includes(j.state)){
+ if(!shared && permissionValue('createArchives') && ['done','partial','failed'].includes(j.state)){
   const b=text('button','⟳ Обновить','tiny-btn');b.onclick=async()=>{try{await api(`/api/jobs/${j.id}/retry`,{method:'POST'});toast('Задача добавлена в очередь');refreshJobs()}catch(e){toast(e.message,true)}};actions.append(b)
  }
  if(!shared && ['done','partial'].includes(j.state)) {
   actions.append(libraryAction('Проверить файлы',()=>verifyArchiveUI(j)));
-  actions.append(libraryAction('Поделиться',()=>openShareDialog(j)));
+  if(permissionValue('shareDirect')||permissionValue('sharePublic')) actions.append(libraryAction('Поделиться',()=>openShareDialog(j)));
  }
- if(!shared && !['queued','running'].includes(j.state)) actions.append(libraryAction('Удалить',()=>deleteArchivedPost(j),'delete'));
+ if(!shared && permissionValue('deleteArchives') && !['queued','running'].includes(j.state)) actions.append(libraryAction('Удалить',()=>deleteArchivedPost(j),'delete'));
  if(actions.children.length)body.append(actions);
  item.append(body);const badge=text('span',jobState(j),`status-badge ${j.state}`);item.append(badge);return item;
 }
@@ -73,7 +73,7 @@ async function refreshJobs(){
  }catch(e){toast(e.message,true)}
 }
 async function refreshBoosty(){if(!state.user)return;try{const b=await api('/api/auth');state.boosty=b.connected;$('boostyDot').classList.toggle('connected',b.connected);$('topBoosty').textContent=b.connected?'Boosty подключён':'Boosty не подключён';$('connectionText').textContent=b.connected?'Аккаунт Boosty подключён':'Подключите аккаунт Boosty';$('connectionDetail').textContent=b.connected?'Можно читать и скачивать доступные вашей подписке посты.':'Открытые посты доступны и без подключения. Для закрытых нужен ваш Boosty.';$('disconnectBoosty').hidden=!b.connected;$('statAccount').textContent=b.connected?'Активен':'Гость'}catch(e){toast(e.message,true)}}
-async function refreshAll(){await Promise.all([refreshJobs(),refreshBoosty(),refreshShared()])}
+async function refreshAll(){await Promise.all([refreshJobs(),refreshBoosty(),...(permissionValue('browseShared')?[refreshShared()]:[])])}
 function urlParams(url){return encodeURIComponent(url)}
 function streamUrl(url,index,inline=false,quality=''){return `/api/stream?url=${urlParams(url)}&index=${index}${inline?'&inline=1':''}${quality?'&quality='+encodeURIComponent(quality):''}`}
 function renderMedia(p,m){const wrap=el('div','post-media');const title=text('strong',m.title||({'ok_video':'Видео','audio_file':'Аудио','image':'Изображение','file':'Файл'}[m.type]||'Медиа'));wrap.append(title);
@@ -89,8 +89,8 @@ function renderMedia(p,m){const wrap=el('div','post-media');const title=text('st
    mediaNode.addEventListener('error',()=>{const warning=wrap.querySelector('.play-error');if(!warning){const msg=text('p','Поток не поддерживается браузером или CDN отклонил запрос. Попробуйте скачать файл либо сохранить пост. HLS/DASH пока поддерживаются не всеми браузерами.','muted small play-error');wrap.append(msg)}});
  } else if(m.type==='audio_file') {mediaNode=el('audio');mediaNode.controls=true;mediaNode.preload='none';mediaNode.src=streamUrl(p.source,m.index,true)}
  else if(m.type==='image'){mediaNode=el('img');mediaNode.loading='lazy';mediaNode.src=streamUrl(p.source,m.index,true);mediaNode.alt=m.title||'Изображение'}
- if(mediaNode)wrap.append(mediaNode);
- actions.append(safeLink('↓ Скачать на компьютер',streamUrl(p.source,m.index),true));wrap.append(actions);return wrap;
+ if(mediaNode && permissionValue('streamMedia'))wrap.append(mediaNode);
+ if(permissionValue('streamMedia'))actions.append(safeLink('↓ Скачать на компьютер',streamUrl(p.source,m.index),true));wrap.append(actions);return wrap;
 }
 async function openPost(url){if(!url)throw new Error('Укажите ссылку на публикацию');nav('browse');const viewer=$('postViewer');viewer.hidden=false;$('postTitle').textContent='Загрузка публикации…';$('postBlocks').replaceChildren();$('commentsArea').replaceChildren();$('loadComments').hidden=false;
  const p=await api('/api/post?url='+urlParams(url));state.post=p;$('postTitle').textContent=p.title||'Без названия';$('postAuthor').textContent=p.author;$('postMeta').textContent=`${p.hasAccess?'Доступно для просмотра':'Доступ ограничен подпиской'} · ${p.media.length} медиа · ${p.comments} комментариев`;$('openOriginal').onclick=()=>window.open(p.source,'_blank','noopener,noreferrer');
@@ -107,10 +107,10 @@ async function loadFeed(reset=false){const author=$('feedAuthor').value.trim();i
  if(!r.posts?.length&&!target.children.length){target.append(empty('Публикации не найдены','Убедитесь, что имя автора указано правильно.'));return}
  for(const p of r.posts||[]){const item=el('button','feed-card');item.append(text('span',p.hasAccess?'● Доступен':'○ Закрытый','eyebrow'));item.append(text('h3',p.title||'Публикация'));item.append(text('div',`${new Date(p.publishTime*1000).toLocaleDateString('ru-RU')} · ${p.mediaCount} медиа · ${p.comments} комментариев`,'meta'));item.onclick=()=>openPost(p.url).catch(e=>toast(e.message,true));target.append(item)}
 }
-function showArchiveDialog() {if(!state.post||!state.post.hasAccess){toast('Сначала откройте доступную публикацию',true);return}for(const key of optionNames){const source=$('option'+key),target=$('archive'+key);target.checked=source.checked}$('archiveDialogTitle').textContent='Сохранить «'+(state.post.title||'публикацию')+'»';$('archiveDialog').hidden=false}
+function showArchiveDialog() {if(!permissionValue('createArchives')){toast('Архивация отключена администратором',true);return}if(!state.post||!state.post.hasAccess){toast('Сначала откройте доступную публикацию',true);return}for(const key of optionNames){const source=$('option'+key),target=$('archive'+key);target.checked=source.checked}$('archiveDialogTitle').textContent='Сохранить «'+(state.post.title||'публикацию')+'»';$('archiveDialog').hidden=false}
 async function submitArchive(){const url=state.post?.source;if(!url)return;try{const body={url,includeComments:$('archiveComments').checked,includeFiles:$('archiveFiles').checked,includeVideos:$('archiveVideo').checked,includeAudio:$('archiveAudio').checked,autoSync:$('archiveSync').checked};await api('/api/jobs',{method:'POST',body});$('archiveDialog').hidden=true;toast('Публикация добавлена в очередь');nav('library');refreshJobs()}catch(e){toast(e.message,true)}}
-async function connectBoosty(){try{let body;const tab=document.querySelector('.tab.active')?.dataset.connect;if(tab==='cookie')body={method:'cookie',value:$('cookieValue').value.trim()};else body={method:'tokens',accessToken:$('accessToken').value.trim(),refreshToken:$('refreshToken').value.trim(),deviceId:$('deviceId').value.trim()};await api('/api/auth',{method:'POST',body});for(const id of ['cookieValue','accessToken','refreshToken','deviceId'])$(id).value='';$('boostyFeedback').textContent='Аккаунт подключён';toast('Токены Boosty сохранены');await refreshBoosty();await openSubscriptionWizard()}catch(e){$('boostyFeedback').textContent=e.message;toast(e.message,true)}}
-async function loadRegistration(){if(!state.user?.admin)return;try{const r=await api('/api/admin/registration');$('registrationOpen').checked=r.registrationOpen}catch(e){toast(e.message,true)}}
+async function connectBoosty(){if(!permissionValue('connectBoosty'))return toast('Подключение отключено администратором',true);try{let body;const tab=document.querySelector('.tab.active')?.dataset.connect;if(tab==='cookie')body={method:'cookie',value:$('cookieValue').value.trim()};else body={method:'tokens',accessToken:$('accessToken').value.trim(),refreshToken:$('refreshToken').value.trim(),deviceId:$('deviceId').value.trim()};await api('/api/auth',{method:'POST',body});for(const id of ['cookieValue','accessToken','refreshToken','deviceId'])$(id).value='';$('boostyFeedback').textContent='Аккаунт подключён';toast('Токены Boosty сохранены');await refreshBoosty();if(permissionValue('importAuthors'))await openSubscriptionWizard()}catch(e){$('boostyFeedback').textContent=e.message;toast(e.message,true)}}
+
 function events(){
  $('loginForm').addEventListener('submit',onLogin);
  $('switchAuth').onclick=()=>switchAuth(state.authMode==='login'?'register':'login');
@@ -130,10 +130,11 @@ function events(){
  for(const b of document.querySelectorAll('[data-connect]'))b.onclick=()=>{for(const tab of document.querySelectorAll('[data-connect]'))tab.classList.toggle('active',tab===b);$('cookieFields').hidden=b.dataset.connect!=='cookie';$('tokenFields').hidden=b.dataset.connect!=='tokens'};
  $('connectCookie').onclick=connectBoosty;$('connectTokens').onclick=connectBoosty;
  $('disconnectBoosty').onclick=async()=>{if(!confirm('Отключить аккаунт Boosty? Сохранённые архивы останутся.'))return;try{await api('/api/auth',{method:'DELETE'});refreshBoosty();toast('Boosty отключён')}catch(e){toast(e.message,true)}};
- $('registrationOpen').onchange=async()=>{const checked=$('registrationOpen').checked;try{await api('/api/admin/registration',{method:'POST',body:{registrationOpen:checked}});toast(checked?'Регистрация разрешена':'Регистрация отключена')}catch(e){$('registrationOpen').checked=!checked;toast(e.message,true)}};
+ 
  for(const key of optionNames){const control=$('option'+key);control.checked=localStorage.getItem('option'+key)==='true'||(localStorage.getItem('option'+key)===null&&key!=='Sync');control.onchange=()=>localStorage.setItem('option'+key,String(control.checked))}
  libraryEvents();
  subscriptionEvents();
+ adminEvents();
  setInterval(()=>{if(state.user&&document.visibilityState==='visible')refreshJobs().catch(()=>{})},15000);
 }
 document.addEventListener('DOMContentLoaded',()=>{events();init()});

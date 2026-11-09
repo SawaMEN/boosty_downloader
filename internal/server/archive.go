@@ -135,6 +135,21 @@ func (a *App) runJob(id string) {
 	if !ok {
 		return
 	}
+	// A permission can be revoked while a job is waiting in the queue.
+	for _, feature := range []struct {
+		requested bool
+		key       string
+	}{
+		{true, "createArchives"}, {job.IncludeComments, "saveComments"}, {job.IncludeFiles, "saveFiles"},
+		{job.IncludeVideos, "saveVideos"}, {job.IncludeAudio, "saveAudio"},
+	} {
+		if feature.requested && !a.accounts.allowed(job.OwnerID, feature.key) {
+			job.State = "failed"
+			job.Error = "загрузка запрещена администратором: " + feature.key
+			_ = a.store.upsert(job)
+			return
+		}
+	}
 	job.Error = ""
 	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Hour)
 	defer cancel()
@@ -173,8 +188,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if e = os.MkdirAll(mediaFolder, 0700); e != nil {
 		return e
 	}
+	compressionPolicy := a.accounts.policy()
 	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments}
-	if e = writeJSON(filepath.Join(folder, "post.json"), json.RawMessage(p.Raw)); e != nil {
+	if e = writeArchiveJSON(filepath.Join(folder, "post.json"), json.RawMessage(p.Raw), compressionPolicy.CompressionLevel); e != nil {
 		return e
 	}
 	var comments boosty.CommentResult
@@ -185,11 +201,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			man.Failures = append(man.Failures, "Комментарии: "+e.Error())
 			j.CommentsPartial = true
 		} else {
-			if e = writeJSON(filepath.Join(folder, "comments.json"), comments); e != nil {
+			if e = writeArchiveJSON(filepath.Join(folder, "comments.json"), comments, compressionPolicy.CompressionLevel); e != nil {
 				return e
 			}
 			if len(comments.Raw) > 0 {
-				if e = writeJSON(filepath.Join(folder, "comments-raw.json"), json.RawMessage(comments.Raw)); e != nil {
+				if e = writeArchiveJSON(filepath.Join(folder, "comments-raw.json"), json.RawMessage(comments.Raw), compressionPolicy.CompressionLevel); e != nil {
 					return e
 				}
 			}
@@ -236,6 +252,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			valid, err := verifyAsset(dest, previous)
 			if err == nil && valid && (m.Size <= 0 || m.Size == previous.Size) {
 				man.Assets = append(man.Assets, previous)
+				if compressionPolicy.DeduplicateMedia {
+					_ = a.store.deduplicateAsset(dest, previous.SHA256, previous.Size)
+				}
 				j.DoneFiles++
 				_ = a.store.upsert(*j)
 				continue
@@ -255,6 +274,18 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			title = m.Type
 		}
 		man.Assets = append(man.Assets, ArchiveAsset{Filename: name, Type: m.Type, Title: title, Size: size, SHA256: digest})
+		if compressionPolicy.DeduplicateMedia {
+			if err := a.store.deduplicateAsset(dest, digest, size); err != nil {
+				// Deduplication is an optimization; a complete downloaded file remains valid.
+				// Never fail an archive or silently swap damaged data because the cache failed.
+				fmt.Fprintf(os.Stderr, "dedup: %v\n", err)
+			}
+		}
+		// A replaced video can leave its previous content-addressed object
+		// without any post references. Release that old object immediately.
+		if previous, known := prior[name]; known && previous.SHA256 != "" {
+			_ = a.store.discardBlobIfUnreferenced(previous.SHA256)
+		}
 		j.DoneFiles++
 		_ = a.store.upsert(*j)
 	}
