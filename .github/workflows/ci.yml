@@ -18,7 +18,7 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l ./cmd ./internal)"
       - name: Check shell syntax
-        run: bash -n install.sh deploy/boosty-downloader-manager
+        run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew
       - name: Vet
         run: go vet ./...
       - name: Unit tests and race detector
@@ -38,6 +38,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags='-s -w' -o dist/boosty-downloader-linux-${{ matrix.arch }} ./cmd/boosty-downloader
+      - run: cd dist && sha256sum boosty-downloader-linux-${{ matrix.arch }} > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: boosty-downloader-linux-${{ matrix.arch }}

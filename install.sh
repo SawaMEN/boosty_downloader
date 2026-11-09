@@ -20,7 +20,7 @@ if [[ "$MODE" != native && "$MODE" != docker ]];then
   read -r -p 'Выбор: ' option </dev/tty
   case "$option" in 1) MODE=native;;2) MODE=docker;;0) exit 0;;*) echo 'Неизвестный вариант';exit 1;;esac
 fi
-if [[ "$MODE" == native ]];then command -v systemctl >/dev/null || { echo 'Нужен systemd.' >&2;exit 1; };command -v go >/dev/null || { echo 'Для первой установки из приватного репозитория нужен Go >=1.23 или опубликованный релиз.' >&2;exit 1;};fi
+if [[ "$MODE" == native ]];then command -v systemctl >/dev/null || { echo 'Нужен systemd.' >&2;exit 1; };fi
 if [[ "$MODE" == docker ]];then command -v docker >/dev/null || { echo 'Требуется Docker Engine с docker compose.' >&2;exit 1; };docker compose version >/dev/null || { echo 'Требуется Docker Compose v2.' >&2;exit 1; };fi
 if ! id boosty-downloader >/dev/null 2>&1;then command -v useradd >/dev/null || { echo 'Требуется useradd.' >&2;exit 1; };useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin boosty-downloader;fi
 install -d -m 0750 -o root -g boosty-downloader "$ETC"
@@ -64,9 +64,9 @@ fi
 if [[ ! -s "$ETC/tls/fullchain.pem" || ! -s "$ETC/tls/privkey.pem" ]];then
   TLS_MODE="${BD_TLS_MODE:-}"
   if [[ -z "$TLS_MODE" ]];then
-    echo 'HTTPS: 1) Самоподписанный сертификат  2) Использовать свои PEM-сертификаты'
+    echo 'HTTPS: 1) Самоподписанный  2) Свои PEM  3) Let’s Encrypt (домен, порт 80)'
     read -r -p 'Выбор [1]: ' t </dev/tty
-    case "${t:-1}" in 1) TLS_MODE=selfsigned;;2) TLS_MODE=existing;;*) echo 'Неверный выбор';exit 1;;esac
+    case "${t:-1}" in 1) TLS_MODE=selfsigned;;2) TLS_MODE=existing;;3) TLS_MODE=letsencrypt;;*) echo 'Неверный выбор';exit 1;;esac
   fi
   if [[ "$TLS_MODE" == existing ]];then
     crt="${BD_EXISTING_CERT:-}";key="${BD_EXISTING_KEY:-}"
@@ -75,21 +75,86 @@ if [[ ! -s "$ETC/tls/fullchain.pem" || ! -s "$ETC/tls/privkey.pem" ]];then
     [[ -f "$crt" && -f "$key" ]] || { echo 'Указанные PEM-файлы отсутствуют';exit 1; }
     install -m 0640 -o root -g boosty-downloader "$crt" "$ETC/tls/fullchain.pem"
     install -m 0640 -o root -g boosty-downloader "$key" "$ETC/tls/privkey.pem"
+    printf '%s\n' existing > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
   elif [[ "$TLS_MODE" == selfsigned ]];then
     command -v openssl >/dev/null || { echo 'Нужен openssl';exit 1; }
     san="DNS:$PUBLIC_HOST";if [[ "$PUBLIC_HOST" == 127.0.0.1 || "$PUBLIC_HOST" =~ ^[0-9.]+$ || "$PUBLIC_HOST" == *:* ]];then san="IP:$PUBLIC_HOST";fi
     openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 -subj '/CN=Boosty Downloader' -addext "subjectAltName=$san" -keyout "$ETC/tls/privkey.pem" -out "$ETC/tls/fullchain.pem" 2>/dev/null
     chown root:boosty-downloader "$ETC/tls/privkey.pem" "$ETC/tls/fullchain.pem"
     chmod 0640 "$ETC/tls/privkey.pem" "$ETC/tls/fullchain.pem"
-    echo 'Создан самоподписанный сертификат. Для доверенного HTTPS на домене используйте готовые PEM.'
-  else echo 'BD_TLS_MODE: selfsigned или existing';exit 1;fi
+    printf '%s\n' selfsigned > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
+    echo 'Создан самоподписанный сертификат. Для доверенного HTTPS на домене используйте Let’s Encrypt.'
+  elif [[ "$TLS_MODE" == letsencrypt ]];then
+    [[ "$PUBLIC_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$PUBLIC_HOST" == *.* && ! "$PUBLIC_HOST" =~ ^[0-9.]+$ ]] || { echo 'Let’s Encrypt здесь поддерживается только для домена.' >&2;exit 1; }
+    if ! command -v certbot >/dev/null;then
+      echo 'Для автоматического HTTPS нужен certbot. Устанавливаем системный пакет...'
+      if command -v apt-get >/dev/null;then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y certbot
+      elif command -v dnf >/dev/null;then dnf install -y certbot
+      elif command -v pacman >/dev/null;then pacman -S --noconfirm --needed certbot
+      else echo 'Установите certbot и повторите команду.' >&2;exit 1;fi
+    fi
+    echo 'Для Let’s Encrypt домен должен указывать на VPS, TCP 80 должен быть доступен из интернета.'
+    certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email \
+      --cert-name boosty-downloader -d "$PUBLIC_HOST" --config-dir "$ETC/acme" --work-dir "$DATA/acme-work" --logs-dir "$DATA/acme-logs"
+    install -m 0640 -o root -g boosty-downloader "$ETC/acme/live/boosty-downloader/fullchain.pem" "$ETC/tls/fullchain.pem"
+    install -m 0640 -o root -g boosty-downloader "$ETC/acme/live/boosty-downloader/privkey.pem" "$ETC/tls/privkey.pem"
+    printf '%s\n' letsencrypt > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
+  else echo 'BD_TLS_MODE: selfsigned, existing или letsencrypt';exit 1;fi
 fi
 install -m 0755 "$ROOT/deploy/boosty-downloader-manager" "$CMD"
 oldmode="$(cat "$ETC/mode" 2>/dev/null || echo none)"
+download_release_binary() {
+  local temp_dir="$1" arch
+  case "$(uname -m)" in x86_64|amd64) arch=amd64;;aarch64|arm64) arch=arm64;;*) echo 'Архитектура не поддерживается';return 1;;esac
+  if [[ -n "${BD_NATIVE_BINARY:-}" ]];then
+    [[ -f "$BD_NATIVE_BINARY" ]] || { echo 'BD_NATIVE_BINARY не найден.' >&2;return 1; }
+    [[ -n "${BD_NATIVE_SHA256:-}" ]] || { echo 'Для собственного бинарника обязательно укажите BD_NATIVE_SHA256.' >&2;return 1; }
+    install -m 0755 "$BD_NATIVE_BINARY" "$temp_dir/boosty-downloader"
+    [[ "$(sha256sum "$temp_dir/boosty-downloader" | cut -d ' ' -f 1)" == "$BD_NATIVE_SHA256" ]] || { echo 'SHA256 не совпадает.' >&2;return 1; }
+    return 0
+  fi
+  if command -v gh >/dev/null 2>&1 && { [[ -n "${GH_TOKEN:-}" ]] || gh auth status >/dev/null 2>&1; };then
+    local tag="${BD_RELEASE_TAG:-}" selector=()
+    if [[ -n "$tag" ]];then selector=(--tag "$tag");fi
+    if gh release download "${selector[@]}" --repo SawaMEN/boosty_downloader --dir "$temp_dir" --pattern "boosty-downloader-linux-$arch" --pattern SHA256SUMS --clobber;then
+      if [[ -f "$temp_dir/SHA256SUMS" && -f "$temp_dir/boosty-downloader-linux-$arch" ]] &&
+         (cd "$temp_dir" && sha256sum --check --ignore-missing SHA256SUMS | grep -Fq "boosty-downloader-linux-$arch: OK");then
+        install -m 0755 "$temp_dir/boosty-downloader-linux-$arch" "$temp_dir/boosty-downloader"
+        return 0
+      fi
+      echo 'Контрольная сумма релиза не подтверждена.' >&2
+      return 2
+    fi
+    local run_id
+    run_id="$(gh run list --repo SawaMEN/boosty_downloader --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+    if [[ "$run_id" =~ ^[0-9]+$ ]];then
+      if gh run download "$run_id" --repo SawaMEN/boosty_downloader --name "boosty-downloader-linux-$arch" --dir "$temp_dir";then
+        if [[ -f "$temp_dir/SHA256SUMS" && -f "$temp_dir/boosty-downloader-linux-$arch" ]] &&
+           (cd "$temp_dir" && sha256sum --check --ignore-missing SHA256SUMS | grep -Fq "boosty-downloader-linux-$arch: OK");then
+          install -m 0755 "$temp_dir/boosty-downloader-linux-$arch" "$temp_dir/boosty-downloader"
+          return 0
+        fi
+        echo 'Контрольная сумма CI-артефакта не подтверждена.' >&2
+        return 2
+      fi
+    fi
+  fi
+  return 1
+}
 if [[ "$MODE" == native ]];then
-  echo 'Сборка Go-бинарника...'
   tmp="$(mktemp -d)";trap 'rm -rf -- "$tmp"' EXIT
-  (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$tmp/boosty-downloader" ./cmd/boosty-downloader)
+  if [[ "${BD_BUILD_FROM_SOURCE:-0}" == 1 ]];then
+    echo 'Локальная сборка из исходников...'
+    command -v go >/dev/null || { echo 'Нужен Go >= 1.23.' >&2;exit 1; }
+    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$tmp/boosty-downloader" ./cmd/boosty-downloader)
+  elif download_release_binary "$tmp";then
+    echo 'Получен готовый бинарник, SHA256 проверен.'
+  else
+    if [[ -n "${BD_NATIVE_BINARY:-}" ]];then echo 'Локальный бинарник не прошёл проверку.' >&2;exit 1;fi
+    echo 'Релиз недоступен или GitHub не авторизован; сборка из текущих исходников.'
+    command -v go >/dev/null || { echo 'Нужен Go >= 1.23 либо gh с доступом к релизу GitHub.' >&2;exit 1; }
+    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$tmp/boosty-downloader" ./cmd/boosty-downloader)
+  fi
   [[ -s "$tmp/boosty-downloader" ]] || { echo 'Сборка не выполнена';exit 1; }
   if [[ "$oldmode" == docker && -f "$PROJECT/compose.yaml" ]];then docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" down;fi
   install -d -m 0755 /usr/local/boosty-downloader
@@ -123,6 +188,18 @@ else
 fi
 printf '%s\n' "$MODE" > "$ETC/mode"
 chmod 0640 "$ETC/mode"
+if [[ -f "$ETC/tls/mode" && "$(cat "$ETC/tls/mode")" == letsencrypt ]];then
+  if command -v systemctl >/dev/null;then
+    install -m 0755 "$ROOT/deploy/boosty-downloader-cert-renew" /usr/local/bin/bdy-cert-renew
+    install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.service" /etc/systemd/system/boosty-downloader-cert-renew.service
+    install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.timer" /etc/systemd/system/boosty-downloader-cert-renew.timer
+    systemctl daemon-reload
+    systemctl enable --now boosty-downloader-cert-renew.timer
+    echo 'Включено автоматическое продление сертификата.'
+  else
+    echo 'Для автоматического продления сертификата необходим systemd timer.'
+  fi
+fi
 echo "Установлен режим: $MODE"
 echo "Панель: https://$PUBLIC_HOST:$PORT/"
 echo 'Управление: sudo bdy'

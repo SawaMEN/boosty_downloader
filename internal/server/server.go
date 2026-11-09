@@ -230,7 +230,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	m := medias[i]
 	res, e := a.boosty.MediaGet(ctx, boosty.MediaURL(p, m), r.Header.Get("Range"))
 	if e != nil {
-		fail(w, 502, "ошибка CDN: "+e.Error())
+		fail(w, 502, "ошибка CDN: "+redactNetError(e))
 		return
 	}
 	defer res.Body.Close()

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ETC=/etc/boosty-downloader
+DATA=/var/lib/boosty-downloader
+MODE="$ETC/tls/mode"
+[[ -f "$MODE" && "$(cat "$MODE")" == letsencrypt ]] || exit 0
+command -v certbot >/dev/null || { echo 'certbot не найден.' >&2;exit 1; }
+certbot renew --non-interactive --quiet --config-dir "$ETC/acme" --work-dir "$DATA/acme-work" --logs-dir "$DATA/acme-logs"
+certdir="$ETC/acme/live/boosty-downloader"
+[[ -r "$certdir/fullchain.pem" && -r "$certdir/privkey.pem" ]] || { echo 'Нет сертификатов для продления.' >&2;exit 1; }
+if cmp -s "$certdir/fullchain.pem" "$ETC/tls/fullchain.pem" && cmp -s "$certdir/privkey.pem" "$ETC/tls/privkey.pem";then exit 0;fi
+install -m 0640 -o root -g boosty-downloader "$certdir/fullchain.pem" "$ETC/tls/fullchain.pem"
+install -m 0640 -o root -g boosty-downloader "$certdir/privkey.pem" "$ETC/tls/privkey.pem"
+mode="$(cat "$ETC/mode" 2>/dev/null || echo none)"
+if [[ "$mode" == native ]];then systemctl restart boosty-downloader.service
+elif [[ "$mode" == docker ]];then docker compose --project-directory /opt/boosty-downloader -f /opt/boosty-downloader/compose.yaml restart
+fi
+echo 'Сертификаты Boosty Downloader обновлены.'

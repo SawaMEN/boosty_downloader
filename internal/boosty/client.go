@@ -131,6 +131,7 @@ type PlayerURL struct {
 	URL  string `json:"url"`
 }
 type Post struct {
+	Raw         json.RawMessage   `json:"-"`
 	ID          string            `json:"id"`
 	Title       string            `json:"title"`
 	HasAccess   bool              `json:"hasAccess"`
@@ -159,11 +160,12 @@ type Comment struct {
 	CreatedAt int64 `json:"createdAt"`
 }
 type CommentResult struct {
-	Comments []Comment `json:"comments"`
-	Partial  bool      `json:"partial"`
-	Expected int       `json:"expected"`
-	Received int       `json:"received"`
-	Reason   string    `json:"reason,omitempty"`
+	Raw      json.RawMessage `json:"-"`
+	Comments []Comment       `json:"comments"`
+	Partial  bool            `json:"partial"`
+	Expected int             `json:"expected"`
+	Received int             `json:"received"`
+	Reason   string          `json:"reason,omitempty"`
 }
 
 type Client struct {
@@ -275,11 +277,16 @@ func (c *Client) Post(ctx context.Context, author, id string) (*Post, error) {
 	if !safeSegment(author) || !safeSegment(id) {
 		return nil, errors.New("недопустимый путь")
 	}
-	var p Post
-	e := c.doJSON(ctx, "/v1/blog/"+url.PathEscape(author)+"/post/"+url.PathEscape(id), &p)
+	var raw json.RawMessage
+	e := c.doJSON(ctx, "/v1/blog/"+url.PathEscape(author)+"/post/"+url.PathEscape(id), &raw)
 	if e != nil {
 		return nil, e
 	}
+	var p Post
+	if e = json.Unmarshal(raw, &p); e != nil {
+		return nil, e
+	}
+	p.Raw = raw
 	if p.ID == "" {
 		return nil, errors.New("пустой пост")
 	}
@@ -301,7 +308,11 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 		Data []Comment `json:"data"`
 	}
 	route := "/v1/blog/" + url.PathEscape(author) + "/post/" + url.PathEscape(id) + "/comment/?limit=101&reply_limit=100"
-	if e := c.doJSON(ctx, route, &v); e != nil {
+	var raw json.RawMessage
+	if e := c.doJSON(ctx, route, &raw); e != nil {
+		return CommentResult{}, e
+	}
+	if e := json.Unmarshal(raw, &v); e != nil {
 		return CommentResult{}, e
 	}
 	n, trimmed := countComments(v.Data)
@@ -310,7 +321,7 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 	if part {
 		reason = "Boosty ограничил доступное количество комментариев или ответов"
 	}
-	return CommentResult{Comments: v.Data, Partial: part, Expected: expected, Received: n, Reason: reason}, nil
+	return CommentResult{Raw: raw, Comments: v.Data, Partial: part, Expected: expected, Received: n, Reason: reason}, nil
 }
 func ExtractMedia(p *Post) []Media {
 	out := make([]Media, 0)

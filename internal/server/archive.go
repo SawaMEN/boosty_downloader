@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,13 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		appendComments(out, c.Replies.Data, depth+1)
 	}
 }
+func redactNetError(err error) string {
+	var u *url.Error
+	if errors.As(err, &u) {
+		return u.Err.Error()
+	}
+	return err.Error()
+}
 func writeJSON(p string, val any) error {
 	b, e := json.MarshalIndent(val, "", "  ")
 	if e != nil {
@@ -191,7 +199,10 @@ func (a *App) runJob(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
 	defer cancel()
 	err := a.archive(ctx, &job)
-	if err != nil {
+	if err != nil && job.CommentsPartial {
+		job.State = "partial"
+		job.Error = err.Error()
+	} else if err != nil {
 		job.State = "failed"
 		job.Error = err.Error()
 	} else if job.CommentsPartial {
@@ -216,7 +227,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return e
 	}
 	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments}
-	if e = writeJSON(filepath.Join(folder, "post.json"), p); e != nil {
+	if e = writeJSON(filepath.Join(folder, "post.json"), json.RawMessage(p.Raw)); e != nil {
 		return e
 	}
 	var comments boosty.CommentResult
@@ -229,6 +240,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		} else {
 			if e = writeJSON(filepath.Join(folder, "comments.json"), comments); e != nil {
 				return e
+			}
+			if len(comments.Raw) > 0 {
+				if e = writeJSON(filepath.Join(folder, "comments-raw.json"), json.RawMessage(comments.Raw)); e != nil {
+					return e
+				}
 			}
 			man.CommentCount = comments.Received
 			j.CommentsPartial = comments.Partial
@@ -266,7 +282,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		}
 		size, err := downloadFile(ctx, a.boosty, boosty.MediaURL(p, m), dest)
 		if err != nil {
-			man.Failures = append(man.Failures, fmt.Sprintf("%s: %v", m.Type, err))
+			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(err)))
 			continue
 		}
 		title := m.Title

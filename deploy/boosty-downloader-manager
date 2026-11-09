@@ -16,14 +16,30 @@ operate() {
  *) echo 'Boosty Downloader ещё не установлен.';return 1;;
  esac
 }
+reset_password() {
+ command -v openssl >/dev/null || { echo 'Требуется openssl.' >&2;return 1; }
+ [[ -r "$ETC/environment" ]] || { echo 'Панель не установлена.' >&2;return 1; }
+ local password tmp
+ password="$(openssl rand -hex 18)"
+ tmp="$(mktemp "$ETC/.environment-XXXXXXXX")"
+ sed "s/^BD_ADMIN_PASSWORD=.*/BD_ADMIN_PASSWORD=\"$password\"/" "$ETC/environment" > "$tmp"
+ chown root:boosty-downloader "$tmp"
+ chmod 0640 "$tmp"
+ mv -f "$tmp" "$ETC/environment"
+ if [[ "$(mode)" == docker ]];then docker_cmd up -d --force-recreate
+ else systemctl restart boosty-downloader.service;fi
+ echo "Новый пароль администратора: $password"
+ echo 'Сохраните пароль, он не выводится повторно.'
+}
 need_root
 case "${1:-menu}" in
  status|logs|start|stop|restart) operate "$1";;
+ reset-password|credentials) reset_password;;
  uninstall)
    echo 'Остановка и удаление Boosty Downloader (без удаления архива по умолчанию)...'
-   systemctl disable --now boosty-downloader.service >/dev/null 2>&1 || true
+   systemctl disable --now boosty-downloader.service boosty-downloader-cert-renew.timer >/dev/null 2>&1 || true
    if command -v docker >/dev/null && [[ -f "$PROJECT/compose.yaml" ]]; then docker_cmd down || true; fi
-   rm -f /etc/systemd/system/boosty-downloader.service
+   rm -f /etc/systemd/system/boosty-downloader.service /etc/systemd/system/boosty-downloader-cert-renew.service /etc/systemd/system/boosty-downloader-cert-renew.timer /usr/local/bin/bdy-cert-renew
    systemctl daemon-reload >/dev/null 2>&1 || true
    rm -rf -- /usr/local/boosty-downloader "$PROJECT"
    rm -f -- "$MODE_FILE"
@@ -36,8 +52,8 @@ case "${1:-menu}" in
  menu)
     echo 'Boosty Downloader — управление'
     echo '1) Статус  2) Запуск  3) Остановка  4) Перезапуск'
-    echo '5) Логи    6) Удалить   0) Выход'
+    echo '5) Логи    6) Удалить   7) Сбросить пароль   0) Выход'
     read -r -p 'Выбор: ' answer </dev/tty
-    case "$answer" in 1) operate status;;2) operate start;;3) operate stop;;4) operate restart;;5) operate logs;;6) "$0" uninstall;;0) exit 0;;*) echo 'Неизвестная команда';exit 1;;esac;;
- *) echo 'Команды: status, start, stop, restart, logs, update, uninstall [--purge]';exit 2;;
+    case "$answer" in 1) operate status;;2) operate start;;3) operate stop;;4) operate restart;;5) operate logs;;6) "$0" uninstall;;7) reset_password;;0) exit 0;;*) echo 'Неизвестная команда';exit 1;;esac;;
+ *) echo 'Команды: status, start, stop, restart, logs, reset-password, update, uninstall [--purge]';exit 2;;
 esac
