@@ -246,4 +246,3 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	}
 	return local, nil
 }
-
