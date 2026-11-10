@@ -20,9 +20,9 @@ func TestCatalogProtectsSharedPostsAndPages(t *testing.T) {
 	base := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
 	user, _ := app.accounts.userByName("memberalice")
 	jobs := []Job{
-		{ID:"000000000000000000000001", OwnerID:"admin", Title:"First", Author:"artist", State:"done", CreatedAt:base, ArchiveUpdatedAt:base, SharedForAll:true, Error:"private worker error"},
-		{ID:"000000000000000000000002", OwnerID:"admin", Title:"Second", Author:"artist", State:"partial", CreatedAt:base.Add(time.Hour), ArchiveUpdatedAt:base.Add(time.Hour), SharedWith:[]string{user.ID}},
-		{ID:"000000000000000000000003", OwnerID:"admin", Title:"Secret", Author:"private", State:"done", CreatedAt:base.Add(2*time.Hour)},
+		{ID: "000000000000000000000001", OwnerID: "admin", Title: "First", Author: "artist", State: "done", CreatedAt: base, ArchiveUpdatedAt: base, SharedForAll: true, Error: "private worker error"},
+		{ID: "000000000000000000000002", OwnerID: "admin", Title: "Second", Author: "artist", State: "partial", CreatedAt: base.Add(time.Hour), ArchiveUpdatedAt: base.Add(time.Hour), SharedWith: []string{user.ID}},
+		{ID: "000000000000000000000003", OwnerID: "admin", Title: "Secret", Author: "private", State: "done", CreatedAt: base.Add(2*time.Hour)},
 	}
 	for _, job := range jobs {
 		if err := app.store.upsert(job); err != nil {
@@ -46,28 +46,28 @@ func TestCatalogProtectsSharedPostsAndPages(t *testing.T) {
 		return p
 	}
 	p := request(alice, "/api/catalog?scope=shared&perPage=1", 200)
-	if p.Total != 2 || p.Pages != 2 || len(p.Items)!=1 || p.Items[0].Title!="Second" {
+	if p.Total != 2 || p.Pages != 2 || len(p.Items) != 1 || p.Items[0].Title != "Second" {
 		t.Fatalf("unexpected first page: %+v", p)
 	}
-	if p.Items[0].OwnerID!="" || len(p.Items[0].SharedWith)!=0 {
+	if p.Items[0].OwnerID != "" || len(p.Items[0].SharedWith) != 0 {
 		t.Fatal("private fields exposed")
 	}
 	p = request(alice, "/api/catalog?scope=shared&page=2&perPage=1", 200)
-	if len(p.Items)!=1 || p.Items[0].Title!="First" || p.Items[0].Error!="" {
+	if len(p.Items) != 1 || p.Items[0].Title != "First" || p.Items[0].Error != "" {
 		t.Fatalf("unexpected second page or private error: %+v", p)
 	}
 	p = request(bob, "/api/catalog?scope=shared", 200)
-	if p.Total!=1 || p.Items[0].Title!="First" {
+	if p.Total != 1 || p.Items[0].Title != "First" {
 		t.Fatalf("shared post leaked: %+v", p)
 	}
-	if p = request(alice, "/api/catalog?scope=shared&q=Secret", 200); p.Total!=0 {
+	if p = request(alice, "/api/catalog?scope=shared&q=Secret", 200); p.Total != 0 {
 		t.Fatal("private search result exposed")
 	}
-	if p = request(owner, "/api/catalog?scope=mine&author=ART&sort=title&order=asc", 200); p.Total!=2 || p.Items[0].Title!="First" {
+	if p = request(owner, "/api/catalog?scope=mine&author=ART&sort=title&order=asc", 200); p.Total != 2 || p.Items[0].Title != "First" {
 		t.Fatalf("incorrect filtering/sorting: %+v", p)
 	}
-	for _, bad := range []string{"scope=invalid","page=0","perPage=101","sort=bad","order=bad","status=bogus"} {
-		request(alice, "/api/catalog?"+bad, 400)
+	for _, bad := range []string{"scope=invalid", "page=0", "perPage=101", "sort=bad", "order=bad", "status=bogus"} {
+		request(alice, "/api/catalog?" + bad, 400)
 	}
 	request(nil, "/api/catalog?scope=shared", 401)
 }

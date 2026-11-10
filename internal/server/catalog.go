@@ -15,11 +15,11 @@ type catalogItem struct {
 	OwnerName string `json:"ownerName,omitempty"`
 }
 type catalogPage struct {
-	Items []catalogItem `json:"items"`
-	Total int `json:"total"`
-	Page int `json:"page"`
-	PerPage int `json:"perPage"`
-	Pages int `json:"pages"`
+	Items   []catalogItem `json:"items"`
+	Total   int           `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"perPage"`
+	Pages   int           `json:"pages"`
 }
 func catalogNumber(s string, fallback, low, high int) (int, bool) {
 	if s == "" {
