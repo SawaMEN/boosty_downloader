@@ -77,6 +77,11 @@ async function loadAdminPanel(){
     $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
     $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
     loadAdminStorage();
+    const updates=p.updates||{};
+    $('adminUpdateChannel').value=updates.channel||'stable';
+    $('adminUpdateHours').value=String(updates.checkHours??24);
+    $('adminAutoApplyUpdates').checked=Boolean(updates.autoApply);
+    loadAdminUpdates();
     const v=p.video||{};
     $('adminVideoEnabled').checked=Boolean(v.enabled);
     $('adminVideoAutomatic').checked=Boolean(v.automatic);
@@ -127,7 +132,8 @@ async function savePolicy(){
     minFreeGiB:Number($('adminMinFreeGiB').value),maxUserGiB:Number($('adminMaxUserGiB').value),
     video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
       codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
-      fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked}};
+      fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked},
+    updates:{channel:$('adminUpdateChannel').value,checkHours:Number($('adminUpdateHours').value),autoApply:$('adminAutoApplyUpdates').checked}};
   try{
     currentPolicy=await api('/api/admin/policy',{method:'PUT',body:data});
     state.user=await api('/api/account');
@@ -259,7 +265,19 @@ async function loadAdminStorage(){
     if(Number(data.freeBytes)<Number(data.minFreeGiB)*1024**3)target.append(text('p','Свободное место ниже заданного резерва. Новые загрузки будут приостановлены.','error'));
   }catch(e){target.replaceChildren(text('p',e.message,'error'))}
 }
+async function loadAdminUpdates(){
+  if(!state.user?.admin)return;
+  const root=$('adminUpdateReport');root.replaceChildren(text('p','Читаем журнал службы обновлений…','muted'));
+  try{
+    const data=await api('/api/admin/updates');const u=data.status||{};
+    const label={not_checked:'Проверка ещё не выполнялась',up_to_date:'Последняя версия',available:'Есть новая версия',updated:'Обновлено',rolled_back:'Выполнен откат',failed:'Ошибка обновления',unavailable:'Проверка недоступна'}[u.state]||'Неизвестный статус';
+    root.replaceChildren(text('strong',label));
+    root.append(text('p',u.detail||'Нет подробностей',u.state==='failed'?'error':'muted small'));
+    root.append(text('p',`Текущая: ${u.installed||'не определена'} · доступная: ${u.latest||'нет'} · проверено: ${u.checkedAt||'не проверялось'}`,'muted small'));
+  }catch(e){root.replaceChildren(text('p',e.message,'error'))}
+}
 function adminEvents(){
+  $('adminUpdateStatusRefresh').onclick=loadAdminUpdates;
   $('adminStorageRefresh').onclick=loadAdminStorage;
   $('adminVideoProbe').onclick=()=>loadVideoReport(true);
   $('adminVideoArchive').onchange=selectAdminVideoArchive;

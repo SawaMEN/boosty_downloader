@@ -229,6 +229,16 @@ if [[ -f "$ETC/tls/mode" && "$(cat "$ETC/tls/mode")" == letsencrypt ]];then
     echo 'Для автоматического продления сертификата необходим systemd timer.'
   fi
 fi
+# The updater is a separate root-owned timer, never a privileged web endpoint.
+if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+  install -m 0755 "$ROOT/deploy/boosty-auto-update" /usr/local/bin/bdy-auto-update
+  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.service" /etc/systemd/system/boosty-downloader-update.service
+  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.timer" /etc/systemd/system/boosty-downloader-update.timer
+  systemctl daemon-reload
+  if ! systemctl enable --now boosty-downloader-update.timer; then
+    echo "Автопроверку обновлений не удалось включить. Проверьте systemd timer." >&2
+  fi
+fi
 echo "Установлен режим: $MODE"
 echo "Панель: https://$PUBLIC_HOST:$PORT/"
 echo 'Управление: sudo bdy'

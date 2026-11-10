@@ -78,6 +78,15 @@
             </div>
             <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminStorageRefresh">Проверить место и квоты</button></div>
             <div id="adminStorageReport" class="video-diagnostics" role="status"></div>
+            <h3>Обновления панели</h3>
+            <p class="muted small">Проверка и обновление выполняются отдельно от веб-приложения. GitHub-токены и Docker-сокет не передаются панели.</p>
+            <div class="policy-controls">
+              <label>Канал обновлений<select id="adminUpdateChannel"><option value="stable">Stable — опубликованные релизы</option><option value="dev">Dev — успешные сборки main</option></select><small>Для сервера рекомендуется Stable.</small></label>
+              <label>Интервал проверки (часы)<input id="adminUpdateHours" type="number" min="1" max="168" value="24"></label>
+              <label class="check"><input id="adminAutoApplyUpdates" type="checkbox"><span><strong>Автоматически устанавливать обновления</strong><small>По умолчанию отключено; если запуск не удался, служба попытается выполнить откат.</small></span></label>
+            </div>
+            <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminUpdateStatusRefresh">Обновить сведения</button></div>
+            <div id="adminUpdateReport" class="video-diagnostics" role="status"></div>
             <h3>Видео: FFmpeg и аппаратное ускорение</h3>
             <p class="muted small">На основе подхода Immich: источник всегда сохраняется отдельно. Для Ryzen 5 5600H / Vega 7 предпочтителен VA-API и H.264, NVIDIA использует NVENC, Intel — QSV. Без проверки драйвера доступность не гарантируется.</p>
             <div class="policy-controls">

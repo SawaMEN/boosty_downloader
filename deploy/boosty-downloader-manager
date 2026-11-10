@@ -60,9 +60,9 @@ case "${1:-menu}" in
  reset-password|credentials) reset_password;;
  uninstall)
    echo 'Остановка и удаление Boosty Downloader (без удаления архива по умолчанию)...'
-   systemctl disable --now boosty-downloader.service boosty-downloader-cert-renew.timer >/dev/null 2>&1 || true
+   systemctl disable --now boosty-downloader.service boosty-downloader-cert-renew.timer boosty-downloader-update.timer >/dev/null 2>&1 || true
    if command -v docker >/dev/null && [[ -f "$PROJECT/compose.yaml" ]]; then docker_cmd down || true; fi
-   rm -f /etc/systemd/system/boosty-downloader.service /etc/systemd/system/boosty-downloader-cert-renew.service /etc/systemd/system/boosty-downloader-cert-renew.timer /usr/local/bin/bdy-cert-renew
+   rm -f /etc/systemd/system/boosty-downloader.service /etc/systemd/system/boosty-downloader-cert-renew.service /etc/systemd/system/boosty-downloader-cert-renew.timer /usr/local/bin/bdy-cert-renew /usr/local/bin/bdy-auto-update /etc/systemd/system/boosty-downloader-update.service /etc/systemd/system/boosty-downloader-update.timer
    systemctl daemon-reload >/dev/null 2>&1 || true
    rm -rf -- /usr/local/boosty-downloader "$PROJECT"
    rm -f -- "$MODE_FILE"
@@ -71,12 +71,13 @@ case "${1:-menu}" in
       if [[ "$confirmation" == DELETE ]]; then rm -rf -- /var/lib/boosty-downloader /etc/boosty-downloader; echo 'Данные удалены.';else echo 'Данные сохранены.';fi
    fi
    echo 'Удалено. Данные и сертификаты сохранены, если не указан --purge.';;
- update) echo 'Обновление: скачайте новую версию репозитория и повторно запустите sudo bash install.sh. Данные сохраняются.';;
+ update) [[ -x /usr/local/bin/bdy-auto-update ]] && /usr/local/bin/bdy-auto-update "${2:---force}" || echo "Служба обновлений не установлена. Повторите sudo bash install.sh.";;
+ rollback) [[ -x /usr/local/bin/bdy-auto-update ]] && /usr/local/bin/bdy-auto-update --rollback || echo "Резервная версия отсутствует.";;
  menu)
     echo 'Boosty Downloader — управление'
     echo '1) Статус  2) Запуск  3) Остановка  4) Перезапуск'
-    echo '5) Логи    6) Удалить   7) Сбросить пароль   0) Выход'
+    echo '5) Логи    6) Удалить   7) Сбросить пароль  8) Обновления  9) Откат  0) Выход'
     read -r -p 'Выбор: ' answer </dev/tty
-    case "$answer" in 1) operate status;;2) operate start;;3) operate stop;;4) operate restart;;5) operate logs;;6) "$0" uninstall;;7) reset_password;;0) exit 0;;*) echo 'Неизвестная команда';exit 1;;esac;;
- *) echo 'Команды: status, start, stop, restart, logs, reset-password, update, uninstall [--purge]';exit 2;;
+    case "$answer" in 1) operate status;;2) operate start;;3) operate stop;;4) operate restart;;5) operate logs;;6) "$0" uninstall;;7) reset_password;;8) "$0" update;;9) "$0" rollback;;0) exit 0;;*) echo 'Неизвестная команда';exit 1;;esac;;
+ *) echo 'Команды: status, start, stop, restart, logs, reset-password, update [--apply], rollback, uninstall [--purge]';exit 2;;
 esac
