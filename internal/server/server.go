@@ -289,7 +289,10 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("POST /api/jobs/{id}/retry", a.require("createArchives", a.retryJob))
 	private.HandleFunc("GET /api/jobs/{id}/zip", a.zipJob)
 	private.HandleFunc("GET /api/jobs/{id}/manifest", a.jobManifest)
+	private.HandleFunc("GET /api/jobs/{id}/revisions", a.listJobRevisions)
+	private.HandleFunc("POST /api/jobs/{id}/revisions/{rev}/restore", a.require("createArchives", a.restoreJobRevision))
 	private.HandleFunc("POST /api/jobs/{id}/verify", a.verifyJob)
+	private.HandleFunc("GET /library/{id}/revisions/{rev}/{file...}", a.revisionFile)
 	private.HandleFunc("GET /library/{id}/{file...}", a.libraryFile)
 	secured := a.auth(private)
 	return a.stateChangeGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

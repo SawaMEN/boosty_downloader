@@ -232,6 +232,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	}
 	j.Title = p.Title
 	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
+	// Capture last completed copy before modifying raw JSON, comments or
+	// media, so refresh failures never destroy the previous version.
+	if _, e = a.store.saveArchiveRevision(*j); e != nil {
+		return fmt.Errorf("не удалось сохранить прошлую версию: %w", e)
+	}
 	mediaFolder := filepath.Join(folder, "media")
 	if e = os.MkdirAll(mediaFolder, 0700); e != nil {
 		return e
@@ -362,6 +367,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return e
 	}
 	j.ArchiveUpdatedAt = man.CapturedAt
+	if err := a.store.pruneArchiveRevisions(*j); err != nil {
+		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
+	}
 	if len(man.Failures) > 0 {
 		j.CommentsPartial = true
 		return fmt.Errorf("архив частичный: %d ошибок; подробности в manifest.json", len(man.Failures))

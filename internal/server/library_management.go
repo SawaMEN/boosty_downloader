@@ -414,6 +414,7 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 		}
 		ids = append(ids, key)
 		folders[s.archiveDir(j.OwnerID, j.Author, j.PostID)] = true
+		folders[s.revisionsDir(*j)] = true
 	}
 	if len(ids) == 0 {
 		s.mu.Unlock()
@@ -426,6 +427,7 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 	for _, j := range s.jobs {
 		if !selected[j.ID] {
 			delete(folders, s.archiveDir(j.OwnerID, j.Author, j.PostID))
+			delete(folders, s.revisionsDir(*j))
 		}
 	}
 	trash := filepath.Join(s.root, "trash")
