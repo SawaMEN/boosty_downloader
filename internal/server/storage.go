@@ -25,6 +25,7 @@ type Storage struct {
 	authors map[string][]string
 	imports map[string]*AuthorImport
 }
+
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
 // when their account was checked. It is NOT a claim about the post's minimum
 // required tier, and never grants access to another owner's archive.
@@ -44,29 +45,29 @@ func captureSubscription(author boosty.SubscriptionAuthor, at time.Time) *Captur
 }
 
 type Job struct {
-	ID                string                `json:"id"`
-	URL               string                `json:"url"`
-	Author            string                `json:"author"`
-	PostID            string                `json:"postId"`
-	Title             string                `json:"title"`
-	State             string                `json:"state"`
-	Error             string                `json:"error,omitempty"`
-	CreatedAt         time.Time             `json:"createdAt"`
-	UpdatedAt         time.Time             `json:"updatedAt"`
-	ArchiveUpdatedAt  time.Time             `json:"archiveUpdatedAt,omitempty"`
-	IncludeComments   bool                  `json:"includeComments"`
-	IncludeFiles      bool                  `json:"includeFiles"`
-	IncludeVideos     bool                  `json:"includeVideos"`
-	IncludeAudio      bool                  `json:"includeAudio"`
-	AutoSync          bool                  `json:"autoSync"`
-	DoneFiles         int                   `json:"doneFiles"`
-	TotalFiles        int                   `json:"totalFiles"`
-	CommentsPartial   bool                  `json:"commentsPartial"`
-	OwnerID           string                `json:"ownerId"`
-	SharedWith        []string              `json:"sharedWith,omitempty"`
-	SharedForAll      bool                  `json:"sharedForAll,omitempty"`
-	DeletedAt         *time.Time            `json:"deletedAt,omitempty"`
-	Subscription      *CapturedSubscription `json:"subscription,omitempty"`
+	ID               string                `json:"id"`
+	URL              string                `json:"url"`
+	Author           string                `json:"author"`
+	PostID           string                `json:"postId"`
+	Title            string                `json:"title"`
+	State            string                `json:"state"`
+	Error            string                `json:"error,omitempty"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	UpdatedAt        time.Time             `json:"updatedAt"`
+	ArchiveUpdatedAt time.Time             `json:"archiveUpdatedAt,omitempty"`
+	IncludeComments  bool                  `json:"includeComments"`
+	IncludeFiles     bool                  `json:"includeFiles"`
+	IncludeVideos    bool                  `json:"includeVideos"`
+	IncludeAudio     bool                  `json:"includeAudio"`
+	AutoSync         bool                  `json:"autoSync"`
+	DoneFiles        int                   `json:"doneFiles"`
+	TotalFiles       int                   `json:"totalFiles"`
+	CommentsPartial  bool                  `json:"commentsPartial"`
+	OwnerID          string                `json:"ownerId"`
+	SharedWith       []string              `json:"sharedWith,omitempty"`
+	SharedForAll     bool                  `json:"sharedForAll,omitempty"`
+	DeletedAt        *time.Time            `json:"deletedAt,omitempty"`
+	Subscription     *CapturedSubscription `json:"subscription,omitempty"`
 }
 
 func newStorage(root, keyString string) (*Storage, error) {
