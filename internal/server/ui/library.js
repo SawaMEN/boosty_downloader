@@ -116,24 +116,24 @@ async function verifyArchiveUI(job) {
   } catch(err) { toast(err.message,true); }
 }
 async function deleteArchivedPost(job) {
-  if (!confirm(`Удалить локальную копию «${job.title||job.postId}» (${job.author})? Совместный доступ также будет отозван. Восстановить удалённые файлы нельзя.`)) return;
+  if (!confirm(`Переместить «${job.title||job.postId}» (${job.author}) в корзину? Общий доступ будет отозван, архив можно восстановить.`)) return;
   try {
     const result = await api('/api/jobs/'+encodeURIComponent(job.id), {method:'DELETE'});
-    toast(`Удалено архивов: ${result.deleted}`);
-    await refreshJobs(); await loadAuthors(); await refreshShared();
+    toast(`Перемещено в корзину: ${result.trashed}`);
+    await refreshJobs(); await loadAuthors(); await refreshShared(); await refreshTrash();
   } catch(e) { toast(e.message,true); }
 }
 async function deleteAuthorArchives() {
   const author = $('archiveAuthorFilter').value;
   if(!author) return toast('Выберите автора для удаления',true);
-  const expected = `Удалить ВСЕ ваши архивы автора ${author}, включая видео, файлы и комментарии. Общий доступ будет отозван. Введите имя автора для подтверждения:`;
+  const expected = `Переместить ВСЕ ваши архивы автора ${author} в корзину? Общий доступ будет отозван. Введите имя автора для подтверждения:`;
   const typed = prompt(expected);
   if (typed === null) return;
   if (typed !== author) return toast('Имя автора не совпадает, удаление отменено',true);
   try {
     const r = await api(`/api/authors/${encodeURIComponent(author)}/archives`, {method:'DELETE',body:{confirm:typed}});
-    toast(`Удалено публикаций автора ${author}: ${r.deleted}`);
-    archiveFilter=''; await refreshJobs(); await loadAuthors(); await refreshShared();
+    toast(`Перемещено в корзину публикаций автора ${author}: ${r.trashed}`);
+    archiveFilter=''; await refreshJobs(); await loadAuthors(); await refreshShared(); await refreshTrash();
   } catch(e) { toast(e.message,true); }
 }
 
@@ -194,6 +194,35 @@ async function addShare(event) {
     $('shareUsername').value='';await refreshShares();toast('Доступ предоставлен');
   } catch(e) { toast(e.message,true); }
 }
+async function refreshTrash() {
+  const panel=$('trashPanel');
+  if(!panel)return;
+  panel.hidden=!permissionValue('deleteArchives');
+  if(panel.hidden)return;
+  const node=$('trashJobs');
+  try {
+    const jobs=await api('/api/trash');
+    node.replaceChildren();
+    if(!jobs.length){node.append(empty('Корзина пуста','Удалённые архивы появятся здесь.'));return;}
+    for(const job of jobs){
+      const row=el('article','job-item');
+      const body=el('div','job-main');
+      body.append(text('div',job.title||job.postId,'job-title'));
+      body.append(text('div',job.author+' · удалён '+new Date(job.deletedAt).toLocaleString('ru-RU'),'job-sub'));
+      const actions=el('div','job-buttons');
+      actions.append(libraryAction('Восстановить',async()=>{
+        try {await api('/api/trash/'+encodeURIComponent(job.id)+'/restore',{method:'POST'});toast('Архив восстановлен; прежний общий доступ не возвращён.');await refreshTrash();await refreshJobs();await loadAuthors();}
+        catch(err){toast(err.message,true);}
+      }));
+      actions.append(libraryAction('Удалить навсегда',async()=>{
+        if(!confirm('Окончательно удалить «'+(job.title||job.postId)+'» вместе с медиафайлами? Восстановить будет нельзя.'))return;
+        try {await api('/api/trash/'+encodeURIComponent(job.id),{method:'DELETE'});toast('Архив удалён окончательно');await refreshTrash();}
+        catch(err){toast(err.message,true);}
+      },'delete'));
+      body.append(actions);row.append(body);node.append(row);
+    }
+  }catch(err){node.replaceChildren();node.append(text('p','Не удалось загрузить корзину','error'));toast(err.message,true);}
+}
 function libraryEvents() {
   $('archiveAuthorFilter').addEventListener('change',ev=>{archiveFilter=ev.target.value;refreshLibraryCatalog(true)});
   let catalogTimer;
@@ -202,6 +231,7 @@ function libraryEvents() {
   $('archivePrev').addEventListener('click',()=>{if(libraryCatalogPage>1){libraryCatalogPage--;refreshLibraryCatalog()}});
   $('archiveNext').addEventListener('click',()=>{if(libraryCatalogPage<libraryCatalogPages){libraryCatalogPage++;refreshLibraryCatalog()}});
   $('deleteAuthorArchives').addEventListener('click',deleteAuthorArchives);
+  $('refreshTrash').addEventListener('click',refreshTrash);
   $('saveAuthorForm').addEventListener('submit',e=>{e.preventDefault();pinAuthor($('saveAuthorInput').value);$('saveAuthorInput').value=''});
   $('pinFeedAuthor').addEventListener('click',()=>pinAuthor(state.feedAuthor));
   $('refreshShared').addEventListener('click',refreshShared);
