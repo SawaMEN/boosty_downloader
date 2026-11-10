@@ -60,7 +60,7 @@ func (s *Storage) expiredTrash(cutoff time.Time, limit int) ([]trashCandidate, i
 	for _, job := range s.jobs {
 		if job.DeletedAt != nil && job.DeletedAt.Before(cutoff) {
 			items = append(items, item{
-				key: trashCandidate{owner: job.OwnerID, id: job.ID},
+				key:   trashCandidate{owner: job.OwnerID, id: job.ID},
 				since: *job.DeletedAt,
 			})
 		}

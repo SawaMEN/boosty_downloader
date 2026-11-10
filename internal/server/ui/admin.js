@@ -301,8 +301,8 @@ async function loadAdminTrash(){
 }
 async function runAdminTrashCleanup(){
   if(!state.user?.admin)return;
-  const days=Number($('adminTrashRetentionDays').value);
   const report=await api('/api/admin/trash').catch(()=>null);
+  const days=report?.policy?.retentionDays??30;
   if(!confirm('Безвозвратно удалить архивы из корзины, находящиеся там дольше '+days+' дней? Просрочено: '+(report?.expired??'неизвестно')+'. За один проход удаляется не более 20 копий.'))return;
   const button=$('adminTrashCleanupNow');button.disabled=true;
   try{

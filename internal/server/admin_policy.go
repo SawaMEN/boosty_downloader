@@ -140,7 +140,7 @@ type AdminPolicy struct {
 	Video             VideoPolicy     `json:"video"`
 
 	Updates AutoUpdatePolicy `json:"updates"`
-	Trash   TrashPolicy       `json:"trash"`
+	Trash   TrashPolicy      `json:"trash"`
 }
 
 func (a *Accounts) policy() AdminPolicy {
