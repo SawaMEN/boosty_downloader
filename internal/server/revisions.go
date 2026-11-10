@@ -187,6 +187,9 @@ func (s *Storage) pruneArchiveRevisions(job Job) error {
 	if err != nil {
 		return err
 	}
+	if len(list) <= maxArchiveRevisions {
+		return nil
+	}
 	for _, version := range list[maxArchiveRevisions:] {
 		if err := os.RemoveAll(filepath.Join(s.revisionsDir(job), version.ID)); err != nil {
 			return err
