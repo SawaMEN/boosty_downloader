@@ -3,10 +3,10 @@ package server
 import (
 	"net/http/httptest"
 	"os"
-	"time"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUpdatePolicyValidation(t *testing.T) {
@@ -62,43 +62,58 @@ func TestReadUpdateStatusRejectsSymlink(t *testing.T) {
 	}
 }
 
-
 func TestAutoUpdatePolicyPersistsAfterRestart(t *testing.T) {
-  root := t.TempDir()
-  acc, err := newAccounts(root, "admin", "strong-password-123")
-  if err != nil { t.Fatal(err) }
-  if err := acc.initializePolicy(24*time.Hour); err != nil { t.Fatal(err) }
-  p := acc.policy()
-  if p.Updates.AutoApply || p.Updates.Channel != "stable" || p.Updates.CheckHours != 24 {
-    t.Fatalf("unsafe default policy: %+v", p.Updates)
-  }
-  p.Updates = AutoUpdatePolicy{Channel:"dev", CheckHours:6, AutoApply:true}
-  if err := acc.changePolicy(p); err != nil { t.Fatal(err) }
-  again, err := newAccounts(root, "admin", "strong-password-123")
-  if err != nil { t.Fatal(err) }
-  if err := again.initializePolicy(24*time.Hour); err != nil { t.Fatal(err) }
-  actual := again.policy().Updates
-  if !actual.AutoApply || actual.Channel!="dev" || actual.CheckHours!=6 {
-    t.Fatalf("policy lost on restart: %+v", actual)
-  }
+	root := t.TempDir()
+	acc, err := newAccounts(root, "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.initializePolicy(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p := acc.policy()
+	if p.Updates.AutoApply || p.Updates.Channel != "stable" || p.Updates.CheckHours != 24 {
+		t.Fatalf("unsafe default policy: %+v", p.Updates)
+	}
+	p.Updates = AutoUpdatePolicy{Channel: "dev", CheckHours: 6, AutoApply: true}
+	if err := acc.changePolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	again, err := newAccounts(root, "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.initializePolicy(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	actual := again.policy().Updates
+	if !actual.AutoApply || actual.Channel != "dev" || actual.CheckHours != 6 {
+		t.Fatalf("policy lost on restart: %+v", actual)
+	}
 }
 
 func TestUpdateStatusRequiresAdmin(t *testing.T) {
-  app, err := New(Config{AdminUser:"admin", AdminPassword:"strong-password-123", SecretKey:testKey(t), DataDir:t.TempDir()})
-  if err != nil { t.Fatal(err) }
-  defer app.Close()
-  handler := app.Handler()
-  unauth := httptest.NewRecorder()
-  handler.ServeHTTP(unauth, reqAs("GET", "/api/admin/updates", "", nil))
-  if unauth.Code != 401 { t.Fatalf("unauthorized status=%d", unauth.Code) }
-  member := testMember(t, app, "updateviewer")
-  forbidden := httptest.NewRecorder()
-  handler.ServeHTTP(forbidden, reqAs("GET", "/api/admin/updates", "", member))
-  if forbidden.Code != 403 { t.Fatalf("member status=%d", forbidden.Code) }
-  admin := testLogin(t, app, "admin", "strong-password-123")
-  allowed := httptest.NewRecorder()
-  handler.ServeHTTP(allowed, reqAs("GET", "/api/admin/updates", "", admin))
-  if allowed.Code != 200 || !strings.Contains(allowed.Body.String(), "not_checked") {
-    t.Fatalf("admin status=%d body=%s", allowed.Code, allowed.Body.String())
-  }
+	app, err := New(Config{AdminUser: "admin", AdminPassword: "strong-password-123", SecretKey: testKey(t), DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	handler := app.Handler()
+	unauth := httptest.NewRecorder()
+	handler.ServeHTTP(unauth, reqAs("GET", "/api/admin/updates", "", nil))
+	if unauth.Code != 401 {
+		t.Fatalf("unauthorized status=%d", unauth.Code)
+	}
+	member := testMember(t, app, "updateviewer")
+	forbidden := httptest.NewRecorder()
+	handler.ServeHTTP(forbidden, reqAs("GET", "/api/admin/updates", "", member))
+	if forbidden.Code != 403 {
+		t.Fatalf("member status=%d", forbidden.Code)
+	}
+	admin := testLogin(t, app, "admin", "strong-password-123")
+	allowed := httptest.NewRecorder()
+	handler.ServeHTTP(allowed, reqAs("GET", "/api/admin/updates", "", admin))
+	if allowed.Code != 200 || !strings.Contains(allowed.Body.String(), "not_checked") {
+		t.Fatalf("admin status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
 }
