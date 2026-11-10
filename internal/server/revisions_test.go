@@ -83,7 +83,7 @@ func TestRevisionSnapshotsShareMediaButRestorePrivateState(t *testing.T) {
 	if err := app.store.upsert(job); err != nil {
 		t.Fatal(err)
 	}
-	path := "/library/" + id + "/revisions/" + rev + "/index.html"
+	path := "/library/" + id + "/revisions/" + rev + "/"
 	testArchiveResponse(t, app, other, "GET", path, "", 404)
 	testArchiveResponse(t, app, other, "GET", "/api/jobs/"+id+"/revisions", "", 404)
 	view := testArchiveResponse(t, app, owner, "GET", path, "", 200)

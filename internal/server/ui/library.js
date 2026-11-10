@@ -251,7 +251,7 @@ async function refreshRevisions(){
       info.append(text('p',(version.capturedAt?new Date(version.capturedAt).toLocaleString('ru-RU'):'Дата неизвестна')+' · файлов: '+version.assetCount,'muted small'));
       if(version.subscription)info.append(text('p','Подписка при сохранении: '+(version.subscription.level||'уровень не указан'),'muted small'));
       const actions=el('div','job-buttons');
-      actions.append(safeLink('Просмотр','/library/'+encodeURIComponent(owner)+'/revisions/'+encodeURIComponent(version.id)+'/index.html'));
+      actions.append(safeLink('Просмотр','/library/'+encodeURIComponent(owner)+'/revisions/'+encodeURIComponent(version.id)+'/'));
       if(permissionValue('createArchives'))actions.append(libraryAction('Восстановить',async()=>{
         if(!confirm('Вернуть версию от '+new Date(version.capturedAt).toLocaleString('ru-RU')+'? Текущая копия сохранится в истории, прежние общие разрешения будут отозваны, автоматическая синхронизация отключится.'))return;
         try{
