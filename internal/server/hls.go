@@ -290,41 +290,63 @@ func resolveHLS(ctx context.Context, fetch mediaFetcher, raw string) ([]hlsPart,
 // renditions locally. FFmpeg cannot make network requests and the existing
 // destination is not replaced until an MP4 has passed the digest check.
 func archiveHLS(ctx context.Context, fetch mediaFetcher, raw, dest string) (int64, string, error) {
-    video, audio, err := resolveHLSWithAudio(ctx, fetch, raw)
-    if err != nil {return 0, "", err}
-    ffmpeg, err := exec.LookPath("ffmpeg")
-    if err != nil {return 0, "", errors.New("HLS: установите FFmpeg для сборки локального MP4")}
-    dir, err := os.MkdirTemp(filepath.Dir(dest), ".boosty-hls-")
-    if err != nil {return 0, "", err}
-    defer os.RemoveAll(dir)
-    var total int64
-    videoLocal, err := stageHLSTrack(ctx, fetch, dir, "video", video, &total)
-    if err != nil {return 0, "", err}
-    args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe,data", "-allowed_extensions", "ALL", "-i", videoLocal}
-    if len(audio) > 0 {
-        audioLocal, e := stageHLSTrack(ctx, fetch, dir, "audio", audio, &total)
-        if e != nil {return 0, "", e}
-        args = append(args, "-protocol_whitelist", "file,pipe,data", "-allowed_extensions", "ALL", "-i", audioLocal, "-map", "0:v:0", "-map", "1:a:0")
-    } else {
-        args = append(args, "-map", "0:v:0", "-map", "0:a?")
-    }
-    output := filepath.Join(dir, "remux.mp4")
-    args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
-    remuxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-    defer cancel()
-    result, err := exec.CommandContext(remuxCtx, ffmpeg, args...).CombinedOutput()
-    if err != nil {
-        if remuxCtx.Err() != nil {return 0, "", remuxCtx.Err()}
-        msg := strings.TrimSpace(string(result))
-        if len(msg) > 350 {msg = msg[:350]}
-        return 0, "", fmt.Errorf("HLS: FFmpeg не смог собрать MP4: %s", msg)
-    }
-    size, digest, err := fileDigest(output)
-    if err != nil {return 0, "", err}
-    if size == 0 || size > maxArchiveMediaSize {return 0, "", errors.New("HLS: некорректный размер готового MP4")}
-    if err := os.Chmod(output, 0600); err != nil {return 0, "", err}
-    if err := os.Rename(output, dest); err != nil {return 0, "", err}
-    return size, digest, nil
+	video, audio, err := resolveHLSWithAudio(ctx, fetch, raw)
+	if err != nil {
+		return 0, "", err
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return 0, "", errors.New("HLS: установите FFmpeg для сборки локального MP4")
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(dest), ".boosty-hls-")
+	if err != nil {
+		return 0, "", err
+	}
+	defer os.RemoveAll(dir)
+	var total int64
+	videoLocal, err := stageHLSTrack(ctx, fetch, dir, "video", video, &total)
+	if err != nil {
+		return 0, "", err
+	}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe,data", "-allowed_extensions", "ALL", "-i", videoLocal}
+	if len(audio) > 0 {
+		audioLocal, e := stageHLSTrack(ctx, fetch, dir, "audio", audio, &total)
+		if e != nil {
+			return 0, "", e
+		}
+		args = append(args, "-protocol_whitelist", "file,pipe,data", "-allowed_extensions", "ALL", "-i", audioLocal, "-map", "0:v:0", "-map", "1:a:0")
+	} else {
+		args = append(args, "-map", "0:v:0", "-map", "0:a?")
+	}
+	output := filepath.Join(dir, "remux.mp4")
+	args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
+	remuxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	result, err := exec.CommandContext(remuxCtx, ffmpeg, args...).CombinedOutput()
+	if err != nil {
+		if remuxCtx.Err() != nil {
+			return 0, "", remuxCtx.Err()
+		}
+		msg := strings.TrimSpace(string(result))
+		if len(msg) > 350 {
+			msg = msg[:350]
+		}
+		return 0, "", fmt.Errorf("HLS: FFmpeg не смог собрать MP4: %s", msg)
+	}
+	size, digest, err := fileDigest(output)
+	if err != nil {
+		return 0, "", err
+	}
+	if size == 0 || size > maxArchiveMediaSize {
+		return 0, "", errors.New("HLS: некорректный размер готового MP4")
+	}
+	if err := os.Chmod(output, 0600); err != nil {
+		return 0, "", err
+	}
+	if err := os.Rename(output, dest); err != nil {
+		return 0, "", err
+	}
+	return size, digest, nil
 }
 
 func downloadVideoFile(ctx context.Context, fetch mediaFetcher, raw, dest string) (int64, string, error) {
