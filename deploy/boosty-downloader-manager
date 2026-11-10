@@ -71,8 +71,12 @@ case "${1:-menu}" in
       if [[ "$confirmation" == DELETE ]]; then rm -rf -- /var/lib/boosty-downloader /etc/boosty-downloader; echo 'Данные удалены.';else echo 'Данные сохранены.';fi
    fi
    echo 'Удалено. Данные и сертификаты сохранены, если не указан --purge.';;
- update) [[ -x /usr/local/bin/bdy-auto-update ]] && /usr/local/bin/bdy-auto-update "${2:---force}" || echo "Служба обновлений не установлена. Повторите sudo bash install.sh.";;
- rollback) [[ -x /usr/local/bin/bdy-auto-update ]] && /usr/local/bin/bdy-auto-update --rollback || echo "Резервная версия отсутствует.";;
+ update)
+   if [[ -x /usr/local/bin/bdy-auto-update ]]; then /usr/local/bin/bdy-auto-update "${2:---force}";
+   else echo "Служба обновлений не установлена. Повторите sudo bash install.sh." >&2; exit 1; fi;;
+ rollback)
+   if [[ -x /usr/local/bin/bdy-auto-update ]]; then /usr/local/bin/bdy-auto-update --rollback;
+   else echo "Резервная версия отсутствует." >&2; exit 1; fi;;
  menu)
     echo 'Boosty Downloader — управление'
     echo '1) Статус  2) Запуск  3) Остановка  4) Перезапуск'
