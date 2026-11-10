@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"os/exec"
