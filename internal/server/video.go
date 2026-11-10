@@ -528,6 +528,17 @@ func (a *App) processVideoTask(task VideoTask) {
 			a.videoMarkFailure(key)
 			continue
 		}
+		storagePolicy := a.accounts.policy()
+		quotaCtx := withStorageBudget(a.ctx, a.store.root, job.OwnerID, storagePolicy.MinFreeGiB, storagePolicy.MaxUserGiB)
+		stat, statErr := os.Stat(source)
+		if statErr != nil {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: "Невозможно прочитать исходное видео"})
+			continue
+		}
+		if err := checkStorageBudget(quotaCtx, stat.Size()); err != nil {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "skipped", Message: err.Error()})
+			continue
+		}
 		a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "running"})
 		backend, err := transcodeVideo(a.ctx, policy, source, dest)
 		if err != nil {

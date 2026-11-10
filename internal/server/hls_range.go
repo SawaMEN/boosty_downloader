@@ -71,7 +71,7 @@ func fetchHLSRangeSegment(ctx context.Context, fetch mediaFetcher, raw, path str
 	if err != nil {
 		return 0, err
 	}
-	n, copyErr := io.Copy(out, io.LimitReader(res.Body, length+1))
+	n, copyErr := guardedCopy(ctx, out, io.LimitReader(res.Body, length+1))
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil || n != length {
 		_ = os.Remove(path)

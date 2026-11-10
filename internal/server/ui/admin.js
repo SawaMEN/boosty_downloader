@@ -74,6 +74,9 @@ async function loadAdminPanel(){
     $('adminMaxImport').value=String(p.maxImportPosts);
     $('adminCompressionLevel').value=String(p.compressionLevel);
     $('adminDeduplicateMedia').checked=p.deduplicateMedia;
+    $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
+    $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
+    loadAdminStorage();
     const v=p.video||{};
     $('adminVideoEnabled').checked=Boolean(v.enabled);
     $('adminVideoAutomatic').checked=Boolean(v.automatic);
@@ -121,6 +124,7 @@ async function savePolicy(){
   const data={defaults:currentPolicy.defaults,registrationOpen:$('adminRegistration').checked,
     syncIntervalHours:Number($('adminSyncHours').value),maxScanPosts:Number($('adminMaxScan').value),maxImportPosts:Number($('adminMaxImport').value),
     compressionLevel:Number($('adminCompressionLevel').value),deduplicateMedia:$('adminDeduplicateMedia').checked,
+    minFreeGiB:Number($('adminMinFreeGiB').value),maxUserGiB:Number($('adminMaxUserGiB').value),
     video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
       codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
       fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked}};
@@ -244,7 +248,19 @@ async function enqueueAdminVideo(){
   try{await api(`/api/admin/video/jobs/${encodeURIComponent(id)}`,{method:'POST',body:{filename}});toast('Перекодирование добавлено в очередь. Исходный файл сохранится.');await loadVideoReport(false)}
   catch(e){toast(e.message,true)}finally{btn.disabled=false}
 }
+async function loadAdminStorage(){
+  if(!state.user?.admin)return;
+  const target=$('adminStorageReport');target.replaceChildren(text('p','Проверяем место на диске…','muted'));
+  try{
+    const data=await api('/api/admin/storage');
+    const format=bytes=>Number.isFinite(Number(bytes))?(Number(bytes)/(1024**3)).toFixed(2)+' ГиБ':'—';
+    target.replaceChildren(text('strong','Всего: '+format(data.totalBytes)+' · свободно: '+format(data.freeBytes)));
+    for(const u of data.users||[]){target.append(text('p',u.username+' · '+(u.error||format(u.bytes)),'muted small'))}
+    if(Number(data.freeBytes)<Number(data.minFreeGiB)*1024**3)target.append(text('p','Свободное место ниже заданного резерва. Новые загрузки будут приостановлены.','error'));
+  }catch(e){target.replaceChildren(text('p',e.message,'error'))}
+}
 function adminEvents(){
+  $('adminStorageRefresh').onclick=loadAdminStorage;
   $('adminVideoProbe').onclick=()=>loadVideoReport(true);
   $('adminVideoArchive').onchange=selectAdminVideoArchive;
   $('adminVideoConvert').onclick=enqueueAdminVideo;

@@ -283,7 +283,7 @@ func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, 
 	if err != nil {
 		return 0, err
 	}
-	n, copyErr := io.Copy(file, io.LimitReader(res.Body, limit+1))
+	n, copyErr := guardedCopy(ctx, file, io.LimitReader(res.Body, limit+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil || n == 0 || n > limit || res.ContentLength >= 0 && n != res.ContentLength {
 		_ = os.Remove(path)
@@ -358,6 +358,9 @@ func archiveHLS(ctx context.Context, fetch mediaFetcher, raw, dest string) (int6
 	args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
 	remuxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	if err := checkStorageBudget(ctx, total); err != nil {
+		return 0, "", err
+	}
 	result, err := exec.CommandContext(remuxCtx, ffmpeg, args...).CombinedOutput()
 	if err != nil {
 		if remuxCtx.Err() != nil {

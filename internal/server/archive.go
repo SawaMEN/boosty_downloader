@@ -197,6 +197,11 @@ func (a *App) runJob(id string) {
 	_ = a.store.upsert(job)
 }
 func (a *App) archive(ctx context.Context, j *Job) error {
+	policy := a.accounts.policy()
+	ctx = withStorageBudget(ctx, a.store.root, j.OwnerID, policy.MinFreeGiB, policy.MaxUserGiB)
+	if err := checkStorageBudget(ctx, 0); err != nil {
+		return err
+	}
 	c, e := a.client(j.OwnerID)
 	if e != nil {
 		return e

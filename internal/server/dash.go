@@ -372,9 +372,12 @@ func fetchDASHTrack(ctx context.Context, fetch mediaFetcher, tr dashTrack, dir, 
 		if e != nil {
 			return "", e
 		}
-		_, cpErr := io.Copy(output, part)
+		_, cpErr := guardedCopy(ctx, output, part)
 		closeErr := part.Close()
-		_ = os.Remove(temp)
+		removeErr := os.Remove(temp)
+		if removeErr == nil {
+			releaseStorageBudget(ctx, n)
+		}
 		if cpErr != nil {
 			return "", cpErr
 		}
@@ -423,6 +426,9 @@ func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int
 	args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
 	muxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	if err := checkStorageBudget(ctx, maxArchiveMediaSize-budget); err != nil {
+		return 0, "", err
+	}
 	stdout, e := exec.CommandContext(muxCtx, ffmpeg, args...).CombinedOutput()
 	if e != nil {
 		if muxCtx.Err() != nil {

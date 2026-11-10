@@ -220,7 +220,7 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 		return 0, "", err
 	}
 	// Read one additional byte to reject a response larger than the limit.
-	n, copyErr := io.Copy(f, io.LimitReader(res.Body, maxArchiveMediaSize-existing+1))
+	n, copyErr := guardedCopy(ctx, f, io.LimitReader(res.Body, maxArchiveMediaSize-existing+1))
 	syncErr := f.Sync()
 	closeErr := f.Close()
 	if copyErr != nil {

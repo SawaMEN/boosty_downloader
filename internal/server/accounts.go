@@ -50,6 +50,8 @@ type accountFile struct {
 	MaxImportPosts     int                        `json:"maxImportPosts,omitempty"`
 	CompressionLevel   *int                       `json:"compressionLevel,omitempty"`
 	DeduplicateMedia   *bool                      `json:"deduplicateMedia,omitempty"`
+	MinFreeGiB         *int                       `json:"minFreeGiB,omitempty"`
+	MaxUserGiB         *int                       `json:"maxUserGiB,omitempty"`
 	VideoPolicy        *VideoPolicy               `json:"videoPolicy,omitempty"`
 }
 type Accounts struct {

@@ -72,6 +72,12 @@
               </label>
               <label class="check"><input id="adminDeduplicateMedia" type="checkbox" checked><span><strong>Не хранить одинаковые файлы дважды</strong><small>Одинаковые SHA-256 хранятся одним объектом на диске с отдельными ссылками для постов.</small></span></label>
             </div>
+            <div class="policy-controls">
+              <label>Минимальный резерв диска (ГиБ)<input id="adminMinFreeGiB" type="number" min="0" max="1024" step="1" value="1"><small>1 ГиБ по умолчанию; 0 — без резерва. Контролируется при каждой порции загрузки.</small></label>
+              <label>Лимит архива на пользователя (ГиБ)<input id="adminMaxUserGiB" type="number" min="0" max="16384" step="1" value="0"><small>0 — без квоты; объём считается вместе с временными файлами и видеокопиями.</small></label>
+            </div>
+            <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminStorageRefresh">Проверить место и квоты</button></div>
+            <div id="adminStorageReport" class="video-diagnostics" role="status"></div>
             <h3>Видео: FFmpeg и аппаратное ускорение</h3>
             <p class="muted small">На основе подхода Immich: источник всегда сохраняется отдельно. Для Ryzen 5 5600H / Vega 7 предпочтителен VA-API и H.264, NVIDIA использует NVENC, Intel — QSV. Без проверки драйвера доступность не гарантируется.</p>
             <div class="policy-controls">
