@@ -130,6 +130,55 @@ type PlayerURL struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
 }
+// PostRequirement is the tier Boosty reports on the post itself, which
+// differs from the viewer's own subscribed tier. All fields are observational:
+// the server must still verify Post.HasAccess with that specific account.
+type PostRequirement struct {
+	TierName          string  `json:"tierName,omitempty"`
+	TierPrice         float64 `json:"tierPrice,omitempty"`
+	SinglePurchase    float64 `json:"singlePurchase,omitempty"`
+	Source            string  `json:"source"`
+}
+
+func ParsePostRequirement(raw json.RawMessage) *PostRequirement {
+	var payload struct {
+		SubscriptionLevel json.RawMessage `json:"subscriptionLevel"`
+		Price             json.RawMessage `json:"price"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil
+	}
+	result := &PostRequirement{Source: "boosty_post"}
+	if len(payload.SubscriptionLevel) > 0 && string(payload.SubscriptionLevel) != "null" {
+		var level struct {
+			Name  string          `json:"name"`
+			Price json.RawMessage `json:"price"`
+		}
+		if json.Unmarshal(payload.SubscriptionLevel, &level) == nil && level.Name != "" {
+			name := []rune(level.Name)
+			if len(name) > 128 {
+				name = name[:128]
+			}
+			result.TierName = string(name)
+			_ = json.Unmarshal(level.Price, &result.TierPrice)
+			if result.TierPrice < 0 {
+				result.TierPrice = 0
+			}
+		}
+	}
+	if len(payload.Price) > 0 {
+		_ = json.Unmarshal(payload.Price, &result.SinglePurchase)
+	}
+	if result.SinglePurchase < 0 {
+		result.SinglePurchase = 0
+	}
+	// Missing/unknown price and tier never imply a paid or free entitlement.
+	if result.TierName == "" && result.SinglePurchase == 0 {
+		return nil
+	}
+	return result
+}
+
 type Post struct {
 	Raw         json.RawMessage   `json:"-"`
 	ID          string            `json:"id"`

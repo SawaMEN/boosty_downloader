@@ -32,6 +32,7 @@ function jobState(j){const states={done:'Готово',partial:'Частично
 function buildJob(j, shared=false){const item=el('article','job-item');item.append(text('div','▧','job-icon'));const body=el('div','job-main');body.append(text('div',j.title||j.url,'job-title'));body.append(text('div',`${j.author}${shared?' · от '+j.ownerName:''} · ${j.doneFiles}/${j.totalFiles} файлов`,'job-sub'));
  if(j.archiveUpdatedAt){const when=new Date(j.archiveUpdatedAt);body.append(text('div',`Архив обновлён: ${when.toLocaleString('ru-RU')}`,'job-sub archive-date'));}
  else body.append(text('div',`Добавлено: ${new Date(j.createdAt).toLocaleString('ru-RU')}`,'job-sub archive-date'));
+ if(j.requiredTier)body.append(text('div','Доступ к посту: '+(j.requiredTier.tierName?'уровень «'+j.requiredTier.tierName+'»':'без указанного уровня')+(j.requiredTier.singlePurchase?' · доступна отдельная покупка':''),'job-sub'));
  if(j.subscription&&!shared)body.append(text('div','Подписка при выгрузке: '+(j.subscription.level|| (j.subscription.paid?'Платная · уровень не указан':'Бесплатная подписка'))+(j.subscription.levelId?' · ID '+j.subscription.levelId:'')+(j.subscription.paused?' · приостановлена':''),'job-sub'));
  if(!j.subscription&&!shared&&['done','partial'].includes(j.state))body.append(text('div','Уровень подписки: не установлен (доступ мог быть открытым или разовым)','job-sub'));
  if(j.sharedForAll)body.append(text('div','◉ Доступен всем участникам','job-sub public-archive'));

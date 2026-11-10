@@ -25,17 +25,18 @@ type ArchiveAsset struct {
 	SourceSHA256 string `json:"sourceSha256,omitempty"`
 }
 type ArchiveManifest struct {
-	Title           string                `json:"title"`
-	Author          string                `json:"author"`
-	PostID          string                `json:"postId"`
-	Source          string                `json:"source"`
-	CapturedAt      time.Time             `json:"capturedAt"`
-	Assets          []ArchiveAsset        `json:"assets"`
-	CommentsStatus  string                `json:"commentsStatus"`
-	CommentCount    int                   `json:"commentCount"`
-	CommentExpected int                   `json:"commentExpected"`
-	Failures        []string              `json:"failures,omitempty"`
-	Subscription    *CapturedSubscription `json:"subscription,omitempty"`
+	Title            string                   `json:"title"`
+	Author           string                   `json:"author"`
+	PostID           string                   `json:"postId"`
+	Source           string                   `json:"source"`
+	CapturedAt       time.Time                `json:"capturedAt"`
+	Assets           []ArchiveAsset           `json:"assets"`
+	CommentsStatus   string                   `json:"commentsStatus"`
+	CommentCount     int                      `json:"commentCount"`
+	CommentExpected  int                      `json:"commentExpected"`
+	Failures         []string                 `json:"failures,omitempty"`
+	Subscription     *CapturedSubscription    `json:"subscription,omitempty"`
+	RequiredTier     *boosty.PostRequirement  `json:"requiredTier,omitempty"`
 }
 type renderData struct {
 	ArchiveManifest
@@ -231,6 +232,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		}
 	}
 	j.Title = p.Title
+	j.RequiredTier = boosty.ParsePostRequirement(p.Raw)
 	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	// Capture last completed copy before modifying raw JSON, comments or
 	// media, so refresh failures never destroy the previous version.
@@ -242,7 +244,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return e
 	}
 	compressionPolicy := a.accounts.policy()
-	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments, Subscription: j.Subscription}
+	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments, Subscription: j.Subscription, RequiredTier: j.RequiredTier}
 	if e = writeArchiveJSON(filepath.Join(folder, "post.json"), json.RawMessage(p.Raw), compressionPolicy.CompressionLevel); e != nil {
 		return e
 	}

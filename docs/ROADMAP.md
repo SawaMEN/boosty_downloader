@@ -351,3 +351,6 @@
 
 
 **Уточнение подписки:** дополнительно фиксируется `levelId` (если API Boosty возвращает его) и исходная цена `price` без предположений о валюте. При отсутствии стабильного ID уровня сохраняем только подтверждённое имя; даже одинаковый ID тарифа не используется как ACL для контента другого пользователя.
+
+
+**Уточнение SRC-WP-02 + Boosty `PostDTO`:** два разных атрибута: `Job.Subscription` (тариф **владельца** из личного списка подписок) и `Job.RequiredTier` (уровень, **указанный на посте** в момент скачивания: `subscriptionLevel.name/price`, возможная отдельная покупка из `price`). Источник структуры поста: [Glitchy-Sheep `boosty_downloader/infrastructure/boosty_api/models/post/post.py`](https://github.com/Glitchy-Sheep/boosty-downloader/blob/main/boosty_downloader/infrastructure/boosty_api/models/post/post.py), [`subscription_level.py`](https://github.com/Glitchy-Sheep/boosty-downloader/blob/main/boosty_downloader/infrastructure/boosty_api/models/post/subscription_level.py). Go парсер самостоятельный и устойчив к отсутствующим полям; ни один атрибут не заменяет проверку `Post.HasAccess`. Версии сохраняют оба снимка отдельно.

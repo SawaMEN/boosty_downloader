@@ -79,3 +79,6 @@
 
 
 Проектируемая транзакционная модель без смешивания подписок: `docs/DATABASE.md`, `deploy/sqlite/schema_v1.sql`. В ней есть глобальная identity поста и общие SHA-256 blobs, но уникальные owner-scoped archives, версии и grants. Файлы SQL пока не исполняются сервером; миграция с JSON отдельно.
+
+
+Структура обязательного уровня публикации взята по модели [PostDTO](https://github.com/Glitchy-Sheep/boosty-downloader/blob/main/boosty_downloader/infrastructure/boosty_api/models/post/post.py) и [SubscriptionLevelDTO](https://github.com/Glitchy-Sheep/boosty-downloader/blob/main/boosty_downloader/infrastructure/boosty_api/models/post/subscription_level.py): `subscriptionLevel.name/price` описывают пост, `price` — возможность отдельной покупки, а ответ `/v1/user/subscriptions` — тариф **аккаунта**, это разные свойства. Код в `boosty/client.go:ParsePostRequirement` сохраняет только надёжно разобранное, без предположения о правах доступа.

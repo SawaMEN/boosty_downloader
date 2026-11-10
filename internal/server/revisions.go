@@ -250,6 +250,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	j.Title = man.Title
 	j.ArchiveUpdatedAt = man.CapturedAt
 	j.Subscription = man.Subscription
+	j.RequiredTier = man.RequiredTier
 	j.DoneFiles = len(man.Assets)
 	j.TotalFiles = len(man.Assets)
 	j.CommentsPartial = len(man.Failures) > 0 || man.CommentsStatus == "частично"
