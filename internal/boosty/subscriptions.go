@@ -14,13 +14,13 @@ import (
 // SubscriptionAuthor is a safe-to-expose subset of the account's Boosty subscriptions.
 // The Boosty API is unofficial; no signed media or authentication URLs are returned.
 type SubscriptionAuthor struct {
-	Blog   string `json:"blog"`
-	Title  string `json:"title"`
-	Level  string `json:"level,omitempty"`
+	Blog    string `json:"blog"`
+	Title   string `json:"title"`
+	Level   string `json:"level,omitempty"`
 	LevelID string `json:"levelId,omitempty"`
-	Price   int64 `json:"price,omitempty"`
-	Paid   bool   `json:"paid"`
-	Paused bool   `json:"paused"`
+	Price   int64  `json:"price,omitempty"`
+	Paid    bool   `json:"paid"`
+	Paused  bool   `json:"paused"`
 }
 
 type SubscriptionList struct {
