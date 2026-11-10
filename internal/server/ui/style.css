@@ -50,3 +50,14 @@
 .user-permission select{max-width:170px}.rights-item{display:flex;justify-content:space-between;gap:10px;padding:11px;border:1px solid rgba(140,150,180,.15);border-radius:10px}
 .rights-on{color:#65c79a}.rights-off{color:#dc8787}
 @media(max-width:600px){.policy-controls,.user-permission-grid{grid-template-columns:1fr}.user-permission{align-items:start;flex-direction:column}.user-permission select{max-width:none;width:100%}}
+
+/* Searchable, paginated catalog. */
+.catalog-toolbar{display:grid;grid-template-columns:minmax(210px,2fr) minmax(130px,1fr) minmax(155px,1fr);gap:12px;margin:17px 0}
+.catalog-toolbar label{display:flex;flex-direction:column;gap:6px;min-width:0}
+.catalog-toolbar input,.catalog-toolbar select{background:#101724;border:1px solid #3a475c;color:var(--text);border-radius:10px;padding:11px;min-width:0;width:100%}
+.catalog-pagination{display:flex;justify-content:center;align-items:center;gap:13px;margin-top:18px}
+.catalog-pagination .btn{min-width:108px}
+.catalog-toolbar.shared-options{display:flex;justify-content:flex-end;margin-top:5px}
+.catalog-toolbar.shared-options label{min-width:180px}
+@media(max-width:780px){.catalog-toolbar{grid-template-columns:1fr 1fr}.catalog-toolbar label:first-child{grid-column:1/-1}}
+@media(max-width:490px){.catalog-toolbar{grid-template-columns:1fr}.catalog-toolbar label:first-child{grid-column:auto}.catalog-pagination{gap:7px}.catalog-pagination .btn{min-width:0;padding:9px 10px}}
