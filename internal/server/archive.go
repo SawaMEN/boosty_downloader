@@ -290,9 +290,16 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		if m.Type == "ok_video" {
 			expectedSize = 0 // Boosty may report a different resolution’s size.
 		}
-		size, digest, err := downloadFile(ctx, c.MediaGet, boosty.MediaURL(p, m), dest, expectedSize)
-		if err != nil {
-			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(err)))
+		var size int64
+		var digest string
+		var downloadErr error
+		if m.Type == "ok_video" {
+			size, digest, downloadErr = downloadVideoFile(ctx, c.MediaGet, boosty.MediaURL(p, m), dest)
+		} else {
+			size, digest, downloadErr = downloadFile(ctx, c.MediaGet, boosty.MediaURL(p, m), dest, expectedSize)
+		}
+		if downloadErr != nil {
+			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(downloadErr)))
 			continue
 		}
 		title := m.Title
