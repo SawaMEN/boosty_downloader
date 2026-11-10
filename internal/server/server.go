@@ -238,6 +238,7 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("GET /api/settings", a.settings)
 	private.HandleFunc("GET /api/stream", a.require("streamMedia", a.stream))
 	private.HandleFunc("GET /api/shared", a.require("browseShared", a.sharedJobs))
+	private.HandleFunc("GET /api/catalog", a.catalog)
 	private.HandleFunc("GET /api/authors", a.authors)
 	private.HandleFunc("POST /api/authors", a.authors)
 	private.HandleFunc("DELETE /api/authors/{author}", a.unpinAuthor)
