@@ -360,6 +360,16 @@ func downloadVideoFile(ctx context.Context, fetch mediaFetcher, raw, dest string
 	case ".mpd":
 		return archiveDASH(ctx, fetch, raw, dest)
 	default:
+		// Boosty/CDN URLs may contain an opaque ID instead of .m3u8/.mpd.
+		// Probe only unknown extensions, never re-download ordinary MP4 twice.
+		if ext := strings.ToLower(filepath.Ext(u.Path)); ext != ".mp4" && ext != ".m4v" && ext != ".mov" && ext != ".webm" && ext != ".mkv" {
+			switch detectVideoPlaylist(ctx, fetch, raw) {
+			case "hls":
+				return archiveHLS(ctx, fetch, raw, dest)
+			case "dash":
+				return archiveDASH(ctx, fetch, raw, dest)
+			}
+		}
 		return downloadFile(ctx, fetch, raw, dest, 0)
 	}
 }
