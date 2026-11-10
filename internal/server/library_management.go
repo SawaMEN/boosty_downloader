@@ -379,6 +379,13 @@ func (s *Storage) restoreOwned(owner, id string) (Job, error) {
 // purgeOwned permanently removes only previously trashed entries, staging
 // folders for atomic metadata rollback.
 func (s *Storage) purgeOwned(owner, id, author string) (int, error) {
+	return s.purgeOwnedBefore(owner, id, author, time.Time{})
+}
+
+// Compare retention within the same lock as the folder move and metadata delete.
+// A restore followed by another deletion resets DeletedAt and cannot be purged
+// by a stale cleanup scan.
+func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (int, error) {
 	s.mu.Lock()
 	if author != "" {
 		for _, v := range s.imports {
@@ -393,7 +400,7 @@ func (s *Storage) purgeOwned(owner, id, author string) (int, error) {
 	var ids []string
 	folders := map[string]bool{}
 	for key, j := range s.jobs {
-		if j.OwnerID != owner || (id != "" && id != key) || (author != "" && j.Author != author) || j.DeletedAt == nil {
+		if j.OwnerID != owner || (id != "" && id != key) || (author != "" && j.Author != author) || j.DeletedAt == nil || (!cutoff.IsZero() && !j.DeletedAt.Before(cutoff)) {
 			continue
 		}
 		if j.State == "running" || j.State == "queued" {
@@ -503,6 +510,11 @@ func (a *App) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	n, err := a.store.purgeOwned(principal(r).ID, r.PathValue("id"), "")
 	if err != nil {
 		fail(w, 409, err.Error())
+		return
+	}
+	entry := TrashAuditEntry{At: time.Now().UTC(), Trigger: "owner", OwnerID: principal(r).ID, JobID: r.PathValue("id"), Removed: n}
+	if auditErr := a.store.appendTrashAudit(entry); auditErr != nil {
+		reply(w, 200, map[string]any{"purged": n, "warning": "архив удалён, но журнал не удалось сохранить"})
 		return
 	}
 	reply(w, 200, map[string]any{"purged": n})

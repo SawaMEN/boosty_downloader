@@ -82,6 +82,10 @@ func (a *Accounts) initializePolicy(initial time.Duration) error {
 		defaults := defaultAutoUpdatePolicy()
 		a.data.AutoUpdatePolicy = &defaults
 	}
+	if a.data.TrashPolicy == nil {
+		defaults := defaultTrashPolicy()
+		a.data.TrashPolicy = &defaults
+	}
 	if a.data.VideoPolicy == nil {
 		defaults := defaultVideoPolicy()
 		a.data.VideoPolicy = &defaults
@@ -136,6 +140,7 @@ type AdminPolicy struct {
 	Video             VideoPolicy     `json:"video"`
 
 	Updates AutoUpdatePolicy `json:"updates"`
+	Trash   TrashPolicy       `json:"trash"`
 }
 
 func (a *Accounts) policy() AdminPolicy {
@@ -171,11 +176,18 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.AutoUpdatePolicy != nil {
 		updates = *a.data.AutoUpdatePolicy
 	}
-	return AdminPolicy{Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
+	trash := defaultTrashPolicy()
+	if a.data.TrashPolicy != nil {
+		trash = *a.data.TrashPolicy
+	}
+	return AdminPolicy{Trash: trash, Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
 }
 
 func validatePolicy(p AdminPolicy) error {
 	if err := validateAutoUpdatePolicy(p.Updates); err != nil {
+		return err
+	}
+	if err := validateTrashPolicy(p.Trash); err != nil {
 		return err
 	}
 	if err := validateVideoPolicy(p.Video); err != nil {
@@ -228,6 +240,7 @@ func (a *Accounts) changePolicy(p AdminPolicy) error {
 	a.data.MaxUserGiB = &p.MaxUserGiB
 	a.data.VideoPolicy = &p.Video
 	a.data.AutoUpdatePolicy = &p.Updates
+	a.data.TrashPolicy = &p.Trash
 	if err := a.saveLocked(); err != nil {
 		a.data = before
 		return err

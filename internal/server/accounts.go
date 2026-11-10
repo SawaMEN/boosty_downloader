@@ -54,6 +54,7 @@ type accountFile struct {
 	MaxUserGiB         *int                       `json:"maxUserGiB,omitempty"`
 	VideoPolicy        *VideoPolicy               `json:"videoPolicy,omitempty"`
 	AutoUpdatePolicy   *AutoUpdatePolicy          `json:"autoUpdatePolicy,omitempty"`
+	TrashPolicy        *TrashPolicy               `json:"trashPolicy,omitempty"`
 }
 type Accounts struct {
 	mu     sync.Mutex

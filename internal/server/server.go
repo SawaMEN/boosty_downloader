@@ -49,6 +49,10 @@ type App struct {
 	videoMu            sync.Mutex
 	videoStatuses      map[string]VideoJobStatus
 	videoFailures      map[string]time.Time
+	trashQueue         chan struct{}
+	trashMu            sync.Mutex
+	trashSweepQueued   bool
+	trashSweepRunning  bool
 }
 
 func New(cfg Config) (*App, error) {
@@ -76,13 +80,14 @@ func New(cfg Config) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), ctx: ctx, cancel: cancel}
-	a.wg.Add(5)
+	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	a.wg.Add(6)
 	go func() { defer a.wg.Done(); a.worker() }()
 	go func() { defer a.wg.Done(); a.importWorker() }()
 	go func() { defer a.wg.Done(); a.syncLoop() }()
 	go func() { defer a.wg.Done(); a.importSyncLoop() }()
 	go func() { defer a.wg.Done(); a.videoWorker() }()
+	go func() { defer a.wg.Done(); a.trashCleanupLoop() }()
 	for _, id := range s.queued() {
 		a.queueJob(id)
 	}
@@ -234,6 +239,8 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("GET /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("PUT /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("GET /api/admin/storage", a.adminStorage)
+	private.HandleFunc("GET /api/admin/trash", a.adminTrashStatus)
+	private.HandleFunc("POST /api/admin/trash/cleanup", a.adminTrashCleanup)
 	private.HandleFunc("GET /api/admin/updates", a.adminUpdates)
 	private.HandleFunc("GET /api/admin/users", a.adminUsers)
 	private.HandleFunc("PUT /api/admin/users/{id}/permissions", a.adminUserPermissions)
