@@ -163,3 +163,8 @@ API (доступен только администратору): `GET/PUT /api/
 - Видео не перекодируется и остаётся доступным для обычного плеера с перемоткой. `index.html` и `manifest.json` не сжимаются.
 - Уровень сжатия 0–19 и дедупликация настраиваются **только администратором** в панели управления. Native-установщик устанавливает `zstd`, Docker содержит бинарник `zstd`.
 - Ограничения, варианты алгоритмов и план дальнейшей миграции: [docs/STORAGE_COMPRESSION.md](docs/STORAGE_COMPRESSION.md).
+
+
+## Источники архитектуры всего сайта
+
+Загрузчики [lowfc](https://github.com/lowfc/boosty_downloader), [ath31st](https://github.com/ath31st/boosty_downloader), [wpt/b00p](https://github.com/wpt/b00p), а также [Orbita](https://github.com/bezumkin/orbita), [WordPress](https://github.com/WordPress/wordpress-develop) и 7-Zip учитываются при проектировании публикаций, каталога, прав пользователей, комментариев, медиа, фоновых задач и обновлений. Таблица решений и ограничений лицензий: [docs/REFERENCE_ARCHITECTURE.md](docs/REFERENCE_ARCHITECTURE.md).

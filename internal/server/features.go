@@ -44,36 +44,13 @@ func (a *App) postDetails(w http.ResponseWriter, r *http.Request) {
 		Size     int64  `json:"size"`
 		Playable bool   `json:"playable"`
 	}
-	type contentBlock struct {
-		Type  string `json:"type"`
-		Text  string `json:"text,omitempty"`
-		Index int    `json:"index,omitempty"`
-	}
 	media := boosty.ExtractMedia(post)
 	items := make([]mediaItem, 0, len(media))
 	for i, m := range media {
 		mime := m.Type == "ok_video" || m.Type == "audio_file"
 		items = append(items, mediaItem{Index: i, Type: m.Type, Title: m.Title, Size: m.Size, Playable: mime})
 	}
-	blocks := make([]contentBlock, 0, len(post.Data))
-	mediaIndex := 0
-	for _, raw := range post.Data {
-		var h struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(raw, &h) != nil {
-			continue
-		}
-		if t := extractText(raw); t != "" {
-			blocks = append(blocks, contentBlock{Type: "text", Text: t})
-			continue
-		}
-		switch h.Type {
-		case "ok_video", "audio_file", "image", "file":
-			blocks = append(blocks, contentBlock{Type: h.Type, Index: mediaIndex})
-			mediaIndex++
-		}
-	}
+	blocks := postContentBlocks(post)
 	reply(w, 200, map[string]any{
 		"title": post.Title, "author": author, "postId": id, "source": r.URL.Query().Get("url"),
 		"hasAccess": post.HasAccess, "publishTime": post.PublishTime,

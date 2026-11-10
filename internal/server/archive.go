@@ -36,16 +36,36 @@ type ArchiveManifest struct {
 }
 type renderData struct {
 	ArchiveManifest
-	Body     []string
+	Blocks   []archiveBlock
 	Comments []commentView
 }
 type commentView struct {
 	Author string
 	Text   string
 	Level  int
+	Date   string
 }
 
-const postHTML = `<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}pre{white-space:pre-wrap;overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><p><a href="/">← Медиатека</a></p><header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Обновление архива: {{.CapturedAt.Format "02.01.2006 15:04"}} UTC</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header><section class="panel">{{range .Body}}<p>{{.}}</p>{{end}}{{if not .Body}}<p class="dim">В исходном посте не найден текст.</p>{{end}}</section>{{range .Assets}}<section class="panel"><p>{{.Title}}</p>{{if eq .Type "ok_video"}}<video controls preload="metadata" src="media/{{.Filename}}"></video>{{else if eq .Type "audio_file"}}<audio controls src="media/{{.Filename}}"></audio>{{else if eq .Type "image"}}<img loading="lazy" src="media/{{.Filename}}" alt="{{.Title}}">{{else}}<a href="media/{{.Filename}}" download>Скачать вложение</a>{{end}}</section>{{end}}<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong><p>{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>{{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}</main></body></html>`
+const postHTML = `<!doctype html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}ul{padding-left:20px}.body-block{margin:16px 0}.unavailable{border:1px dashed #5e6570;padding:12px;border-radius:8px}</style></head>
+<body><main><p><a href="/">← Медиатека</a></p>
+<header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Обновление архива: {{.CapturedAt.Format "02.01.2006 15:04"}} UTC</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header>
+<section class="panel" aria-label="Содержание публикации">{{range .Blocks}}
+{{if eq .Type "header"}}<h2 class="body-block">{{.Text}}</h2>
+{{else if eq .Type "list"}}<ul class="body-block"><li>{{.Text}}</li></ul>
+{{else if eq .Type "text"}}<p class="body-block">{{.Text}}</p>
+{{else if eq .Type "link"}}<p class="body-block">{{.Text}}</p>
+{{else if .Asset}}<div class="body-block"><p>{{.Asset.Title}}</p>
+{{if eq .Type "ok_video"}}<video controls playsinline preload="metadata" src="media/{{.Asset.Filename}}"></video>
+{{else if eq .Type "audio_file"}}<audio controls preload="none" src="media/{{.Asset.Filename}}"></audio>
+{{else if eq .Type "image"}}<img loading="lazy" src="media/{{.Asset.Filename}}" alt="{{.Asset.Title}}">
+{{else if eq .Type "file"}}<a href="media/{{.Asset.Filename}}" download>Скачать: {{.Asset.Title}}</a>{{end}}
+</div>{{else if .Missing}}<p class="dim unavailable body-block">Медиа не сохранено в этой копии{{if .Text}}: {{.Text}}{{end}}</p>{{end}}
+{{else}}<p class="dim">В исходном посте нет распознанных блоков.</p>{{end}}</section>
+<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong>{{if .Date}}<small class="dim"> · {{.Date}} UTC</small>{{end}}<p>{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>
+{{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
+</main></body></html>`
 
 var pageTemplate = template.Must(template.New("post").Parse(postHTML))
 
@@ -112,7 +132,9 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		if a == "" {
 			a = "Пользователь"
 		}
-		*out = append(*out, commentView{Author: a, Text: commentText(c), Level: depth})
+		date := ""
+		if c.CreatedAt > 0 { date = time.Unix(c.CreatedAt, 0).UTC().Format("02.01.2006 15:04") }
+		*out = append(*out, commentView{Author: a, Text: commentText(c), Level: depth, Date: date})
 		appendComments(out, c.Replies.Data, depth+1)
 	}
 }
@@ -289,12 +311,6 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		j.DoneFiles++
 		_ = a.store.upsert(*j)
 	}
-	var body []string
-	for _, raw := range p.Data {
-		if t := extractText(raw); t != "" {
-			body = append(body, t)
-		}
-	}
 	var cv []commentView
 	if j.IncludeComments {
 		appendComments(&cv, comments.Comments, 0)
@@ -306,7 +322,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return e
 	}
 	var html bytes.Buffer
-	if e = pageTemplate.Execute(&html, renderData{ArchiveManifest: man, Body: body, Comments: cv}); e != nil {
+	if e = pageTemplate.Execute(&html, renderData{ArchiveManifest: man, Blocks: archiveContentBlocks(p, man.Assets), Comments: cv}); e != nil {
 		return e
 	}
 	if e = writeAtomic(filepath.Join(folder, "index.html"), html.Bytes()); e != nil {

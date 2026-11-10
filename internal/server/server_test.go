@@ -203,7 +203,7 @@ func TestCSRFGuard(t *testing.T) {
 }
 func TestArchiveHTMLSanitizesText(t *testing.T) {
 	var out bytes.Buffer
-	err := pageTemplate.Execute(&out, renderData{ArchiveManifest: ArchiveManifest{Title: "<script>alert(1)</script>"}, Body: []string{"<img src=x onerror=alert(1)>"}})
+	err := pageTemplate.Execute(&out, renderData{ArchiveManifest: ArchiveManifest{Title: "<script>alert(1)</script>"}, Blocks: []archiveBlock{{Type: "text", Text: "<img src=x onerror=alert(1)>"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
