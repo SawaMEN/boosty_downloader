@@ -29,6 +29,9 @@ jobs:
           changed="$(gofmt -l ./cmd ./internal)"
           if [ -n "$changed" ]; then
             printf "Files requiring gofmt:\n%s\n" "$changed"
+            while IFS= read -r file; do
+              [ -z "$file" ] || gofmt -d "$file"
+            done <<< "$changed"
             exit 1
           fi
       - name: Check shell syntax
