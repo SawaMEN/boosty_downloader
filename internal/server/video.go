@@ -407,9 +407,11 @@ func (a *App) videoAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := a.accounts.policy().Video
-	// Probing performs a real short encoding only on explicit request.
+	// Quick inspection is automatic; active encoding only runs on request.
 	probe := r.URL.Query().Get("probe") == "1"
-	reply(w, 200, map[string]any{"policy": p, "diagnostics": probeVideo(r.Context(), p.Codec, probe), "jobs": a.getVideoStatuses(), "archives": a.videoArchives()})
+	diag := probeVideo(r.Context(), p.Codec, probe)
+	hardware := inspectHardware(r.Context(), diag, p.Codec, probe)
+	reply(w, 200, map[string]any{"policy": p, "diagnostics": diag, "hardware": hardware, "jobs": a.getVideoStatuses(), "archives": a.videoArchives()})
 }
 func (a *App) videoEnqueue(w http.ResponseWriter, r *http.Request) {
 	if !principal(r).Admin {

@@ -138,6 +138,66 @@ async function saveUserRights(){
   catch(error){toast(error.message,true)}finally{button.disabled=false}
 }
 let videoArchives=[];
+function renderAdminHardware(h){
+  const root=$('adminHardwareReport');root.replaceChildren();
+  if(!h){root.append(text('p','Отчёт об оборудовании недоступен','muted'));return}
+  const cpu=h.cpu||{};
+  root.append(text('h4','Процессор и инструкции'));
+  root.append(text('p',`${cpu.model||'Неизвестный CPU'} · ${cpu.architecture||'—'} · ${cpu.logicalCores||0} логических потоков`,'muted small'));
+  const flags=el('div','hardware-chips');
+  for(const flag of cpu.instructions||[]){flags.append(text('span',flag,'hardware-chip'))}
+  if(!flags.childElementCount)flags.append(text('p','Инструкции не удалось определить','muted small'));
+  root.append(flags);
+  for(const note of cpu.notes||[]){root.append(text('p',note,'muted small'))}
+  root.append(text('h4','Графические устройства'));
+  if(!(h.gpus||[]).length){root.append(text('p','GPU не обнаружен из этого процесса. В Docker может потребоваться проброс устройства.','muted small'))}
+  for(const gpu of h.gpus||[]){
+    const card=el('div','hardware-item');
+    card.append(text('strong',`${gpu.vendor} · ${gpu.device} ${gpu.pci?'('+gpu.pci+')':''}`));
+    card.append(text('p',`${gpu.driver||'Драйвер не определён'} · ${gpu.accessible?'Доступно процессу':'Нет доступа к устройству'}`,gpu.accessible?'rights-on':'error'));
+    if(gpu.issue)card.append(text('p',gpu.issue,'muted small'));
+    if((gpu.profiles||[]).length)card.append(text('p','VA-API (заявлено драйвером): '+gpu.profiles.join(' · '),'muted small'));
+    root.append(card);
+  }
+  const tools=Object.entries(h.tools||{}).map(([name,ok])=>`${name}: ${ok?'есть':'нет'}`);
+  root.append(text('p',`${h.distribution||h.system} · ${h.container?'Docker/контейнер':'Обычный процесс'} · ${tools.join(' · ')}`,'muted small'));
+  root.append(text('p',`Интерфейсы FFmpeg (заявлены сборкой, без проверки декодирования): ${(h.accelerators||[]).join(', ')||'не обнаружены'}`,'muted small'));
+  root.append(text('h4','Поддержка видеокодеров'));
+  const codecs=el('div','hardware-codecs');
+  for(const c of h.codecs||[]){
+    const label= c.verified?'Проверено':c.built?'Есть в FFmpeg':'Нет в FFmpeg';
+    const item=el('div','hardware-codec');
+    item.append(text('strong',`${c.backend.toUpperCase()} · ${c.codec.toUpperCase()}`));
+    item.append(text('span',label,c.verified?'rights-on':c.built?'muted small':'error'));
+    codecs.append(item);
+  }
+  root.append(codecs);
+  const profile=h.profile||{};
+  root.append(text('h4','Рекомендуемый профиль'));
+  root.append(text('p',`${(profile.backend||'auto').toUpperCase()} · ${(profile.codec||'h264').toUpperCase()} · ${profile.explanation||''}`,profile.verified?'rights-on':'muted'));
+  if(profile.verified){
+    const apply=el('button','btn subtle');apply.type='button';apply.textContent='Подставить проверенный профиль';
+    apply.onclick=()=>{
+      $('adminVideoBackend').value=profile.backend;
+      $('adminVideoCodec').value=profile.codec;
+      $('adminVideoEnabled').checked=true;
+      $('adminVideoAutomatic').checked=false;
+      toast('Проверенный профиль подставлен. Для применения нажмите «Сохранить настройки сервера». Автообработка не включена.');
+    };
+    root.append(apply);
+  }
+  root.append(text('h4','Что можно установить или включить'));
+  if(!(h.suggestions||[]).length)root.append(text('p','Обязательных действий не обнаружено. Для подтверждения ускорения выполните пробное кодирование.','muted small'));
+  for(const suggestion of h.suggestions||[]){
+    const item=el('div','hardware-item');
+    item.append(text('strong',suggestion.title));
+    item.append(text('p',suggestion.detail,'muted small'));
+    if(suggestion.command){
+      const code=el('code','hardware-command');code.textContent=suggestion.command;item.append(code);
+    }
+    root.append(item);
+  }
+}
 function selectAdminVideoArchive(){
   const id=$('adminVideoArchive').value;
   const entry=videoArchives.find(a=>a.id===id);
@@ -149,9 +209,11 @@ async function loadVideoReport(active){
   if(!state.user?.admin)return;
   const button=$('adminVideoProbe');button.disabled=true;
   $('adminVideoDiagnostics').replaceChildren(text('p',active?'Проверка кодеков и устройств…':'Загружаем оборудование…','muted'));
+  $('adminHardwareReport').replaceChildren(text('p','Анализ системы…','muted'));
   try{
     const data=await api('/api/admin/video'+(active?'?probe=1':''));
     const diag=data.diagnostics||{};
+    renderAdminHardware(data.hardware);
     const root=$('adminVideoDiagnostics');root.replaceChildren();
     root.append(text('p',`FFmpeg: ${diag.ffmpeg||'не установлен'} · FFprobe: ${diag.ffprobe?'есть':'нет'} · /dev/dri: ${(diag.renderDevices||[]).join(', ')||'нет'}`,'muted small'));
     const table=el('div','video-diagnostics-list');
@@ -172,7 +234,7 @@ async function loadVideoReport(active){
     const jobs=Object.entries(data.jobs||{}).sort((a,b)=>new Date(b[1].updatedAt)-new Date(a[1].updatedAt)).slice(0,12);
     if(jobs.length)task.append(text('h4','Последние задачи кодирования'));
     for(const [id,item] of jobs){task.append(text('p',`${item.state==='done'?'Готово':item.state==='running'?'Обработка':item.state==='skipped'?'Пропущено':'Ошибка'} · ${id} · ${item.backend||''} · ${item.message||''}`,'muted small'))}
-  }catch(e){$('adminVideoDiagnostics').replaceChildren(text('p',e.message,'error'))}
+  }catch(e){$('adminVideoDiagnostics').replaceChildren(text('p',e.message,'error'));$('adminHardwareReport').replaceChildren(text('p',e.message,'error'))}
   finally{button.disabled=false}
 }
 async function enqueueAdminVideo(){

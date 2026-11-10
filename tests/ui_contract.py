@@ -29,4 +29,8 @@ for script in ('app.js', 'library.js', 'subscriptions.js', 'admin.js'):
     needed = set(re.findall(r"\$\(['\"]([^'\"]+)['\"]\)", code))
     missing = sorted(needed - html.ids)
     assert not missing, f'{script} references missing HTML elements: {missing}'
+admin = (UI/'admin.js').read_text()
+assert 'renderAdminHardware(data.hardware)' in admin, 'admin hardware summary not connected'
+assert 'adminVideoEnabled' in admin and 'adminSavePolicy' in admin, 'explicit admin confirmation missing'
+assert {'adminHardwareReport', 'adminVideoProbe', 'adminVideoBackend'}.issubset(html.ids)
 print('UI wiring: pass')

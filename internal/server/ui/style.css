@@ -50,20 +50,30 @@
 .user-permission select{max-width:170px}.rights-item{display:flex;justify-content:space-between;gap:10px;padding:11px;border:1px solid rgba(140,150,180,.15);border-radius:10px}
 .rights-on{color:#65c79a}.rights-off{color:#dc8787}
 @media(max-width:600px){.policy-controls,.user-permission-grid{grid-template-columns:1fr}.user-permission{align-items:start;flex-direction:column}.user-permission select{max-width:none;width:100%}}
-
-/* Searchable, paginated catalog. */
-.catalog-toolbar{display:grid;grid-template-columns:minmax(210px,2fr) minmax(130px,1fr) minmax(155px,1fr);gap:12px;margin:17px 0}
-.catalog-toolbar label{display:flex;flex-direction:column;gap:6px;min-width:0}
-.catalog-toolbar input,.catalog-toolbar select{background:#101724;border:1px solid #3a475c;color:var(--text);border-radius:10px;padding:11px;min-width:0;width:100%}
-.catalog-pagination{display:flex;justify-content:center;align-items:center;gap:13px;margin-top:18px}
-.catalog-pagination .btn{min-width:108px}
-.catalog-toolbar.shared-options{display:flex;justify-content:flex-end;margin-top:5px}
+/* Filterable, paginated catalog (WordPress-style collections + Orbita-style browse). */
+.catalog-toolbar{display:grid;grid-template-columns:minmax(220px,2fr) minmax(135px,1fr) minmax(155px,1fr);gap:12px;margin:18px 0}
+.catalog-toolbar label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.catalog-toolbar input,.catalog-toolbar select{width:100%;min-width:0;margin:0;background:#101724;border:1px solid #3a475c;color:var(--text);border-radius:10px;padding:11px 12px}
+.catalog-pagination{display:flex;justify-content:center;align-items:center;gap:15px;margin-top:18px}
+.catalog-pagination .btn{min-width:112px}
+.catalog-toolbar.shared-options{display:flex;justify-content:flex-end;margin-top:6px}
 .catalog-toolbar.shared-options label{min-width:180px}
-@media(max-width:780px){.catalog-toolbar{grid-template-columns:1fr 1fr}.catalog-toolbar label:first-child{grid-column:1/-1}}
-@media(max-width:490px){.catalog-toolbar{grid-template-columns:1fr}.catalog-toolbar label:first-child{grid-column:auto}.catalog-pagination{gap:7px}.catalog-pagination .btn{min-width:0;padding:9px 10px}}
+@media(max-width:800px){.catalog-toolbar{grid-template-columns:1fr 1fr}.catalog-toolbar label:first-child{grid-column:1/-1}}
+@media(max-width:480px){.catalog-toolbar{grid-template-columns:1fr}.catalog-toolbar label:first-child{grid-column:auto}.catalog-pagination{gap:9px}.catalog-pagination .btn{min-width:0;padding:9px 11px}}
 
 /* Hardware diagnostics in administrator settings. */
 .video-diagnostics{margin:12px 0 20px;overflow-wrap:anywhere}
 .video-diagnostics-list{display:grid;gap:6px}
 .video-diagnostic-row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line, #364050);border-radius:9px}
 .video-diagnostic-tools{margin:12px 0}
+
+/* Read-only hardware inventory. No untrusted device string is rendered as HTML. */
+.hardware-report{padding:14px 16px;border:1px solid var(--line,#364050);border-radius:12px;margin:15px 0}
+.hardware-report h4{margin:16px 0 7px}
+.hardware-chips{display:flex;gap:6px;flex-wrap:wrap}
+.hardware-chip{border-radius:14px;border:1px solid var(--line,#364050);padding:4px 10px;font-size:.82rem}
+.hardware-item{border:1px solid var(--line,#364050);padding:11px 13px;border-radius:9px;margin-top:8px;overflow-wrap:anywhere}
+.hardware-item p{margin:4px 0}
+.hardware-codecs{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:6px}
+.hardware-codec{display:flex;flex-direction:column;gap:4px;border:1px solid var(--line,#364050);border-radius:8px;padding:8px 10px;font-size:.84rem}
+.hardware-command{display:block;overflow-x:auto;white-space:pre-wrap;word-break:break-word;padding:8px;border-radius:7px;margin-top:8px;background:var(--surface,#1c222c);font-size:.84rem}
