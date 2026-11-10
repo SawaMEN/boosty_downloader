@@ -33,7 +33,7 @@ func TestHLSRejectsUnsafeManifests(t *testing.T) {
 	samples := []string{
 		"#EXTM3U\n#EXTINF:3,\nhttps://127.0.0.1/x.ts\n#EXT-X-ENDLIST\n", // Note URL validation at the real fetcher level; parser does not resolve DNS.
 		"#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:2,\na.ts\n#EXT-X-ENDLIST\n",
-		"#EXTM3U\n#EXTINF:2,\na.ts\n", "#EXTM3U\n#EXT-X-BYTERANGE:500@0\n#EXTINF:2,\na.ts\n#EXT-X-ENDLIST\n",
+		"#EXTM3U\n#EXTINF:2,\na.ts\n",
 		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500,AUDIO=\"other\"\na.m3u8\n",
 		"#EXTM3U\n#EXTINF:2,\nhttp://example.com/a.ts\n#EXT-X-ENDLIST\n",
 	}

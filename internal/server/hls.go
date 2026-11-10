@@ -32,6 +32,10 @@ type hlsPart struct {
 	initURL       string
 	duration      float64
 	discontinuity bool
+	byteOffset    int64
+	byteLength    int64
+	initOffset    int64
+	initLength    int64
 }
 
 type hlsList struct {
@@ -82,7 +86,7 @@ func hlsQuotedURI(tag string) (string, error) {
 
 func parseHLS(raw []byte, parent string) (hlsList, error) {
 	var result hlsList
-	if len(raw) > maxHLSManifestBytes || len(raw) == 0 {
+	if len(raw) == 0 || len(raw) > maxHLSManifestBytes {
 		return result, errors.New("HLS: недопустимый размер плейлиста")
 	}
 	scan := bufio.NewScanner(strings.NewReader(strings.TrimPrefix(string(raw), "\ufeff")))
@@ -91,7 +95,11 @@ func parseHLS(raw []byte, parent string) (hlsList, error) {
 	pendingVariant := false
 	pendingDuration := -1.0
 	pendingDiscontinuity := false
+	pendingRange := ""
 	initURL := ""
+	var initOffset, initLength int64
+	var previousEnd int64
+	previousURL := ""
 	var bandwidth int64
 	for scan.Scan() {
 		line := strings.TrimSpace(scan.Text())
@@ -107,38 +115,53 @@ func parseHLS(raw []byte, parent string) (hlsList, error) {
 		}
 		switch {
 		case strings.HasPrefix(line, "#EXT-X-KEY:"):
-			if !strings.HasPrefix(strings.TrimPrefix(line, "#EXT-X-KEY:"), "METHOD=NONE") {
+			attrs, e := hlsMasterAttributeList(strings.TrimPrefix(line, "#EXT-X-KEY:"))
+			if e != nil || attrs["METHOD"] != "NONE" {
 				return result, errors.New("HLS: зашифрованный поток не поддерживается")
 			}
 		case strings.HasPrefix(line, "#EXT-X-SESSION-KEY:"):
 			return result, errors.New("HLS: ключ шифрования в master-плейлисте")
-		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:") || strings.HasPrefix(line, "#EXT-X-PART:") || strings.HasPrefix(line, "#EXT-X-SKIP:") || strings.HasPrefix(line, "#EXT-X-PRELOAD-HINT:") || strings.HasPrefix(line, "#EXT-X-I-FRAMES-ONLY"):
-			return result, errors.New("HLS: плейлист с диапазонами или частичными сегментами пока не поддерживается")
+		case strings.HasPrefix(line, "#EXT-X-PART:") || strings.HasPrefix(line, "#EXT-X-SKIP:") || strings.HasPrefix(line, "#EXT-X-PRELOAD-HINT:") || strings.HasPrefix(line, "#EXT-X-I-FRAMES-ONLY"):
+			return result, errors.New("HLS: LL-HLS/частичные сегменты не поддерживаются")
+		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
+			if pendingRange != "" {
+				return result, errors.New("HLS: повтор BYTERANGE без сегмента")
+			}
+			pendingRange = strings.TrimSpace(strings.TrimPrefix(line, "#EXT-X-BYTERANGE:"))
+			if pendingRange == "" {
+				return result, errors.New("HLS: пустой BYTERANGE")
+			}
 		case strings.HasPrefix(line, "#EXT-X-STREAM-INF:"):
 			if pendingVariant || len(result.variants) >= 100 {
 				return result, errors.New("HLS: слишком много вариантов")
 			}
-			if strings.Contains(line, "AUDIO=") || strings.Contains(line, "VIDEO=") {
-				return result, errors.New("HLS: отдельные аудиодорожки пока не поддерживаются")
+			attrs, e := hlsMasterAttributeList(strings.TrimPrefix(line, "#EXT-X-STREAM-INF:"))
+			if e != nil {
+				return result, e
 			}
-			bandwidth = 0
-			for _, field := range strings.Split(strings.TrimPrefix(line, "#EXT-X-STREAM-INF:"), ",") {
-				if strings.HasPrefix(field, "BANDWIDTH=") {
-					bandwidth, _ = strconv.ParseInt(strings.TrimPrefix(field, "BANDWIDTH="), 10, 64)
-				}
+			if attrs["AUDIO"] != "" || attrs["VIDEO"] != "" {
+				return result, errors.New("HLS: аудио/видео группы обрабатываются отдельно")
 			}
+			bandwidth, _ = strconv.ParseInt(attrs["BANDWIDTH"], 10, 64)
 			pendingVariant = true
 		case strings.HasPrefix(line, "#EXT-X-MAP:"):
-			if strings.Contains(line, "BYTERANGE=") {
-				return result, errors.New("HLS: EXT-X-MAP BYTERANGE не поддерживается")
-			}
-			uri, e := hlsQuotedURI(line)
+			attrs, e := hlsMasterAttributeList(strings.TrimPrefix(line, "#EXT-X-MAP:"))
 			if e != nil {
 				return result, e
 			}
-			initURL, e = hlsResourceURL(parent, uri)
+			if attrs["URI"] == "" {
+				return result, errors.New("HLS: EXT-X-MAP без URI")
+			}
+			initURL, e = hlsResourceURL(parent, attrs["URI"])
 			if e != nil {
 				return result, e
+			}
+			initOffset, initLength = 0, 0
+			if spec := attrs["BYTERANGE"]; spec != "" {
+				initOffset, initLength, e = parseHLSRangeSpec(spec, 0, false)
+				if e != nil {
+					return result, e
+				}
 			}
 		case strings.HasPrefix(line, "#EXTINF:"):
 			value, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
@@ -152,7 +175,7 @@ func parseHLS(raw []byte, parent string) (hlsList, error) {
 		case line == "#EXT-X-DISCONTINUITY":
 			pendingDiscontinuity = true
 		case strings.HasPrefix(line, "#"):
-			// Metadata and timing tags are not forwarded to local FFmpeg.
+			// Timing and metadata tags are never forwarded to local FFmpeg.
 		default:
 			resolved, e := hlsResourceURL(parent, line)
 			if e != nil {
@@ -168,7 +191,20 @@ func parseHLS(raw []byte, parent string) (hlsList, error) {
 				if len(result.parts) >= maxHLSSegments {
 					return result, errors.New("HLS: слишком много сегментов")
 				}
-				result.parts = append(result.parts, hlsPart{url: resolved, initURL: initURL, duration: pendingDuration, discontinuity: pendingDiscontinuity})
+				part := hlsPart{url: resolved, initURL: initURL, initOffset: initOffset, initLength: initLength, duration: pendingDuration, discontinuity: pendingDiscontinuity}
+				if pendingRange != "" {
+					part.byteOffset, part.byteLength, e = parseHLSRangeSpec(pendingRange, previousEnd, previousURL == resolved)
+					if e != nil {
+						return result, e
+					}
+					previousEnd = part.byteOffset + part.byteLength
+					previousURL = resolved
+				} else {
+					previousEnd = 0
+					previousURL = ""
+				}
+				result.parts = append(result.parts, part)
+				pendingRange = ""
 				pendingDuration = -1
 				pendingDiscontinuity = false
 			}
@@ -177,7 +213,7 @@ func parseHLS(raw []byte, parent string) (hlsList, error) {
 	if err := scan.Err(); err != nil {
 		return result, errors.New("HLS: слишком длинная строка плейлиста")
 	}
-	if first || pendingVariant || pendingDuration >= 0 {
+	if first || pendingVariant || pendingDuration >= 0 || pendingRange != "" {
 		return result, errors.New("HLS: незавершённый плейлист")
 	}
 	if len(result.variants) > 0 && len(result.parts) > 0 {

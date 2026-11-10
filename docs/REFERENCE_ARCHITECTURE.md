@@ -64,3 +64,6 @@
 ### Адаптация Immich для потоковых форматов (SRC-IMM-01/04)
 
 **Конкретные исходники:** [Immich transcoding.service.ts](https://github.com/immich-app/immich/blob/main/server/src/services/transcoding.service.ts) — раздельная обработка видеосегментов, аудиодорожек, жизненный цикл FFmpeg; [Orbita players.ts](https://github.com/bezumkin/orbita/blob/main/frontend/src/utils/players.ts) — будущий адаптивный HLS-плеер. В нашей реализации `internal/server/hls_audio.go`, `dash.go` и обновлённый `hls.go` сохраняют конечные незашифрованные HLS/DASH в автономный MP4 через локальный remux. Остались DASH ranges, live, on-demand просмотр, реальная проверка Boosty, права для HLS-сегментов. Подробный статус — [ROADMAP.md](ROADMAP.md#этап-112-dash-vod-и-отдельные-аудиодорожки-hls).
+
+
+**Уточнение SRC-IMM-04 (HLS byte ranges):** реализован безопасный offline-remux сегментов по HTTP Range с полной проверкой `Content-Range`; `EXT-X-MAP` с диапазонами не передаёт CDN-ссылки FFmpeg. Плейлист хранится только локально, оригинал не удаляется. Сохраняются ограничения: LL-HLS, DASH SegmentBase/byte ranges и реальная проверка на Boosty/VPS ещё не завершены. Это адаптация подхода Immich к безопасному локальному хранению, без копирования его сервиса.

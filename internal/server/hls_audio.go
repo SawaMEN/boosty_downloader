@@ -206,7 +206,7 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	}
 	var playlist strings.Builder
 	playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:36000\n#EXT-X-MEDIA-SEQUENCE:0\n")
-	lastInit := ""
+	lastInitKey := ""
 	for i, part := range parts {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -214,15 +214,16 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 		if part.discontinuity {
 			playlist.WriteString("#EXT-X-DISCONTINUITY\n")
 		}
-		if part.initURL != "" && part.initURL != lastInit {
+		initKey := fmt.Sprintf("%s:%d:%d", part.initURL, part.initOffset, part.initLength)
+		if part.initURL != "" && initKey != lastInitKey {
 			name := fmt.Sprintf("%s-init-%06d.mp4", prefix, i)
-			n, e := fetchHLSSegment(ctx, fetch, part.initURL, filepath.Join(dir, name), maxArchiveMediaSize-*total)
+			n, e := fetchHLSRangeSegment(ctx, fetch, part.initURL, filepath.Join(dir, name), maxArchiveMediaSize-*total, part.initOffset, part.initLength)
 			if e != nil {
 				return "", e
 			}
 			*total += n
 			fmt.Fprintf(&playlist, "#EXT-X-MAP:URI=%q\n", name)
-			lastInit = part.initURL
+			lastInitKey = initKey
 		}
 		ext := strings.ToLower(filepath.Ext(strings.Split(part.url, "?")[0]))
 		switch ext {
@@ -231,7 +232,7 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 			ext = ".ts"
 		}
 		name := fmt.Sprintf("%s-segment-%06d%s", prefix, i, ext)
-		n, e := fetchHLSSegment(ctx, fetch, part.url, filepath.Join(dir, name), maxArchiveMediaSize-*total)
+		n, e := fetchHLSRangeSegment(ctx, fetch, part.url, filepath.Join(dir, name), maxArchiveMediaSize-*total, part.byteOffset, part.byteLength)
 		if e != nil {
 			return "", e
 		}
@@ -245,3 +246,4 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	}
 	return local, nil
 }
+
