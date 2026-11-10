@@ -23,7 +23,7 @@ func TestSubscriptionsPaginateAndFilter(t *testing.T) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 		list := make([]map[string]any, 0)
 		for i := offset; i < offset+100 && i < 103; i++ {
-			item := map[string]any{"blog": map[string]any{"blogUrl": fmt.Sprintf("author%03d", i), "title": fmt.Sprintf("Автор %d", i)}, "subscriptionLevel": map[string]any{"name": "Level"}, "price": 100, "isArchived": false}
+			item := map[string]any{"blog": map[string]any{"blogUrl": fmt.Sprintf("author%03d", i), "title": fmt.Sprintf("Автор %d", i)}, "subscriptionLevel": map[string]any{"name": "Level", "id": 12345}, "price": 100, "isArchived": false}
 			if i == 101 {
 				item["isArchived"] = true
 			}
@@ -45,7 +45,7 @@ func TestSubscriptionsPaginateAndFilter(t *testing.T) {
 	if requests != 2 || result.Partial || len(result.Authors) != 101 || result.Total != 103 {
 		t.Fatalf("pagination/filter mismatch: requests=%d result=%+v", requests, result)
 	}
-	if result.Authors[0].Blog != "author000" || !result.Authors[0].Paid {
+	if result.Authors[0].Blog != "author000" || !result.Authors[0].Paid || result.Authors[0].Price != 100 || result.Authors[0].LevelID != "12345" {
 		t.Errorf("bad first: %+v", result.Authors[0])
 	}
 }
