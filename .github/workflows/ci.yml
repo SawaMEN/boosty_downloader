@@ -23,7 +23,12 @@ jobs:
       - name: Check interface scripts
         run: node --check internal/server/ui/app.js && node --check internal/server/ui/library.js && node --check internal/server/ui/subscriptions.js && node --check internal/server/ui/admin.js && python3 tests/ui_contract.py
       - name: Check formatting
-        run: test -z "$(gofmt -l ./cmd ./internal)"
+        run: |
+          changed="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$changed" ]; then
+            printf "Files requiring gofmt:\n%s\n" "$changed"
+            exit 1
+          fi
       - name: Check shell syntax
         run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps
       - name: Vet
