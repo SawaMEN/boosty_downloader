@@ -90,7 +90,17 @@ func (c *Client) Subscriptions(ctx context.Context) (SubscriptionList, error) {
 			if title == "" {
 				title = slug
 			}
-			levelID := strings.Trim(string(item.Level.ID), "\"")
+			// IDs are optional and have appeared as both JSON strings and numbers.
+			// Treat JSON null/malformed values as unknown, never as a tier.
+			levelID := ""
+			if len(item.Level.ID) > 0 && string(item.Level.ID) != "null" {
+				if item.Level.ID[0] == '"' {
+					_ = json.Unmarshal(item.Level.ID, &levelID)
+				} else {
+					levelID = string(item.Level.ID)
+				}
+			}
+			levelID = strings.TrimSpace(levelID)
 			if len(levelID) > 80 || (levelID != "" && !safeSegment(levelID)) {
 				levelID = ""
 			}
