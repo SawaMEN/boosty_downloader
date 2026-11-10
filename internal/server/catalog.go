@@ -21,6 +21,7 @@ type catalogPage struct {
 	PerPage int           `json:"perPage"`
 	Pages   int           `json:"pages"`
 }
+
 func catalogNumber(s string, fallback, low, high int) (int, bool) {
 	if s == "" {
 		return fallback, true
@@ -159,7 +160,7 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 	total := len(items)
 	pages := (total + perPage - 1) / perPage
 	start := total
-	if page - 1 <= total / perPage {
+	if page-1 <= total/perPage {
 		start = (page - 1) * perPage
 		if start > total {
 			start = total

@@ -22,7 +22,7 @@ func TestCatalogProtectsSharedPostsAndPages(t *testing.T) {
 	jobs := []Job{
 		{ID: "000000000000000000000001", OwnerID: "admin", Title: "First", Author: "artist", State: "done", CreatedAt: base, ArchiveUpdatedAt: base, SharedForAll: true, Error: "private worker error"},
 		{ID: "000000000000000000000002", OwnerID: "admin", Title: "Second", Author: "artist", State: "partial", CreatedAt: base.Add(time.Hour), ArchiveUpdatedAt: base.Add(time.Hour), SharedWith: []string{user.ID}},
-		{ID: "000000000000000000000003", OwnerID: "admin", Title: "Secret", Author: "private", State: "done", CreatedAt: base.Add(2*time.Hour)},
+		{ID: "000000000000000000000003", OwnerID: "admin", Title: "Secret", Author: "private", State: "done", CreatedAt: base.Add(2 * time.Hour)},
 	}
 	for _, job := range jobs {
 		if err := app.store.upsert(job); err != nil {
@@ -67,7 +67,7 @@ func TestCatalogProtectsSharedPostsAndPages(t *testing.T) {
 		t.Fatalf("incorrect filtering/sorting: %+v", p)
 	}
 	for _, bad := range []string{"scope=invalid", "page=0", "perPage=101", "sort=bad", "order=bad", "status=bogus"} {
-		request(alice, "/api/catalog?" + bad, 400)
+		request(alice, "/api/catalog?"+bad, 400)
 	}
 	request(nil, "/api/catalog?scope=shared", 401)
 }
