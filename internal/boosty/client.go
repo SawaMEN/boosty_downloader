@@ -134,10 +134,10 @@ type PlayerURL struct {
 // differs from the viewer's own subscribed tier. All fields are observational:
 // the server must still verify Post.HasAccess with that specific account.
 type PostRequirement struct {
-	TierName          string  `json:"tierName,omitempty"`
-	TierPrice         float64 `json:"tierPrice,omitempty"`
-	SinglePurchase    float64 `json:"singlePurchase,omitempty"`
-	Source            string  `json:"source"`
+	TierName       string  `json:"tierName,omitempty"`
+	TierPrice      float64 `json:"tierPrice,omitempty"`
+	SinglePurchase float64 `json:"singlePurchase,omitempty"`
+	Source         string  `json:"source"`
 }
 
 func ParsePostRequirement(raw json.RawMessage) *PostRequirement {
