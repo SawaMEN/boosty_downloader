@@ -5,7 +5,15 @@ MODE_FILE="$ETC/mode"
 PROJECT=/opt/boosty-downloader
 mode() { if [[ -r "$MODE_FILE" ]]; then cat "$MODE_FILE"; else echo none; fi; }
 need_root() { if [[ ${EUID:-$(id -u)} -ne 0 ]]; then echo 'Запустите через sudo.' >&2; exit 1; fi; }
-docker_cmd() { docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" "$@"; }
+docker_cmd() {
+ local -a files=(-f "$PROJECT/compose.yaml")
+ local mode="$(cat "$ETC/video-mode" 2>/dev/null || echo none)"
+ case "$mode" in
+ amd|intel) [[ -f "$PROJECT/compose.gpu-amd.yaml" ]] && files+=(-f "$PROJECT/compose.gpu-amd.yaml");;
+ nvidia) [[ -f "$PROJECT/compose.gpu-nvidia.yaml" ]] && files+=(-f "$PROJECT/compose.gpu-nvidia.yaml");;
+ esac
+ docker compose --project-directory "$PROJECT" "${files[@]}" "$@"
+}
 operate() {
  local cmd="$1" kind; kind="$(mode)"
  case "$kind" in

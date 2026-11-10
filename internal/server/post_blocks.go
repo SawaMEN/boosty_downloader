@@ -48,8 +48,12 @@ type archiveBlock struct {
 // Missing or excluded media are explicitly shown as unavailable.
 func archiveContentBlocks(post *boosty.Post, captured []ArchiveAsset) []archiveBlock {
 	available := make(map[string]ArchiveAsset, len(captured))
+	derived := make(map[string]ArchiveAsset)
 	for _, a := range captured {
 		available[a.Filename] = a
+		if a.Type == "transcoded_video" && a.SourceFile != "" && a.SourceSHA256 != "" {
+			derived[a.SourceFile] = a
+		}
 	}
 	media := boosty.ExtractMedia(post)
 	out := make([]archiveBlock, 0, len(post.Data))
@@ -63,6 +67,11 @@ func archiveContentBlocks(post *boosty.Post, captured []ArchiveAsset) []archiveB
 			name := boosty.MediaName(media[b.Index], b.Index)
 			if a, ok := available[name]; ok && a.Type == b.Type {
 				copied := a
+				if b.Type == "ok_video" {
+					if alt, ok := derived[name]; ok && alt.SourceSHA256 == a.SHA256 {
+						copied = alt
+					}
+				}
 				block.Asset = &copied
 			} else {
 				block.Missing = true

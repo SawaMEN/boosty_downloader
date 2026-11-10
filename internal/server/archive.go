@@ -16,11 +16,13 @@ import (
 )
 
 type ArchiveAsset struct {
-	Filename string `json:"filename"`
-	Type     string `json:"type"`
-	Title    string `json:"title"`
-	Size     int64  `json:"size"`
-	SHA256   string `json:"sha256,omitempty"`
+	Filename     string `json:"filename"`
+	Type         string `json:"type"`
+	Title        string `json:"title"`
+	Size         int64  `json:"size"`
+	SHA256       string `json:"sha256,omitempty"`
+	SourceFile   string `json:"sourceFile,omitempty"`
+	SourceSHA256 string `json:"sourceSha256,omitempty"`
 }
 type ArchiveManifest struct {
 	Title           string         `json:"title"`

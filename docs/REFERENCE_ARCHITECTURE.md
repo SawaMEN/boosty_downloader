@@ -9,6 +9,7 @@
 | [wpt/b00p](https://github.com/wpt/b00p) | Надёжная докачка, контроль целостности, ограничения комментариев Boosty | SHA-256, HTTP Range/If-Range, partial-статусы | Backoff, обновление истёкших CDN URL |
 | [bezumkin/orbita](https://github.com/bezumkin/orbita) | **Весь сайт:** посты, каталог, фильтры, вложения, комментарии, Vidstack/HLS, медиа | Посты и медиа, права и общий каталог | Поиск с пагинацией, плеер, уведомления |
 | [WordPress/wordpress-develop](https://github.com/WordPress/wordpress-develop) | **Весь сайт:** роли и capabilities, REST ACL, ревизии, корзина, медиатека, фоновые задания, резервные копии, обновления | Аккаунты, серверные политики, фоновая синхронизация | Ревизии, корзина, журнал аудита, резервные копии и rollback |
+| [immich-app/immich](https://github.com/immich-app/immich) | Архитектура медиасервера, отдельный конвейер видео, выбор VA-API/QSV/NVENC, проверка GPU на практике, админ-политики, оригиналы без изменений | Первая версия FFmpeg worker, ручные/фоновые задачи, программный fallback, GPU overlays, диагностика | HLS/DASH, GPU decode, HDR и полноценное управление ресурсами/очередями |
 | [ip7z/7zip](https://github.com/ip7z/7zip) | Архиваторы, кодеки, время/память при распаковке | Zstd JSON, SHA-256 dedup для медиа | Квоты, миграции старых файлов |
 
 Дополнительно изучены [Glitchy-Sheep/boosty-downloader](https://github.com/Glitchy-Sheep/boosty-downloader), [sormy/boosty-downloader](https://github.com/sormy/boosty-downloader), yt-dlp как опциональный fallback.

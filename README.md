@@ -168,3 +168,8 @@ API (доступен только администратору): `GET/PUT /api/
 ## Источники архитектуры всего сайта
 
 Загрузчики [lowfc](https://github.com/lowfc/boosty_downloader), [ath31st](https://github.com/ath31st/boosty_downloader), [wpt/b00p](https://github.com/wpt/b00p), а также [Orbita](https://github.com/bezumkin/orbita), [WordPress](https://github.com/WordPress/wordpress-develop) и 7-Zip учитываются при проектировании публикаций, каталога, прав пользователей, комментариев, медиа, фоновых задач и обновлений. Таблица решений и ограничений лицензий: [docs/REFERENCE_ARCHITECTURE.md](docs/REFERENCE_ARCHITECTURE.md).
+
+
+### Обработка видео и GPU
+
+Отдельные версии видео создаются только после явного включения в **настройках администратора**. Исходные файлы остаются нетронутыми. Доступны CPU, AMD VA-API (включая Radeon Vega 7), NVIDIA NVENC и Intel QSV с автоматическим пробным кодированием; установка драйверов и проброс GPU должны выполняться на хосте отдельно. Подробная инструкция для native/systemd и Docker: [docs/VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).

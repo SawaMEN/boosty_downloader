@@ -50,6 +50,7 @@ type accountFile struct {
 	MaxImportPosts     int                        `json:"maxImportPosts,omitempty"`
 	CompressionLevel   *int                       `json:"compressionLevel,omitempty"`
 	DeduplicateMedia   *bool                      `json:"deduplicateMedia,omitempty"`
+	VideoPolicy        *VideoPolicy               `json:"videoPolicy,omitempty"`
 }
 type Accounts struct {
 	mu     sync.Mutex

@@ -13,6 +13,6 @@ install -m 0640 -o root -g boosty-downloader "$certdir/fullchain.pem" "$ETC/tls/
 install -m 0640 -o root -g boosty-downloader "$certdir/privkey.pem" "$ETC/tls/privkey.pem"
 mode="$(cat "$ETC/mode" 2>/dev/null || echo none)"
 if [[ "$mode" == native ]];then systemctl restart boosty-downloader.service
-elif [[ "$mode" == docker ]];then docker compose --project-directory /opt/boosty-downloader -f /opt/boosty-downloader/compose.yaml restart
+elif [[ "$mode" == docker ]];then /usr/local/bin/bdy restart
 fi
 echo 'Сертификаты Boosty Downloader обновлены.'

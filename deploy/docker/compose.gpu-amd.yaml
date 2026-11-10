@@ -1,0 +1,10 @@
+# Optional GPU overlay: AMD Radeon (Vega, RDNA) or Intel through /dev/dri.
+# Choose vaapi for AMD and qsv for Intel in the administrator UI.
+# Set BD_RENDER_GID to the host render-device GID (stat -c '%g' /dev/dri/renderD128).
+# Run: docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.gpu-amd.yaml up -d --build
+services:
+  boosty-downloader:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${BD_RENDER_GID:?Set BD_RENDER_GID from stat -c %g /dev/dri/renderD128}"

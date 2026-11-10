@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Optional host-side video support. No surprise driver upgrades on the production VPS.
+set -Eeuo pipefail
+mode="${1:-check}"
+case "$mode" in check|amd|intel|nvidia) ;; *) echo 'Использование: boosty-video-deps [check|amd|intel|nvidia]' >&2; exit 2;; esac
+if [[ "$(uname -s)" != Linux ]]; then echo 'Скрипт предназначен для Linux.' >&2;exit 1;fi
+if [[ "$mode" != check ]]; then
+  if [[ ${EUID:-$(id -u)} -ne 0 ]];then echo 'Для установки: sudo bash deploy/boosty-video-deps amd|intel|nvidia' >&2;exit 1;fi
+  if command -v apt-get >/dev/null;then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg vainfo
+    if [[ "$mode" == amd ]];then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y mesa-va-drivers
+      if [[ -r /etc/os-release ]];then
+        # Debian ships AMD firmware in non-free-firmware. Ubuntu distributes it via linux-firmware.
+        . /etc/os-release
+        if [[ "${ID:-}" == debian ]] && apt-cache show firmware-amd-graphics >/dev/null 2>&1;then
+          DEBIAN_FRONTEND=noninteractive apt-get install -y firmware-amd-graphics
+        fi
+      fi
+    elif [[ "$mode" == intel ]];then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y intel-media-va-driver
+    else
+      echo 'Драйвер NVIDIA устанавливается отдельно, согласно инструкции NVIDIA для вашей GPU и дистрибутива.'
+      echo 'Для Docker дополнительно требуется NVIDIA Container Toolkit; драйверы не устанавливаются этим скриптом.'
+    fi
+  elif command -v dnf >/dev/null;then
+    dnf install -y ffmpeg libva-utils
+    if [[ "$mode" == amd ]];then dnf install -y mesa-va-drivers;fi
+  else
+    echo 'Автоустановка поддерживает apt и dnf. Установите ffmpeg и VA-API пакеты дистрибутива вручную.' >&2
+    exit 1
+  fi
+  if [[ "$mode" == amd || "$mode" == intel ]] && id boosty-downloader >/dev/null 2>&1;then
+    for group in video render;do if getent group "$group" >/dev/null;then usermod -aG "$group" boosty-downloader;fi;done
+    echo 'Добавлены группы доступа к GPU. Перезапустите: systemctl restart boosty-downloader'
+  fi
+fi
+printf '\nСистемная диагностика видео:\n'
+command -v ffmpeg && ffmpeg -hide_banner -version | head -n1 || true
+command -v ffprobe || true
+if command -v ffmpeg >/dev/null;then
+  ffmpeg -hide_banner -encoders 2>/dev/null | grep -E '(^ |^  ).*(h264_(vaapi|nvenc|qsv)|hevc_(vaapi|nvenc|qsv)|libx264|libx265)' || true
+fi
+ls -l /dev/dri/renderD* /dev/nvidia0 2>/dev/null || true
+if command -v vainfo >/dev/null;then vainfo --display drm --device /dev/dri/renderD128 2>&1 | head -n35 || true;fi
+if command -v nvidia-smi >/dev/null;then nvidia-smi -L || true;fi
+printf '\nДля реальной проверки кодирования откройте Настройки → Видео → Диагностика GPU в панели администратора.\n'

@@ -70,6 +70,10 @@ func (a *Accounts) initializePolicy(initial time.Duration) error {
 		enabled := true
 		a.data.DeduplicateMedia = &enabled
 	}
+	if a.data.VideoPolicy == nil {
+		defaults := defaultVideoPolicy()
+		a.data.VideoPolicy = &defaults
+	}
 	if a.data.MaxScanPosts == 0 {
 		a.data.MaxScanPosts = 50
 	}
@@ -115,6 +119,7 @@ type AdminPolicy struct {
 	RegistrationOpen  bool            `json:"registrationOpen"`
 	CompressionLevel  int             `json:"compressionLevel"`
 	DeduplicateMedia  bool            `json:"deduplicateMedia"`
+	Video             VideoPolicy     `json:"video"`
 }
 
 func (a *Accounts) policy() AdminPolicy {
@@ -135,10 +140,17 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.DeduplicateMedia != nil {
 		dedup = *a.data.DeduplicateMedia
 	}
-	return AdminPolicy{Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup}
+	video := defaultVideoPolicy()
+	if a.data.VideoPolicy != nil {
+		video = *a.data.VideoPolicy
+	}
+	return AdminPolicy{Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
 }
 
 func validatePolicy(p AdminPolicy) error {
+	if err := validateVideoPolicy(p.Video); err != nil {
+		return err
+	}
 	if p.CompressionLevel < 0 || p.CompressionLevel > 19 {
 		return errors.New("уровень Zstandard должен быть от 0 до 19; 0 отключает сжатие")
 	}
@@ -176,6 +188,7 @@ func (a *Accounts) changePolicy(p AdminPolicy) error {
 	a.data.RegistrationOpen = p.RegistrationOpen
 	a.data.CompressionLevel = &p.CompressionLevel
 	a.data.DeduplicateMedia = &p.DeduplicateMedia
+	a.data.VideoPolicy = &p.Video
 	if err := a.saveLocked(); err != nil {
 		a.data = before
 		return err

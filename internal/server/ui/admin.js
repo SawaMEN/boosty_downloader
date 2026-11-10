@@ -74,6 +74,17 @@ async function loadAdminPanel(){
     $('adminMaxImport').value=String(p.maxImportPosts);
     $('adminCompressionLevel').value=String(p.compressionLevel);
     $('adminDeduplicateMedia').checked=p.deduplicateMedia;
+    const v=p.video||{};
+    $('adminVideoEnabled').checked=Boolean(v.enabled);
+    $('adminVideoAutomatic').checked=Boolean(v.automatic);
+    $('adminVideoBackend').value=v.backend||'auto';
+    $('adminVideoCodec').value=v.codec||'h264';
+    $('adminVideoQuality').value=String(v.quality||26);
+    $('adminVideoHeight').value=String(v.maxHeight??1080);
+    $('adminVideoFallback').checked=Boolean(v.fallbackCpu);
+    $('adminVideoOnlySmaller').checked=Boolean(v.onlySmaller);
+    loadVideoReport(false);
+
     $('adminDefaults').replaceChildren();
     for(const key of Object.keys(capabilityLabels)){
       $('adminDefaults').append(flagControl(key,p.defaults[key],checked=>{currentPolicy.defaults[key]=checked}));
@@ -109,7 +120,10 @@ async function savePolicy(){
   const button=$('adminSavePolicy');button.disabled=true;
   const data={defaults:currentPolicy.defaults,registrationOpen:$('adminRegistration').checked,
     syncIntervalHours:Number($('adminSyncHours').value),maxScanPosts:Number($('adminMaxScan').value),maxImportPosts:Number($('adminMaxImport').value),
-    compressionLevel:Number($('adminCompressionLevel').value),deduplicateMedia:$('adminDeduplicateMedia').checked};
+    compressionLevel:Number($('adminCompressionLevel').value),deduplicateMedia:$('adminDeduplicateMedia').checked,
+    video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
+      codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
+      fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked}};
   try{
     currentPolicy=await api('/api/admin/policy',{method:'PUT',body:data});
     state.user=await api('/api/account');
@@ -123,7 +137,55 @@ async function saveUserRights(){
   try{await api(`/api/admin/users/${encodeURIComponent(id)}/permissions`,{method:'PUT',body:{overrides:editedOverrides}});toast('Индивидуальные разрешения сохранены');await loadAdminPanel();}
   catch(error){toast(error.message,true)}finally{button.disabled=false}
 }
+let videoArchives=[];
+function selectAdminVideoArchive(){
+  const id=$('adminVideoArchive').value;
+  const entry=videoArchives.find(a=>a.id===id);
+  $('adminVideoFile').replaceChildren();
+  for(const name of entry?.files||[]){const option=el('option');option.value=name;option.textContent=name;$('adminVideoFile').append(option)}
+  $('adminVideoConvert').disabled=!entry || !(entry.files||[]).length;
+}
+async function loadVideoReport(active){
+  if(!state.user?.admin)return;
+  const button=$('adminVideoProbe');button.disabled=true;
+  $('adminVideoDiagnostics').replaceChildren(text('p',active?'Проверка кодеков и устройств…':'Загружаем оборудование…','muted'));
+  try{
+    const data=await api('/api/admin/video'+(active?'?probe=1':''));
+    const diag=data.diagnostics||{};
+    const root=$('adminVideoDiagnostics');root.replaceChildren();
+    root.append(text('p',`FFmpeg: ${diag.ffmpeg||'не установлен'} · FFprobe: ${diag.ffprobe?'есть':'нет'} · /dev/dri: ${(diag.renderDevices||[]).join(', ')||'нет'}`,'muted small'));
+    const table=el('div','video-diagnostics-list');
+    for(const b of diag.backends||[]){
+      const item=el('div','video-diagnostic-row');
+      item.append(text('strong',`${b.name.toUpperCase()} · ${b.encoder}`));
+      item.append(text('span',`${b.available?'Готов':b.reason||'Требуется проверка'}${b.device?' · '+b.device:''}`,b.available?'rights-on':'muted small'));
+      table.append(item);
+    }
+    root.append(table);
+    const previous=$('adminVideoArchive').value;
+    videoArchives=data.archives||[];
+    $('adminVideoArchive').replaceChildren();
+    for(const entry of videoArchives){const o=el('option');o.value=entry.id;o.textContent=`${entry.title||entry.author} · ${entry.owner} · ${entry.files.length} видео`;$('adminVideoArchive').append(o)}
+    if(videoArchives.some(v=>v.id===previous))$('adminVideoArchive').value=previous;
+    selectAdminVideoArchive();
+    const task=$('adminVideoTasks');task.replaceChildren();
+    const jobs=Object.entries(data.jobs||{}).sort((a,b)=>new Date(b[1].updatedAt)-new Date(a[1].updatedAt)).slice(0,12);
+    if(jobs.length)task.append(text('h4','Последние задачи кодирования'));
+    for(const [id,item] of jobs){task.append(text('p',`${item.state==='done'?'Готово':item.state==='running'?'Обработка':item.state==='skipped'?'Пропущено':'Ошибка'} · ${id} · ${item.backend||''} · ${item.message||''}`,'muted small'))}
+  }catch(e){$('adminVideoDiagnostics').replaceChildren(text('p',e.message,'error'))}
+  finally{button.disabled=false}
+}
+async function enqueueAdminVideo(){
+  const id=$('adminVideoArchive').value,filename=$('adminVideoFile').value;
+  if(!id||!filename)return;
+  const btn=$('adminVideoConvert');btn.disabled=true;
+  try{await api(`/api/admin/video/jobs/${encodeURIComponent(id)}`,{method:'POST',body:{filename}});toast('Перекодирование добавлено в очередь. Исходный файл сохранится.');await loadVideoReport(false)}
+  catch(e){toast(e.message,true)}finally{btn.disabled=false}
+}
 function adminEvents(){
+  $('adminVideoProbe').onclick=()=>loadVideoReport(true);
+  $('adminVideoArchive').onchange=selectAdminVideoArchive;
+  $('adminVideoConvert').onclick=enqueueAdminVideo;
   $('adminSavePolicy').onclick=savePolicy;
   $('adminReloadPolicy').onclick=loadAdminPanel;
   $('adminUserPicker').onchange=selectPolicyUser;

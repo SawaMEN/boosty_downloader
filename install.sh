@@ -31,6 +31,14 @@ if [[ "$MODE" == native ]] && ! command -v zstd >/dev/null 2>&1; then
   else echo 'Установите пакет zstd и повторите установку.' >&2; exit 1; fi
 fi
 if ! id boosty-downloader >/dev/null 2>&1;then command -v useradd >/dev/null || { echo 'Требуется useradd.' >&2;exit 1; };useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin boosty-downloader;fi
+# Video components are optional. Explicit BD_VIDEO_ACCEL opt-in is required
+# for the first installation; later installations retain the chosen backend.
+VIDEO_ACCEL="${BD_VIDEO_ACCEL:-$(cat "$ETC/video-mode" 2>/dev/null || echo none)}"
+case "$VIDEO_ACCEL" in none|amd|intel|nvidia) ;; *) echo 'BD_VIDEO_ACCEL: none, amd, intel или nvidia' >&2;exit 1;; esac
+if [[ "$MODE" == native && "$VIDEO_ACCEL" != none ]];then
+  bash "$ROOT/deploy/boosty-video-deps" "$VIDEO_ACCEL"
+fi
+
 install -d -m 0750 -o root -g boosty-downloader "$ETC"
 install -d -m 0700 -o boosty-downloader -g boosty-downloader "$DATA"
 install -d -m 0750 -o root -g boosty-downloader "$ETC/tls"
@@ -181,19 +189,32 @@ else
   install -d -m 0755 "$PROJECT/deploy/docker"
   cp "$ROOT/deploy/docker/Dockerfile" "$PROJECT/deploy/docker/Dockerfile"
   cp "$ROOT/deploy/docker/compose.yaml" "$PROJECT/compose.yaml"
+  cp "$ROOT/deploy/docker/compose.gpu-amd.yaml" "$PROJECT/compose.gpu-amd.yaml"
+  cp "$ROOT/deploy/docker/compose.gpu-nvidia.yaml" "$PROJECT/compose.gpu-nvidia.yaml"
+  compose_files=(-f "$PROJECT/compose.yaml")
+  if [[ "$VIDEO_ACCEL" == amd || "$VIDEO_ACCEL" == intel ]];then
+    [[ -c /dev/dri/renderD128 ]] || { echo 'Нет /dev/dri/renderD128. Настройте Mesa и GPU хоста.' >&2;exit 1; }
+    compose_files+=(-f "$PROJECT/compose.gpu-amd.yaml")
+    BD_RENDER_GID="$(stat -c '%g' /dev/dri/renderD128)"
+    export BD_RENDER_GID
+  elif [[ "$VIDEO_ACCEL" == nvidia ]];then
+    compose_files+=(-f "$PROJECT/compose.gpu-nvidia.yaml")
+  fi
   id_num="$(id -u boosty-downloader)";group_num="$(id -g boosty-downloader)"
   publish_ip="0.0.0.0";[[ "$PUBLIC_HOST" != 127.0.0.1 ]] || publish_ip="127.0.0.1"
-  printf 'BD_UID=%s\nBD_GID=%s\nBD_PORT=%s\nBD_PUBLISH_IP=%s\n' "$id_num" "$group_num" "$PORT" "$publish_ip" > "$PROJECT/.env"
+  printf 'BD_UID=%s\nBD_GID=%s\nBD_PORT=%s\nBD_PUBLISH_IP=%s\nBD_RENDER_GID=%s\n' "$id_num" "$group_num" "$PORT" "$publish_ip" "${BD_RENDER_GID:-0}" > "$PROJECT/.env"
   chmod 0600 "$PROJECT/.env"
-  docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" build
+  docker compose --project-directory "$PROJECT" "${compose_files[@]}" build
   if [[ "$oldmode" == native ]];then systemctl stop boosty-downloader.service;fi
-  if ! docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" up -d;then
+  if ! docker compose --project-directory "$PROJECT" "${compose_files[@]}" up -d;then
     echo 'Не удалось запустить Docker. Проверяйте docker compose logs.' >&2
     if [[ "$oldmode" == native ]];then systemctl start boosty-downloader.service || true;fi
     exit 1
   fi
   systemctl disable boosty-downloader.service >/dev/null 2>&1 || true
 fi
+printf '%s\n' "$VIDEO_ACCEL" > "$ETC/video-mode"
+chmod 0640 "$ETC/video-mode"
 printf '%s\n' "$MODE" > "$ETC/mode"
 chmod 0640 "$ETC/mode"
 if [[ -f "$ETC/tls/mode" && "$(cat "$ETC/tls/mode")" == letsencrypt ]];then

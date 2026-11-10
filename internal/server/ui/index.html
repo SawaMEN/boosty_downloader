@@ -72,6 +72,27 @@
               </label>
               <label class="check"><input id="adminDeduplicateMedia" type="checkbox" checked><span><strong>Не хранить одинаковые файлы дважды</strong><small>Одинаковые SHA-256 хранятся одним объектом на диске с отдельными ссылками для постов.</small></span></label>
             </div>
+            <h3>Видео: FFmpeg и аппаратное ускорение</h3>
+            <p class="muted small">На основе подхода Immich: источник всегда сохраняется отдельно. Для Ryzen 5 5600H / Vega 7 предпочтителен VA-API и H.264, NVIDIA использует NVENC, Intel — QSV. Без проверки драйвера доступность не гарантируется.</p>
+            <div class="policy-controls">
+              <label class="check"><input type="checkbox" id="adminVideoEnabled"><span><strong>Разрешить создание дополнительных версий видео</strong><small>Исходное видео не удаляется и не перезаписывается.</small></span></label>
+              <label class="check"><input type="checkbox" id="adminVideoAutomatic"><span><strong>Автоматически обрабатывать архивы в фоне</strong><small>Сначала завершить скачивание, затем создать совместимую копию; после перезапуска очередь восстанавливается.</small></span></label>
+              <label>Ускоритель<select id="adminVideoBackend"><option value="auto">Авто — проверить и выбрать</option><option value="vaapi">AMD / VA-API</option><option value="qsv">Intel Quick Sync</option><option value="nvenc">NVIDIA NVENC</option><option value="cpu">CPU / программное кодирование</option></select></label>
+              <label>Кодек вывода<select id="adminVideoCodec"><option value="h264">H.264 — лучшая совместимость</option><option value="hevc">HEVC / H.265 — эффективнее, но не все браузеры поддерживают</option></select></label>
+              <label>Качество (16–40)<input type="number" id="adminVideoQuality" min="16" max="40" value="26"><small>Меньше — выше качество и больший размер.</small></label>
+              <label>Максимальная высота<select id="adminVideoHeight"><option value="0">Исходное разрешение</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option></select></label>
+              <label class="check"><input id="adminVideoFallback" type="checkbox" checked><span><strong>Использовать CPU при проблеме с GPU</strong><small>FFmpeg автоматически переключится на программный кодек.</small></span></label>
+              <label class="check"><input id="adminVideoOnlySmaller" type="checkbox" checked><span><strong>Сохранять только уменьшившиеся файлы</strong><small>Если перекодированная копия больше исходника — удалить копию. Отключите для совместимости браузеров.</small></span></label>
+            </div>
+            <div class="video-diagnostic-tools"><button class="btn subtle" id="adminVideoProbe" type="button">Диагностика GPU и FFmpeg</button><p class="muted small">Проверяет доступ к устройству пробным кодированием одного кадра. Никакие пакеты не устанавливаются без разрешения владельца VPS.</p></div>
+            <div id="adminVideoDiagnostics" class="video-diagnostics" role="status"></div>
+            <h4>Ручное создание версии видео</h4>
+            <div class="policy-controls">
+              <label>Архив с видео<select id="adminVideoArchive"></select></label>
+              <label>Файл<select id="adminVideoFile"></select></label>
+            </div>
+            <button class="btn subtle" id="adminVideoConvert" type="button">Добавить видео в очередь</button>
+            <div id="adminVideoTasks" class="video-diagnostics"></div>
             <h3>Разрешения по умолчанию</h3><p class="muted small">Действуют для обычных пользователей, если для них не заданы персональные исключения. Администратор имеет все права.</p>
             <div id="adminDefaults" class="check-grid policy-grid"></div>
             <button class="btn primary" id="adminSavePolicy">Сохранить настройки сервера</button>

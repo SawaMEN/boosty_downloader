@@ -45,6 +45,10 @@ type App struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 	wg                 sync.WaitGroup
+	videoQueue         chan VideoTask
+	videoMu            sync.Mutex
+	videoStatuses      map[string]VideoJobStatus
+	videoFailures      map[string]time.Time
 }
 
 func New(cfg Config) (*App, error) {
@@ -72,12 +76,13 @@ func New(cfg Config) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), ctx: ctx, cancel: cancel}
-	a.wg.Add(4)
+	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), ctx: ctx, cancel: cancel}
+	a.wg.Add(5)
 	go func() { defer a.wg.Done(); a.worker() }()
 	go func() { defer a.wg.Done(); a.importWorker() }()
 	go func() { defer a.wg.Done(); a.syncLoop() }()
 	go func() { defer a.wg.Done(); a.importSyncLoop() }()
+	go func() { defer a.wg.Done(); a.videoWorker() }()
 	for _, id := range s.queued() {
 		a.queueJob(id)
 	}
@@ -119,6 +124,12 @@ func (a *App) worker() {
 			return
 		case id := <-a.queue:
 			a.runJob(id)
+			if a.accounts.policy().Video.Enabled && a.accounts.policy().Video.Automatic {
+				select {
+				case a.videoQueue <- VideoTask{JobID: id}:
+				default:
+				}
+			}
 		}
 	}
 }
@@ -218,6 +229,8 @@ func (a *App) Handler() http.Handler {
 		setSessionCookie(w, "", -1)
 		reply(w, 200, map[string]bool{"ok": true})
 	})
+	private.HandleFunc("GET /api/admin/video", a.videoAdmin)
+	private.HandleFunc("POST /api/admin/video/jobs/{id}", a.videoEnqueue)
 	private.HandleFunc("GET /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("PUT /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("GET /api/admin/users", a.adminUsers)
