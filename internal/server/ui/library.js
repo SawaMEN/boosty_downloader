@@ -223,6 +223,47 @@ async function refreshTrash() {
     }
   }catch(err){node.replaceChildren();node.append(text('p','Не удалось загрузить корзину','error'));toast(err.message,true);}
 }
+let activeRevisionJobID='';
+
+async function openRevisionsDialog(job){
+  activeRevisionJobID=job.id;
+  $('revisionsDialogTitle').textContent='Версии: '+(job.title||job.postId);
+  $('revisionsDialog').hidden=false;
+  await refreshRevisions();
+}
+
+async function refreshRevisions(){
+  if(!activeRevisionJobID)return;
+  const node=$('revisionsList');node.replaceChildren(text('p','Загрузка истории…','muted'));
+  const owner=activeRevisionJobID;
+  try{
+    const versions=await api('/api/jobs/'+encodeURIComponent(owner)+'/revisions');
+    if(owner!==activeRevisionJobID)return;
+    node.replaceChildren();
+    if(!versions.length){
+      node.append(empty('История пока пуста','Предыдущие версии появятся после обновления сохранённого поста.'));
+      return;
+    }
+    for(const version of versions){
+      const row=el('div','participant-row');
+      const info=el('div');
+      info.append(text('strong',version.title||'Предыдущая версия'));
+      info.append(text('p',(version.capturedAt?new Date(version.capturedAt).toLocaleString('ru-RU'):'Дата неизвестна')+' · файлов: '+version.assetCount,'muted small'));
+      if(version.subscription)info.append(text('p','Подписка при сохранении: '+(version.subscription.level||'уровень не указан'),'muted small'));
+      const actions=el('div','job-buttons');
+      actions.append(safeLink('Просмотр','/library/'+encodeURIComponent(owner)+'/revisions/'+encodeURIComponent(version.id)+'/index.html'));
+      if(permissionValue('createArchives'))actions.append(libraryAction('Восстановить',async()=>{
+        if(!confirm('Вернуть версию от '+new Date(version.capturedAt).toLocaleString('ru-RU')+'? Текущая копия сохранится в истории, прежние общие разрешения будут отозваны, автоматическая синхронизация отключится.'))return;
+        try{
+          await api('/api/jobs/'+encodeURIComponent(owner)+'/revisions/'+encodeURIComponent(version.id)+'/restore',{method:'POST'});
+          toast('Версия восстановлена; общий доступ отозван.');
+          await refreshRevisions();await refreshJobs();await refreshShared();
+        }catch(e){toast(e.message,true)}
+      }));
+      row.append(info,actions);node.append(row);
+    }
+  }catch(e){node.replaceChildren(text('p','Не удалось прочитать версии','error'));toast(e.message,true)}
+}
 function libraryEvents() {
   $('archiveAuthorFilter').addEventListener('change',ev=>{archiveFilter=ev.target.value;refreshLibraryCatalog(true)});
   let catalogTimer;
@@ -232,6 +273,8 @@ function libraryEvents() {
   $('archiveNext').addEventListener('click',()=>{if(libraryCatalogPage<libraryCatalogPages){libraryCatalogPage++;refreshLibraryCatalog()}});
   $('deleteAuthorArchives').addEventListener('click',deleteAuthorArchives);
   $('refreshTrash').addEventListener('click',refreshTrash);
+  $('closeRevisions').addEventListener('click',()=>{$('revisionsDialog').hidden=true;activeRevisionJobID='';});
+  $('revisionsDialog').addEventListener('click',event=>{if(event.target===$('revisionsDialog')){$('revisionsDialog').hidden=true;activeRevisionJobID='';}});
   $('saveAuthorForm').addEventListener('submit',e=>{e.preventDefault();pinAuthor($('saveAuthorInput').value);$('saveAuthorInput').value=''});
   $('pinFeedAuthor').addEventListener('click',()=>pinAuthor(state.feedAuthor));
   $('refreshShared').addEventListener('click',refreshShared);

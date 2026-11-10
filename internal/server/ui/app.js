@@ -47,6 +47,7 @@ function buildJob(j, shared=false){const item=el('article','job-item');item.appe
  }
  if(!shared && ['done','partial'].includes(j.state)) {
   actions.append(libraryAction('Проверить файлы',()=>verifyArchiveUI(j)));
+  actions.append(libraryAction('История версий',()=>openRevisionsDialog(j)));
   if(permissionValue('shareDirect')||permissionValue('sharePublic')) actions.append(libraryAction('Поделиться',()=>openShareDialog(j)));
  }
  if(!shared && permissionValue('deleteArchives') && !['queued','running'].includes(j.state)) actions.append(libraryAction('Удалить',()=>deleteArchivedPost(j),'delete'));
