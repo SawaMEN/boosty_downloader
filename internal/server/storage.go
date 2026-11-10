@@ -47,6 +47,7 @@ type Job struct {
 	OwnerID          string    `json:"ownerId"`
 	SharedWith       []string  `json:"sharedWith,omitempty"`
 	SharedForAll     bool      `json:"sharedForAll,omitempty"`
+	DeletedAt        *time.Time `json:"deletedAt,omitempty"`
 }
 
 func newStorage(root, keyString string) (*Storage, error) {
@@ -134,7 +135,7 @@ func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.jobs[id]
-	if !ok {
+	if !ok || j.DeletedAt != nil {
 		return Job{}, false
 	}
 	return *j, true
@@ -144,7 +145,9 @@ func (s *Storage) all() []Job {
 	defer s.mu.Unlock()
 	out := make([]Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
-		out = append(out, *j)
+		if j.DeletedAt == nil {
+			out = append(out, *j)
+		}
 	}
 	return out
 }
@@ -153,7 +156,7 @@ func (s *Storage) queued() []string {
 	defer s.mu.Unlock()
 	out := make([]string, 0)
 	for id, j := range s.jobs {
-		if j.State == "queued" {
+		if j.DeletedAt == nil && j.State == "queued" {
 			out = append(out, id)
 		}
 	}

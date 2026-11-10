@@ -309,7 +309,7 @@ func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 	v.AutoSync = enabled
 	previous := make(map[string]bool)
 	for jobID, j := range s.jobs {
-		if j.OwnerID == owner && strings.EqualFold(j.Author, v.Author) {
+		if j.OwnerID == owner && j.DeletedAt == nil && strings.EqualFold(j.Author, v.Author) {
 			previous[jobID] = j.AutoSync
 			j.AutoSync = enabled
 		}

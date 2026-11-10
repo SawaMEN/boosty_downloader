@@ -122,7 +122,7 @@ func (s *Storage) setEveryone(jobID, owner string, everyone bool) (bool, error) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.jobs[jobID]
-	if !ok || j.OwnerID != owner {
+	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return false, errors.New("архив не найден")
 	}
 	if j.State != "done" && j.State != "partial" {
@@ -192,7 +192,7 @@ func (s *Storage) changeShare(jobID, owner, target string, grant bool) (bool, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.jobs[jobID]
-	if !ok || j.OwnerID != owner {
+	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return false, errors.New("архив не найден")
 	}
 	if j.State != "done" && j.State != "partial" {
@@ -232,7 +232,7 @@ func (s *Storage) transitionToQueued(jobID, owner string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.jobs[jobID]
-	if !ok || j.OwnerID != owner {
+	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return Job{}, errors.New("архив не найден")
 	}
 	if j.State == "queued" || j.State == "running" {
@@ -273,6 +273,9 @@ func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 	defer s.mu.Unlock()
 	for _, old := range s.jobs {
 		if old.OwnerID == j.OwnerID && old.Author == j.Author && old.PostID == j.PostID {
+			if old.DeletedAt != nil {
+				return Job{}, false, errors.New("архив находится в корзине — сначала восстановите его")
+			}
 			return *old, false, nil
 		}
 	}
@@ -285,10 +288,97 @@ func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 	return j, true, nil
 }
 
-// Removes complete/failed archives only. Stages existing folders in the same
-// filesystem before committing metadata, allowing rollback on write failure.
-// Running or queued downloads are rejected instead of racing with the worker.
+// removeOwned hides finished copies atomically in jobs.json, retaining bytes
+// until permanent deletion. Restoring never re-grants previous shares.
 func (s *Storage) removeOwned(owner, id, author string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if author != "" {
+		for _, v := range s.imports {
+			if v.OwnerID == owner && v.Author == author && (v.State == "queued" || v.State == "running") {
+				return 0, errors.New("сначала остановите импорт автора")
+			}
+		}
+	}
+	var selected []*Job
+	for key, j := range s.jobs {
+		if j.OwnerID != owner || (id != "" && id != key) || (author != "" && j.Author != author) || j.DeletedAt != nil {
+			continue
+		}
+		if j.State == "running" || j.State == "queued" {
+			return 0, errors.New("сначала завершите активные загрузки автора")
+		}
+		if !safeArchivePart(j.OwnerID) || !safeArchivePart(j.Author) || !safeArchivePart(j.PostID) {
+			return 0, errors.New("неверные параметры пути архива")
+		}
+		selected = append(selected, j)
+	}
+	if len(selected) == 0 {
+		return 0, errors.New("архив не найден")
+	}
+	now := time.Now().UTC()
+	previous := make([]Job, len(selected))
+	for i, j := range selected {
+		previous[i] = *j
+		j.DeletedAt = &now
+		j.AutoSync = false
+		j.SharedForAll = false
+		j.SharedWith = nil
+		j.UpdatedAt = now
+	}
+	if err := s.saveJobsLocked(); err != nil {
+		for i, j := range selected {
+			*j = previous[i]
+		}
+		return 0, err
+	}
+	return len(selected), nil
+}
+
+func (s *Storage) trashed(owner string) []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Job, 0)
+	for _, j := range s.jobs {
+		if j.OwnerID == owner && j.DeletedAt != nil {
+			out = append(out, *j)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].DeletedAt.After(*out[j].DeletedAt)
+	})
+	return out
+}
+
+func (s *Storage) restoreOwned(owner, id string) (Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok || j.OwnerID != owner || j.DeletedAt == nil {
+		return Job{}, errors.New("архив не найден в корзине")
+	}
+	if (j.State == "done" || j.State == "partial") && (!safeArchivePart(j.OwnerID) || !safeArchivePart(j.Author) || !safeArchivePart(j.PostID)) {
+		return Job{}, errors.New("неверный путь архива")
+	}
+	if j.State == "done" || j.State == "partial" {
+		info, err := os.Lstat(s.archiveDir(j.OwnerID, j.Author, j.PostID))
+		if err != nil || !info.IsDir() {
+			return Job{}, errors.New("файлы архива отсутствуют — восстановление невозможно")
+		}
+	}
+	old := *j
+	j.DeletedAt = nil
+	j.UpdatedAt = time.Now().UTC()
+	if err := s.saveJobsLocked(); err != nil {
+		*j = old
+		return Job{}, err
+	}
+	return *j, nil
+}
+
+// purgeOwned permanently removes only previously trashed entries, staging
+// folders for atomic metadata rollback.
+func (s *Storage) purgeOwned(owner, id, author string) (int, error) {
 	s.mu.Lock()
 	if author != "" {
 		for _, v := range s.imports {
@@ -303,7 +393,7 @@ func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 	var ids []string
 	folders := map[string]bool{}
 	for key, j := range s.jobs {
-		if j.OwnerID != owner || (id != "" && id != key) || (author != "" && j.Author != author) {
+		if j.OwnerID != owner || (id != "" && id != key) || (author != "" && j.Author != author) || j.DeletedAt == nil {
 			continue
 		}
 		if j.State == "running" || j.State == "queued" {
@@ -398,13 +488,33 @@ func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 	return len(ids), nil
 }
 
+func (a *App) listTrash(w http.ResponseWriter, r *http.Request) {
+	reply(w, 200, a.store.trashed(principal(r).ID))
+}
+func (a *App) restoreTrash(w http.ResponseWriter, r *http.Request) {
+	j, err := a.store.restoreOwned(principal(r).ID, r.PathValue("id"))
+	if err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	reply(w, 200, j)
+}
+func (a *App) purgeTrash(w http.ResponseWriter, r *http.Request) {
+	n, err := a.store.purgeOwned(principal(r).ID, r.PathValue("id"), "")
+	if err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	reply(w, 200, map[string]any{"purged": n})
+}
+
 func (a *App) deleteJob(w http.ResponseWriter, r *http.Request) {
 	count, err := a.store.removeOwned(principal(r).ID, r.PathValue("id"), "")
 	if err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
-	reply(w, 200, map[string]any{"deleted": count})
+	reply(w, 200, map[string]any{"deleted": count, "trashed": count})
 }
 func (a *App) deleteAuthorArchives(w http.ResponseWriter, r *http.Request) {
 	author := r.PathValue("author")
@@ -427,7 +537,7 @@ func (a *App) deleteAuthorArchives(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, err.Error())
 		return
 	}
-	reply(w, 200, map[string]any{"deleted": count})
+	reply(w, 200, map[string]any{"deleted": count, "trashed": count})
 }
 
 func (a *App) authors(w http.ResponseWriter, r *http.Request) {

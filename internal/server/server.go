@@ -263,6 +263,9 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("DELETE /api/jobs/{id}/shares", a.jobShares)
 	private.HandleFunc("PUT /api/jobs/{id}/visibility", a.setJobVisibility)
 	private.HandleFunc("DELETE /api/jobs/{id}", a.require("deleteArchives", a.deleteJob))
+	private.HandleFunc("GET /api/trash", a.require("deleteArchives", a.listTrash))
+	private.HandleFunc("POST /api/trash/{id}/restore", a.require("deleteArchives", a.restoreTrash))
+	private.HandleFunc("DELETE /api/trash/{id}", a.require("deleteArchives", a.purgeTrash))
 	private.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		owner := principal(r).ID
 		jobs := a.store.all()
