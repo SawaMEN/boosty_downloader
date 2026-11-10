@@ -32,7 +32,7 @@ jobs:
             exit 1
           fi
       - name: Check shell syntax
-        run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps
+        run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update
       - name: Vet
         run: go vet ./...
       - name: Unit tests and race detector

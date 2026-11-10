@@ -1,0 +1,15 @@
+[Unit]
+Description=Check and safely update Boosty Downloader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/bin/bdy-auto-update
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+TimeoutStartSec=45min
+

@@ -234,6 +234,7 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("GET /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("PUT /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("GET /api/admin/storage", a.adminStorage)
+	private.HandleFunc("GET /api/admin/updates", a.adminUpdates)
 	private.HandleFunc("GET /api/admin/users", a.adminUsers)
 	private.HandleFunc("PUT /api/admin/users/{id}/permissions", a.adminUserPermissions)
 	private.HandleFunc("GET /api/admin/registration", a.adminRegistration)

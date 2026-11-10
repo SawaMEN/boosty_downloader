@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# Host-side updater. The web server does not receive root or Docker privileges.
+set -Eeuo pipefail
+umask 077
+ETC=/etc/boosty-downloader
+DATA=/var/lib/boosty-downloader
+PROJECT=/opt/boosty-downloader
+BIN=/usr/local/boosty-downloader/boosty-downloader
+REPO=SawaMEN/boosty_downloader
+STATUS="$DATA/update-status.json"
+
+[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Updater requires root.' >&2; exit 1; }
+[[ -d "$DATA" && -f "$ETC/mode" && -f "$ETC/environment" ]] || { echo 'Boosty Downloader is not installed.' >&2; exit 1; }
+command -v flock >/dev/null || { echo 'flock is required.' >&2; exit 1; }
+command -v python3 >/dev/null || { echo 'python3 is required.' >&2; exit 1; }
+exec 9>"$ETC/update.lock"
+flock -n 9 || exit 0
+
+force=0
+apply_override=0
+rollback=0
+case "${1:-}" in
+  '') ;;
+  --force) force=1 ;;
+  --apply) force=1; apply_override=1 ;;
+  --rollback) rollback=1 ;;
+  *) echo 'Use: bdy-auto-update [--force|--apply|--rollback]' >&2;exit 2 ;;
+esac
+
+read -r channel hours apply < <(python3 - "$DATA/accounts.json" <<'PY'
+import json,sys
+try:
+    with open(sys.argv[1],encoding='utf-8') as f: account=json.load(f)
+    policy=account.get('autoUpdatePolicy') or {}
+except (OSError,ValueError): policy={}
+channel=policy.get('channel','stable')
+if channel not in ('stable','dev'): channel='stable'
+hours=policy.get('checkHours',24)
+if not isinstance(hours,int) or isinstance(hours,bool) or not 1<=hours<=168: hours=24
+apply=policy.get('autoApply',False) is True
+print(channel,hours,int(apply))
+PY
+)
+
+mode="$(cat "$ETC/mode")"
+[[ "$mode" == native || "$mode" == docker ]] || { echo 'Invalid installation mode.' >&2;exit 1; }
+current="$(cat "$ETC/installed-release" 2>/dev/null || true)"
+latest=''
+run_id=''
+
+status() {
+  local state="$1" message="$2"
+  BD_STATE="$state" BD_DETAIL="$message" BD_CHANNEL="$channel" BD_LATEST="$latest" BD_INSTALLED="$current" BD_APPLY="$apply" \
+    python3 - "$STATUS" <<'PY'
+import datetime,json,os,sys,tempfile
+path=sys.argv[1]
+data={'checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+      'state':os.environ['BD_STATE'],'detail':os.environ['BD_DETAIL'],
+      'channel':os.environ['BD_CHANNEL'],'latest':os.environ['BD_LATEST'],
+      'installed':os.environ['BD_INSTALLED'],'autoApply':os.environ['BD_APPLY']=='1'}
+fd,tmp=tempfile.mkstemp(prefix='.update-status-',dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as f:
+        json.dump(data,f,ensure_ascii=False);f.write('\n');f.flush();os.fsync(f.fileno())
+    os.chmod(tmp,0o644)
+    os.replace(tmp,path)
+finally:
+    if os.path.exists(tmp):os.unlink(tmp)
+PY
+}
+
+# Health is checked on loopback and does not contact any external service.
+health() {
+  local port
+  port="$(sed -nE 's/^BD_PORT="?([0-9]+)"?$/\1/p' "$ETC/environment" | head -n1)"
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  command -v curl >/dev/null || return 1
+  local i
+  for i in {1..25}; do
+    if curl --silent --show-error --insecure --fail --max-time 3 "https://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+compose() {
+  local -a files=(-f "$PROJECT/compose.yaml")
+  local gpu="$(cat "$ETC/video-mode" 2>/dev/null || echo none)"
+  case "$gpu" in
+    amd|intel) [[ -f "$PROJECT/compose.gpu-amd.yaml" ]] && files+=(-f "$PROJECT/compose.gpu-amd.yaml");;
+    nvidia) [[ -f "$PROJECT/compose.gpu-nvidia.yaml" ]] && files+=(-f "$PROJECT/compose.gpu-nvidia.yaml");;
+  esac
+  docker compose --project-directory "$PROJECT" "${files[@]}" "$@"
+}
+
+restore_native() {
+  [[ -s "$BIN.prev" ]] || return 1
+  local backup="$BIN.failed.$(date +%s)"
+  cp -p "$BIN" "$backup" 2>/dev/null || true
+  cp -p "$BIN.prev" "$BIN.rollback"
+  mv -f "$BIN.rollback" "$BIN"
+  systemctl restart boosty-downloader.service || return 1
+  health
+}
+
+restore_docker() {
+  [[ -d "$PROJECT.prev" ]] || return 1
+  command -v docker >/dev/null || return 1
+  docker image inspect boosty-downloader:rollback >/dev/null || return 1
+  rm -rf -- "$PROJECT"
+  cp -a "$PROJECT.prev" "$PROJECT"
+  docker tag boosty-downloader:rollback boosty-downloader:local
+  compose up -d --force-recreate || return 1
+  health
+}
+
+if ((rollback)); then
+  if [[ "$mode" == native ]];then restore_native || { status failed 'Откат native не прошёл проверку.'; exit 1; }
+  else restore_docker || { status failed 'Откат Docker не прошёл проверку.'; exit 1; }
+  fi
+  current='предыдущая версия'
+  printf '%s\n' "$current" > "$ETC/installed-release"
+  status rolled_back 'Предыдущая версия восстановлена владельцем сервера.'
+  exit 0
+fi
+
+now="$(date +%s)"
+last="$(cat "$ETC/update-last-check" 2>/dev/null || echo 0)"
+[[ "$last" =~ ^[0-9]{1,12}$ ]] || last=0
+if (( !force && now-last < hours*3600 ));then exit 0;fi
+printf '%s\n' "$now" > "$ETC/update-last-check"
+
+if ! command -v gh >/dev/null || ! gh auth status >/dev/null 2>&1;then
+  status unavailable 'GitHub CLI не авторизован для приватного репозитория. Настройте gh auth login от root на VPS.'
+  exit 0
+fi
+if ! command -v curl >/dev/null; then
+  status unavailable 'Для проверок работоспособности требуется curl на сервере.'
+  exit 0
+fi
+
+if [[ "$channel" == stable ]]; then
+  latest="$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+  if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+    latest=''
+    status unavailable 'Стабильный релиз не опубликован или недоступен.'
+    exit 0
+  fi
+else
+  latest="$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)"
+  run_id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+  if [[ ! "$latest" =~ ^[0-9a-f]{40}$ || ! "$run_id" =~ ^[0-9]+$ ]]; then
+    latest=''
+    status unavailable 'Не найдена успешная CI-сборка ветки main.'
+    exit 0
+  fi
+fi
+if [[ "$latest" == "$current" ]];then
+  status up_to_date 'Установлена последняя выбранная версия.'
+  exit 0
+fi
+if (( !apply && !apply_override ));then
+  status available 'Доступна новая версия. Автоматическое применение отключено администратором.'
+  exit 0
+fi
+
+# The update credentials remain on the host. Never mount the Docker socket or
+# GitHub token into the web application's container.
+work="$(mktemp -d "$DATA/.auto-update-XXXXXXXX")"
+trap 'rm -rf -- "$work"' EXIT
+if [[ "$mode" == native ]];then
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64;;
+    aarch64|arm64) arch=arm64;;
+    *) status failed 'Архитектура процессора не поддерживается релизными бинарниками.'; exit 1;;
+  esac
+  name="boosty-downloader-linux-$arch"
+  if [[ "$channel" == stable ]];then
+    if ! gh release download "$latest" --repo "$REPO" --dir "$work" --pattern "$name" --pattern SHA256SUMS --clobber;then
+      status failed 'Не удалось скачать релизный бинарник.';exit 1
+    fi
+  else
+    if ! gh run download "$run_id" --repo "$REPO" --name "$name" --dir "$work";then
+      status failed 'Не удалось скачать успешную CI-сборку.';exit 1
+    fi
+  fi
+  [[ -s "$work/$name" && -s "$work/SHA256SUMS" ]] || { status failed 'Нет бинарника или контрольной суммы.';exit 1; }
+  expected="$(awk -v f="$name" '$2==f {print $1}' "$work/SHA256SUMS")"
+  actual="$(sha256sum "$work/$name" | cut -d' ' -f1)"
+  [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] || { status failed 'Контрольная сумма загруженного бинарника не совпала.';exit 1; }
+  [[ -s "$BIN" ]] || { status failed 'Предыдущий бинарник отсутствует.';exit 1; }
+  cp -p "$BIN" "$BIN.prev" || { status failed 'Не удалось сохранить предыдущий бинарник.';exit 1; }
+  install -m 0755 "$work/$name" "$BIN.new"
+  mv -f "$BIN.new" "$BIN"
+  if ! systemctl restart boosty-downloader.service || ! health; then
+    if restore_native;then status rolled_back 'Проверка новой версии не прошла; выполнен откат.';else status failed 'Новая версия не запустилась, автоматический откат не удался.';fi
+    exit 1
+  fi
+else
+  command -v git >/dev/null && command -v docker >/dev/null || { status failed 'Для обновления Docker нужны git и docker compose.';exit 1; }
+  if [[ "$channel" == stable ]];then
+    if ! gh repo clone "$REPO" "$work/source" -- --depth 1 --branch "$latest";then
+      status failed 'Не удалось получить исходники стабильной версии.';exit 1
+    fi
+  else
+    if ! gh repo clone "$REPO" "$work/source" -- --depth 1 --branch main;then
+      status failed 'Не удалось получить исходники проверенной сборки.';exit 1
+    fi
+    if ! git -C "$work/source" fetch --depth 1 origin "$latest" || ! git -C "$work/source" checkout --detach "$latest";then
+      status failed 'Не удалось закрепить исходники на успешном коммите CI.';exit 1
+    fi
+    [[ "$(git -C "$work/source" rev-parse HEAD)" == "$latest" ]] || { status failed 'Версия исходников не совпадает с успешной сборкой.';exit 1; }
+  fi
+  [[ -d "$PROJECT" && ! -L "$PROJECT" && -f "$PROJECT/.env" ]] || { status failed 'Каталог Docker не распознан.';exit 1; }
+  [[ -f "$work/source/go.mod" && -f "$work/source/deploy/docker/compose.yaml" ]] || { status failed 'В релизе отсутствуют исходники сервиса.';exit 1; }
+  docker image inspect boosty-downloader:local >/dev/null || { status failed 'Предыдущий образ Docker не найден.';exit 1; }
+  rm -rf -- "$PROJECT.prev"
+  cp -a "$PROJECT" "$PROJECT.prev" || { status failed 'Не удалось сохранить предыдущие исходники Docker.';exit 1; }
+  docker tag boosty-downloader:local boosty-downloader:rollback
+  if ! rm -rf -- "$PROJECT/cmd" "$PROJECT/internal" ||
+     ! cp -a "$work/source/go.mod" "$work/source/cmd" "$work/source/internal" "$PROJECT/" ||
+     { [[ -f "$work/source/go.sum" ]] && ! cp "$work/source/go.sum" "$PROJECT/go.sum"; } ||
+     ! install -d -m 0755 "$PROJECT/deploy/docker" ||
+     ! cp "$work/source/deploy/docker/Dockerfile" "$PROJECT/deploy/docker/Dockerfile" ||
+     ! cp "$work/source/deploy/docker/compose.yaml" "$PROJECT/compose.yaml" ||
+     ! cp "$work/source/deploy/docker/compose.gpu-amd.yaml" "$PROJECT/compose.gpu-amd.yaml" ||
+     ! cp "$work/source/deploy/docker/compose.gpu-nvidia.yaml" "$PROJECT/compose.gpu-nvidia.yaml" ||
+     ! compose build || ! compose up -d --force-recreate || ! health; then
+    if restore_docker; then status rolled_back 'Docker-обновление не прошло проверку; восстановлен предыдущий образ.'; else status failed 'Не удалось обновить Docker или выполнить откат.'; fi
+    exit 1
+  fi
+fi
+current="$latest"
+printf '%s\n' "$current" > "$ETC/installed-release"
+chmod 0640 "$ETC/installed-release"
+status updated 'Обновление применено, новая версия отвечает на /healthz.'
