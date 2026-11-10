@@ -78,6 +78,7 @@ func (a *App) sharedJobs(w http.ResponseWriter, r *http.Request) {
 			!strings.Contains(strings.ToLower(ownerName), query) {
 			continue
 		}
+		j.Subscription = nil
 		results = append(results, sharedEntry{Job: j, OwnerName: ownerName})
 	}
 	sort.Slice(results, func(i, j int) bool {

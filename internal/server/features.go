@@ -214,7 +214,13 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, err := writer.Create(filepath.ToSlash(rel))
 		if err == nil {
-			_, err = io.Copy(entry, f)
+			if rel == "manifest.json" && j.OwnerID != principal(r).ID {
+				sanitized := manifest
+				sanitized.Subscription = nil
+				err = json.NewEncoder(entry).Encode(sanitized)
+			} else {
+				_, err = io.Copy(entry, f)
+			}
 		}
 		f.Close()
 		if err != nil {
@@ -232,6 +238,17 @@ func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
 	b, err := os.ReadFile(filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), "manifest.json"))
 	if err != nil {
 		fail(w, 404, "архив ещё не готов")
+		return
+	}
+	// A subscriber's tier is private metadata, not part of a share grant.
+	if j.OwnerID != principal(r).ID {
+		var man ArchiveManifest
+		if json.Unmarshal(b, &man) != nil {
+			fail(w, 500, "повреждён манифест архива")
+			return
+		}
+		man.Subscription = nil
+		reply(w, 200, man)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

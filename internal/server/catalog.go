@@ -123,6 +123,7 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 		if scope == "shared" {
 			job.SharedWith = nil
+			job.Subscription = nil
 			job.OwnerID = ""
 			job.Error = ""
 		}

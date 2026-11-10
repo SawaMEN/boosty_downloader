@@ -20,27 +20,28 @@ import (
 // AuthorImport records discovery progress, not media download completion.
 // Each discovered accessible post gets its own persistent Job and archive.
 type AuthorImport struct {
-	ID              string    `json:"id"`
-	OwnerID         string    `json:"ownerId"`
-	Author          string    `json:"author"`
-	Title           string    `json:"title"`
-	State           string    `json:"state"` // queued, running, done, failed
-	LastCheckedAt   time.Time `json:"lastCheckedAt,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	NextOffset      string    `json:"nextOffset,omitempty"`
-	Scanned         int       `json:"scanned"`
-	Queued          int       `json:"queued"`
-	Skipped         int       `json:"skipped"`
-	MaxPosts        int       `json:"maxPosts"` // 0 = all, with a hard cap of 2000.
-	Limited         bool      `json:"limited,omitempty"`
-	IncludeComments bool      `json:"includeComments"`
-	IncludeFiles    bool      `json:"includeFiles"`
-	IncludeVideos   bool      `json:"includeVideos"`
-	IncludeAudio    bool      `json:"includeAudio"`
-	AutoSync        bool      `json:"autoSync"`
-	Incremental     bool      `json:"incremental,omitempty"` // Scheduled catch-up stops at the first previously discovered post.
+	ID              string                `json:"id"`
+	OwnerID         string                `json:"ownerId"`
+	Author          string                `json:"author"`
+	Title           string                `json:"title"`
+	State           string                `json:"state"` // queued, running, done, failed
+	LastCheckedAt   time.Time             `json:"lastCheckedAt,omitempty"`
+	Error           string                `json:"error,omitempty"`
+	CreatedAt       time.Time             `json:"createdAt"`
+	UpdatedAt       time.Time             `json:"updatedAt"`
+	NextOffset      string                `json:"nextOffset,omitempty"`
+	Scanned         int                   `json:"scanned"`
+	Queued          int                   `json:"queued"`
+	Skipped         int                   `json:"skipped"`
+	MaxPosts        int                   `json:"maxPosts"` // 0 = all, with a hard cap of 2000.
+	Limited         bool                  `json:"limited,omitempty"`
+	IncludeComments bool                  `json:"includeComments"`
+	IncludeFiles    bool                  `json:"includeFiles"`
+	IncludeVideos   bool                  `json:"includeVideos"`
+	IncludeAudio    bool                  `json:"includeAudio"`
+	AutoSync        bool                  `json:"autoSync"`
+	Incremental     bool                  `json:"incremental,omitempty"` // Scheduled catch-up stops at the first previously discovered post.
+	Subscription    *CapturedSubscription `json:"subscription,omitempty"`
 }
 
 const importHardLimit = 2000
@@ -124,9 +125,9 @@ func (a *App) importSubscriptions(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "не удалось проверить подписки: "+err.Error())
 		return
 	}
-	known := map[string]string{}
+	known := map[string]boosty.SubscriptionAuthor{}
 	for _, author := range listing.Authors {
-		known[author.Blog] = author.Title
+		known[author.Blog] = author
 	}
 	for author := range selected {
 		if _, ok := known[author]; !ok {
@@ -147,7 +148,7 @@ func (a *App) importSubscriptions(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "ошибка создания импорта")
 			return
 		}
-		imports = append(imports, AuthorImport{ID: hex.EncodeToString(b), OwnerID: principal(r).ID, Author: author, Title: known[author], State: "queued", CreatedAt: now, UpdatedAt: now, MaxPosts: input.MaxPosts, IncludeComments: input.IncludeComments, IncludeFiles: input.IncludeFiles, IncludeVideos: input.IncludeVideos, IncludeAudio: input.IncludeAudio, AutoSync: input.AutoSync})
+		imports = append(imports, AuthorImport{ID: hex.EncodeToString(b), OwnerID: principal(r).ID, Author: author, Title: known[author].Title, State: "queued", CreatedAt: now, UpdatedAt: now, Subscription: captureSubscription(known[author], now), MaxPosts: input.MaxPosts, IncludeComments: input.IncludeComments, IncludeFiles: input.IncludeFiles, IncludeVideos: input.IncludeVideos, IncludeAudio: input.IncludeAudio, AutoSync: input.AutoSync})
 	}
 	started, err := a.store.createImports(imports)
 	if err != nil {
@@ -531,6 +532,7 @@ func (a *App) runImport(v *AuthorImport) error {
 		for _, author := range list.Authors {
 			if strings.EqualFold(author.Blog, v.Author) && !author.Paused {
 				subscribed = true
+				v.Subscription = captureSubscription(author, time.Now().UTC())
 				break
 			}
 		}
@@ -590,7 +592,7 @@ func (a *App) runImport(v *AuthorImport) error {
 			if _, err = rand.Read(b); err != nil {
 				return err
 			}
-			j := Job{ID: hex.EncodeToString(b), OwnerID: v.OwnerID, Author: v.Author, PostID: p.ID, URL: boosty.PostURLFor(v.Author, p.ID), Title: p.Title, State: "queued", CreatedAt: time.Now().UTC(), IncludeComments: v.IncludeComments, IncludeFiles: v.IncludeFiles, IncludeVideos: v.IncludeVideos, IncludeAudio: v.IncludeAudio, AutoSync: v.AutoSync}
+			j := Job{ID: hex.EncodeToString(b), OwnerID: v.OwnerID, Author: v.Author, PostID: p.ID, URL: boosty.PostURLFor(v.Author, p.ID), Title: p.Title, State: "queued", CreatedAt: time.Now().UTC(), IncludeComments: v.IncludeComments, IncludeFiles: v.IncludeFiles, IncludeVideos: v.IncludeVideos, IncludeAudio: v.IncludeAudio, AutoSync: v.AutoSync, Subscription: v.Subscription}
 			job, created, e := a.store.createUniqueJob(j)
 			if e != nil {
 				return e

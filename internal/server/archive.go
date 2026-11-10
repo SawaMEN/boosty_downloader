@@ -25,16 +25,17 @@ type ArchiveAsset struct {
 	SourceSHA256 string `json:"sourceSha256,omitempty"`
 }
 type ArchiveManifest struct {
-	Title           string         `json:"title"`
-	Author          string         `json:"author"`
-	PostID          string         `json:"postId"`
-	Source          string         `json:"source"`
-	CapturedAt      time.Time      `json:"capturedAt"`
-	Assets          []ArchiveAsset `json:"assets"`
-	CommentsStatus  string         `json:"commentsStatus"`
-	CommentCount    int            `json:"commentCount"`
-	CommentExpected int            `json:"commentExpected"`
-	Failures        []string       `json:"failures,omitempty"`
+	Title            string                `json:"title"`
+	Author           string                `json:"author"`
+	PostID           string                `json:"postId"`
+	Source           string                `json:"source"`
+	CapturedAt       time.Time             `json:"capturedAt"`
+	Assets           []ArchiveAsset        `json:"assets"`
+	CommentsStatus   string                `json:"commentsStatus"`
+	CommentCount     int                   `json:"commentCount"`
+	CommentExpected  int                   `json:"commentExpected"`
+	Failures         []string              `json:"failures,omitempty"`
+	Subscription     *CapturedSubscription `json:"subscription,omitempty"`
 }
 type renderData struct {
 	ArchiveManifest
@@ -213,6 +214,22 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if !p.HasAccess {
 		return errors.New("нет доступа к этому посту: необходима действующая подписка")
 	}
+	// Only Boosty's own subscription listing can supply the owner's tier.
+	// An accessible post may also be free or purchased independently, so we
+	// deliberately do not infer its required tier from this snapshot.
+	if j.Subscription == nil && c.HasToken() {
+		checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		listing, checkErr := a.lookupSubscriptions(checkCtx, j.OwnerID)
+		cancel()
+		if checkErr == nil {
+			for _, sub := range listing.Authors {
+				if strings.EqualFold(sub.Blog, j.Author) {
+					j.Subscription = captureSubscription(sub, time.Now().UTC())
+					break
+				}
+			}
+		}
+	}
 	j.Title = p.Title
 	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	mediaFolder := filepath.Join(folder, "media")
@@ -220,7 +237,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		return e
 	}
 	compressionPolicy := a.accounts.policy()
-	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments}
+	man := ArchiveManifest{Title: p.Title, Author: j.Author, PostID: j.PostID, Source: j.URL, CapturedAt: time.Now().UTC(), CommentsStatus: "не запрашивались", CommentExpected: p.Count.Comments, Subscription: j.Subscription}
 	if e = writeArchiveJSON(filepath.Join(folder, "post.json"), json.RawMessage(p.Raw), compressionPolicy.CompressionLevel); e != nil {
 		return e
 	}
