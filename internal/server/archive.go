@@ -133,7 +133,9 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 			a = "Пользователь"
 		}
 		date := ""
-		if c.CreatedAt > 0 { date = time.Unix(c.CreatedAt, 0).UTC().Format("02.01.2006 15:04") }
+		if c.CreatedAt > 0 {
+			date = time.Unix(c.CreatedAt, 0).UTC().Format("02.01.2006 15:04")
+		}
 		*out = append(*out, commentView{Author: a, Text: commentText(c), Level: depth, Date: date})
 		appendComments(out, c.Replies.Data, depth+1)
 	}
