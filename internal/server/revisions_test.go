@@ -26,7 +26,7 @@ func TestRevisionSnapshotsShareMediaButRestorePrivateState(t *testing.T) {
 		Title: "First", State: "done", SharedForAll: true,
 		SharedWith: []string{"revisionmember"}, AutoSync: true,
 		ArchiveUpdatedAt: captured,
-		Subscription: &CapturedSubscription{Level: "Tier A", Paid: true, ObservedAt: captured, Source: "boosty_subscriptions"},
+		Subscription:     &CapturedSubscription{Level: "Tier A", Paid: true, ObservedAt: captured, Source: "boosty_subscriptions"},
 	}
 	if err := app.store.upsert(job); err != nil {
 		t.Fatal(err)
