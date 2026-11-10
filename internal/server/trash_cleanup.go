@@ -182,16 +182,13 @@ func (a *App) runTrashSweep(trigger string) {
 			break
 		}
 		n, err := a.store.purgeOwnedBefore(job.owner, job.id, "", cutoff)
+		// The owner may have restored or already emptied this record.
+		if n == 0 && err != nil && err.Error() == "архив не найден" {
+			continue
+		}
+		removed += n
 		if err != nil {
 			failed++
-		} else {
-			removed += n
-		}
-		if n == 0 && err != nil {
-			// A concurrent owner restore/purge is not an error for the sweep.
-			if _, stillExpired := a.store.expiredTrash(cutoff, 0); len(stillExpired) == 0 {
-				continue
-			}
 		}
 		item := TrashAuditEntry{
 			At: time.Now().UTC(), Trigger: trigger,
