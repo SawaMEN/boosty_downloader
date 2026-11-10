@@ -432,6 +432,12 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 		s.mu.Unlock()
 		return 0, err
 	}
+	// Do not follow a substituted symlink when staging files for deletion.
+	trashInfo, err := os.Lstat(trash)
+	if err != nil || !trashInfo.IsDir() {
+		s.mu.Unlock()
+		return 0, errors.New("путь временной корзины небезопасен")
+	}
 	rollback := func() {
 		for i := len(moves) - 1; i >= 0; i-- {
 			_ = os.Rename(moves[i].dst, moves[i].src)
@@ -507,8 +513,14 @@ func (a *App) restoreTrash(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, j)
 }
 func (a *App) purgeTrash(w http.ResponseWriter, r *http.Request) {
+	request := TrashAuditEntry{At: time.Now().UTC(), Trigger: "owner_request", OwnerID: principal(r).ID, JobID: r.PathValue("id")}
+	if err := a.store.appendTrashAudit(request); err != nil {
+		fail(w, http.StatusServiceUnavailable, "журнал очистки недоступен: удаление отменено")
+		return
+	}
 	n, err := a.store.purgeOwned(principal(r).ID, r.PathValue("id"), "")
 	if err != nil {
+		_ = a.store.appendTrashAudit(TrashAuditEntry{At: time.Now().UTC(), Trigger: "owner_failed", OwnerID: principal(r).ID, JobID: r.PathValue("id"), Error: err.Error()})
 		fail(w, 409, err.Error())
 		return
 	}

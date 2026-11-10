@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -173,6 +174,13 @@ func (a *App) runTrashSweep(trigger string) {
 	policy := a.accounts.policy().Trash
 	cutoff := time.Now().UTC().Add(-time.Duration(policy.RetentionDays) * 24 * time.Hour)
 	candidates, total := a.store.expiredTrash(cutoff, trashSweepBatch)
+	// Irreversible cleanup must not run without a writable audit log.
+	if len(candidates) > 0 {
+		if err := a.store.appendTrashAudit(TrashAuditEntry{At: time.Now().UTC(), Trigger: trigger + "_start"}); err != nil {
+			log.Printf("trash cleanup stopped: cannot write audit: %v", err)
+			return
+		}
+	}
 	removed, failed := 0, 0
 	for _, job := range candidates {
 		if a.ctx.Err() != nil {
@@ -198,14 +206,19 @@ func (a *App) runTrashSweep(trigger string) {
 			item.Failed = 1
 			item.Error = err.Error()
 		}
-		_ = a.store.appendTrashAudit(item)
+		if auditErr := a.store.appendTrashAudit(item); auditErr != nil {
+			log.Printf("trash cleanup stopped after operation: cannot write audit: %v", auditErr)
+			break
+		}
 	}
 	if total > 0 || trigger == "manual" {
 		summary := TrashAuditEntry{
 			At: time.Now().UTC(), Trigger: trigger + "_summary",
 			Removed: removed, Failed: failed,
 		}
-		_ = a.store.appendTrashAudit(summary)
+		if err := a.store.appendTrashAudit(summary); err != nil {
+			log.Printf("trash cleanup summary audit failed: %v", err)
+		}
 	}
 }
 

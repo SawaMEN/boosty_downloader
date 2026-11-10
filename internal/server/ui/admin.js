@@ -292,7 +292,7 @@ async function loadAdminTrash(){
     if(!history.length){root.append(text('p','Журнал очистки пока пуст.','muted small'));return;}
     root.append(text('h4','Последние операции'));
     for(const event of history){
-      const source={automatic:'Автоматическая',automatic_summary:'Итог автоочистки',manual:'Ручная',manual_summary:'Итог ручной очистки',owner:'Владелец'}[event.trigger]||event.trigger;
+      const source={automatic:'Автоматическая',automatic_summary:'Итог автоочистки',manual:'Ручная',manual_summary:'Итог ручной очистки',owner:'Владелец',owner_request:'Запрос владельца',owner_failed:'Ошибка удаления'}[event.trigger]||event.trigger;
       const when=event.at?new Date(event.at).toLocaleString('ru-RU'):'—';
       const detail=[when,source,'удалено '+(event.removed||0),event.jobId?'ID '+event.jobId:'',event.failed?'ошибок '+event.failed:'',event.error||''].filter(Boolean).join(' · ');
       root.append(text('p',detail,event.failed?'error':'muted small'));

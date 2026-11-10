@@ -134,3 +134,36 @@ func TestTrashAdminSweepJournalAndPolicy(t *testing.T) {
 		t.Fatalf("trash journal not persisted %d: %v", len(reloaded), err)
 	}
 }
+
+func TestTrashSweepFailsClosedWithoutJournal(t *testing.T) {
+	root := t.TempDir()
+	app, err := New(Config{AdminUser: "admin", AdminPassword: "strong-password-123", DataDir: root, SecretKey: testKey(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	admin := testLogin(t, app, "admin", "strong-password-123")
+	job := trashTestJob(t, app.store, "dddddddddddddddddddddddd")
+	if _, err := app.store.removeOwned("admin", job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	app.store.mu.Lock()
+	older := time.Now().UTC().Add(-40 * 24 * time.Hour)
+	app.store.jobs[job.ID].DeletedAt = &older
+	if err := app.store.saveJobsLocked(); err != nil {
+		app.store.mu.Unlock()
+		t.Fatal(err)
+	}
+	app.store.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(root, "trash-cleanup-log.json"), []byte("{invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app.runTrashSweep("manual")
+	if len(app.store.trashed("admin")) != 1 {
+		t.Fatal("purged archive even though audit journal was corrupt")
+	}
+	policyRequest(t, app, admin, "DELETE", "/api/trash/"+job.ID, "", 503)
+	if _, err := os.Stat(app.store.archiveDir(job.OwnerID, job.Author, job.PostID)); err != nil {
+		t.Fatal("original content removed despite failed audit", err)
+	}
+}
