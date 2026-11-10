@@ -78,6 +78,14 @@
             </div>
             <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminStorageRefresh">Проверить место и квоты</button></div>
             <div id="adminStorageReport" class="video-diagnostics" role="status"></div>
+            <h3>Корзина и автоматическая очистка</h3>
+            <p class="muted small">Удаление необратимо только после очистки. Сначала система проверяет дату удаления и права владельца, затем безопасно удаляет просроченную копию. Проверка проводится каждый час, не более 20 архивов за проход.</p>
+            <div class="policy-controls">
+              <label class="check"><input id="adminTrashAutoPurge" type="checkbox"><span><strong>Автоматически очищать корзину</strong><small>По умолчанию выключено. Новые настройки вступают в силу после сохранения.</small></span></label>
+              <label>Хранить удалённые архивы (дней)<input id="adminTrashRetentionDays" type="number" min="1" max="3650" step="1" value="30"><small>От 1 до 3650. Влияет только на файлы в корзине, не на активные архивы.</small></label>
+            </div>
+            <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminTrashStatusRefresh">Обновить сведения о корзине</button><button class="btn danger-outline" type="button" id="adminTrashCleanupNow">Очистить просроченное сейчас</button></div>
+            <div id="adminTrashReport" class="video-diagnostics" role="status"></div>
             <h3>Обновления панели</h3>
             <p class="muted small">Проверка и обновление выполняются отдельно от веб-приложения. GitHub-токены и Docker-сокет не передаются панели.</p>
             <div class="policy-controls">

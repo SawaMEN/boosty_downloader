@@ -77,6 +77,10 @@ async function loadAdminPanel(){
     $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
     $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
     loadAdminStorage();
+    const trash=p.trash||{};
+    $('adminTrashAutoPurge').checked=Boolean(trash.autoPurge);
+    $('adminTrashRetentionDays').value=String(trash.retentionDays??30);
+    loadAdminTrash();
     const updates=p.updates||{};
     $('adminUpdateChannel').value=updates.channel||'stable';
     $('adminUpdateHours').value=String(updates.checkHours??24);
@@ -133,7 +137,8 @@ async function savePolicy(){
     video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
       codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
       fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked},
-    updates:{channel:$('adminUpdateChannel').value,checkHours:Number($('adminUpdateHours').value),autoApply:$('adminAutoApplyUpdates').checked}};
+    updates:{channel:$('adminUpdateChannel').value,checkHours:Number($('adminUpdateHours').value),autoApply:$('adminAutoApplyUpdates').checked},
+    trash:{autoPurge:$('adminTrashAutoPurge').checked,retentionDays:Number($('adminTrashRetentionDays').value)}};
   try{
     currentPolicy=await api('/api/admin/policy',{method:'PUT',body:data});
     state.user=await api('/api/account');
@@ -276,8 +281,41 @@ async function loadAdminUpdates(){
     root.append(text('p',`Текущая: ${u.installed||'не определена'} · доступная: ${u.latest||'нет'} · проверено: ${u.checkedAt||'не проверялось'}`,'muted small'));
   }catch(e){root.replaceChildren(text('p',e.message,'error'))}
 }
+async function loadAdminTrash(){
+  if(!state.user?.admin)return;
+  const root=$('adminTrashReport');root.replaceChildren(text('p','Проверяем срок хранения и журнал очистки…','muted'));
+  try{
+    const data=await api('/api/admin/trash');
+    root.replaceChildren(text('strong','Просрочено архивов: '+data.expired));
+    root.append(text('p',data.running?'Очистка выполняется':data.queued?'Очистка поставлена в очередь':data.policy?.autoPurge?'Автоочистка включена':'Автоочистка отключена','muted small'));
+    const history=(data.history||[]).slice(0,20);
+    if(!history.length){root.append(text('p','Журнал очистки пока пуст.','muted small'));return;}
+    root.append(text('h4','Последние операции'));
+    for(const event of history){
+      const source={automatic:'Автоматическая',automatic_summary:'Итог автоочистки',manual:'Ручная',manual_summary:'Итог ручной очистки',owner:'Владелец'}[event.trigger]||event.trigger;
+      const when=event.at?new Date(event.at).toLocaleString('ru-RU'):'—';
+      const detail=[when,source,'удалено '+(event.removed||0),event.jobId?'ID '+event.jobId:'',event.failed?'ошибок '+event.failed:'',event.error||''].filter(Boolean).join(' · ');
+      root.append(text('p',detail,event.failed?'error':'muted small'));
+    }
+  }catch(error){root.replaceChildren(text('p',error.message,'error'))}
+}
+async function runAdminTrashCleanup(){
+  if(!state.user?.admin)return;
+  const days=Number($('adminTrashRetentionDays').value);
+  const report=await api('/api/admin/trash').catch(()=>null);
+  if(!confirm('Безвозвратно удалить архивы из корзины, находящиеся там дольше '+days+' дней? Просрочено: '+(report?.expired??'неизвестно')+'. За один проход удаляется не более 20 копий.'))return;
+  const button=$('adminTrashCleanupNow');button.disabled=true;
+  try{
+    await api('/api/admin/trash/cleanup',{method:'POST'});
+    toast('Очистка поставлена в очередь. Для просмотра результата обновите журнал.');
+    await loadAdminTrash();
+  }catch(error){toast(error.message,true)}
+  finally{button.disabled=false}
+}
 function adminEvents(){
   $('adminUpdateStatusRefresh').onclick=loadAdminUpdates;
+  $('adminTrashStatusRefresh').onclick=loadAdminTrash;
+  $('adminTrashCleanupNow').onclick=runAdminTrashCleanup;
   $('adminStorageRefresh').onclick=loadAdminStorage;
   $('adminVideoProbe').onclick=()=>loadVideoReport(true);
   $('adminVideoArchive').onchange=selectAdminVideoArchive;
