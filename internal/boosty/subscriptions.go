@@ -2,11 +2,13 @@ package boosty
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // SubscriptionAuthor is a safe-to-expose subset of the account's Boosty subscriptions.
@@ -15,6 +17,8 @@ type SubscriptionAuthor struct {
 	Blog   string `json:"blog"`
 	Title  string `json:"title"`
 	Level  string `json:"level,omitempty"`
+	LevelID string `json:"levelId,omitempty"`
+	Price   int64 `json:"price,omitempty"`
 	Paid   bool   `json:"paid"`
 	Paused bool   `json:"paused"`
 }
@@ -48,7 +52,8 @@ func (c *Client) Subscriptions(ctx context.Context) (SubscriptionList, error) {
 					Title   string `json:"title"`
 				} `json:"blog"`
 				Level struct {
-					Name string `json:"name"`
+					Name string          `json:"name"`
+					ID   json.RawMessage `json:"id"`
 				} `json:"subscriptionLevel"`
 				Price       int64 `json:"price"`
 				IsArchived  bool  `json:"isArchived"`
@@ -85,7 +90,23 @@ func (c *Client) Subscriptions(ctx context.Context) (SubscriptionList, error) {
 			if title == "" {
 				title = slug
 			}
-			found[slug] = SubscriptionAuthor{Blog: slug, Title: title, Level: item.Level.Name, Paid: item.Price > 0, Paused: item.IsPause}
+			levelID := strings.Trim(string(item.Level.ID), "\"")
+			if len(levelID) > 80 || (levelID != "" && !safeSegment(levelID)) {
+				levelID = ""
+			}
+			levelName := []rune(item.Level.Name)
+			if len(levelName) > 128 {
+				levelName = levelName[:128]
+			}
+			price := item.Price
+			if price < 0 {
+				price = 0
+			}
+			found[slug] = SubscriptionAuthor{
+				Blog: slug, Title: title, Level: string(levelName),
+				LevelID: levelID, Price: price,
+				Paid: price > 0, Paused: item.IsPause,
+			}
 		}
 		if len(result.Data) < subscriptionsPageSize || (result.Total > 0 && offset+len(result.Data) >= result.Total) {
 			break

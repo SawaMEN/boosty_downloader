@@ -31,6 +31,8 @@ type Storage struct {
 // required tier, and never grants access to another owner's archive.
 type CapturedSubscription struct {
 	Level      string    `json:"level,omitempty"`
+	LevelID    string    `json:"levelId,omitempty"`
+	Price      int64     `json:"price,omitempty"`
 	Paid       bool      `json:"paid"`
 	Paused     bool      `json:"paused,omitempty"`
 	ObservedAt time.Time `json:"observedAt"`
@@ -39,7 +41,7 @@ type CapturedSubscription struct {
 
 func captureSubscription(author boosty.SubscriptionAuthor, at time.Time) *CapturedSubscription {
 	return &CapturedSubscription{
-		Level: author.Level, Paid: author.Paid, Paused: author.Paused,
+		Level: author.Level, LevelID: author.LevelID, Price: author.Price, Paid: author.Paid, Paused: author.Paused,
 		ObservedAt: at.UTC(), Source: "boosty_subscriptions",
 	}
 }
