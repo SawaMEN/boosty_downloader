@@ -5,6 +5,47 @@ let archiveFilter = '';
 let authorsCache = [];
 let sharedQuerySerial = 0;
 
+let libraryQuerySerial = 0;
+let libraryCatalogPage = 1;
+let sharedCatalogPage = 1;
+let libraryCatalogPages = 0;
+let sharedCatalogPages = 0;
+const CATALOG_PAGE_SIZE = 20;
+function catalogSort(id) {
+  const sort=$(id)?.value||'updated';
+  return {sort,order:sort==='author'||sort==='title'?'asc':'desc'};
+}
+function catalogPageControls(prefix,page,pages) {
+  $(prefix+'Prev').disabled=page<=1;
+  $(prefix+'Next').disabled=pages===0||page>=pages;
+  $(prefix+'PageInfo').textContent=pages?'Страница '+page+' из '+pages:'Страниц нет';
+}
+async function refreshLibraryCatalog(reset=false) {
+  if(!state.user)return;
+  if(reset)libraryCatalogPage=1;
+  const serial=++libraryQuerySerial;
+  const qs=new URLSearchParams({scope:'mine',page:String(libraryCatalogPage),perPage:String(CATALOG_PAGE_SIZE),...catalogSort('archiveSort')});
+  const author=$('archiveAuthorFilter').value;
+  const q=$('archiveTextSearch').value.trim();
+  const status=$('archiveStateFilter').value;
+  if(author)qs.set('author',author);
+  if(q)qs.set('q',q);
+  if(status)qs.set('status',status);
+  $('archiveSearchStatus').textContent='Поиск архивов…';
+  try {
+    const page=await api('/api/catalog?'+qs.toString());
+    if(serial!==libraryQuerySerial)return;
+    libraryCatalogPages=page.pages;
+    const node=$('libraryJobs');node.replaceChildren();
+    if(!page.items.length)node.append(empty('Архивы не найдены','Измените фильтр или сохраните публикацию.'));
+    else page.items.forEach(j=>node.append(buildJob(j)));
+    $('archiveSearchStatus').textContent='Найдено: '+page.total;
+    catalogPageControls('archive',page.page,page.pages);
+    $('deleteAuthorArchives').disabled=!author;
+  }catch(e){if(serial===libraryQuerySerial){$('archiveSearchStatus').textContent='Ошибка поиска';toast(e.message,true)}}
+}
+
+
 function libraryAction(label, handler, cssClass = '') {
   const button = text('button', label, 'tiny-btn ' + cssClass);
   button.type = 'button';
@@ -95,22 +136,27 @@ async function deleteAuthorArchives() {
     archiveFilter=''; await refreshJobs(); await loadAuthors(); await refreshShared();
   } catch(e) { toast(e.message,true); }
 }
-async function refreshShared() {
-  if (!state.user) return;
+
+async function refreshShared(reset=false) {
+  if(!state.user)return;
+  if(reset)sharedCatalogPage=1;
   const serial=++sharedQuerySerial;
   const author=$('sharedAuthorSearch')?.value.trim()||'';
   const q=$('sharedTextSearch')?.value.trim()||'';
-  const query=new URLSearchParams();if(author)query.set('author',author);if(q)query.set('q',q);
-  const status=$('sharedSearchStatus');if(status)status.textContent='Поиск архивов…';
+  const qs=new URLSearchParams({scope:'shared',page:String(sharedCatalogPage),perPage:String(CATALOG_PAGE_SIZE),...catalogSort('sharedSort')});
+  if(author)qs.set('author',author);
+  if(q)qs.set('q',q);
+  $('sharedSearchStatus').textContent='Поиск архивов…';
   try {
-    const list=await api('/api/shared'+(query.size?'?'+query.toString():''));
-    if(serial!==sharedQuerySerial)return; // Out-of-order responses must not overwrite a new query.
-    const node=$('sharedJobs');if(!node)return;
-    node.replaceChildren();
-    if(status)status.textContent=`Найдено архивов: ${list.length}`;
-    if(!list.length)node.append(empty('Архивы не найдены', author||q?'Попробуйте другое имя автора или название поста.':'Общие архивы других участников появятся здесь после публикации.'));
-    else list.forEach(j=>node.append(buildJob(j,true)));
-  } catch(e) { if(serial===sharedQuerySerial){if(status)status.textContent='Ошибка загрузки';toast(e.message,true)} }
+    const page=await api('/api/catalog?'+qs.toString());
+    if(serial!==sharedQuerySerial)return;
+    sharedCatalogPages=page.pages;
+    const node=$('sharedJobs');node.replaceChildren();
+    if(!page.items.length)node.append(empty('Архивы не найдены','Уточните автора или название публикации.'));
+    else page.items.forEach(j=>node.append(buildJob(j,true)));
+    $('sharedSearchStatus').textContent='Найдено: '+page.total;
+    catalogPageControls('shared',page.page,page.pages);
+  }catch(e){if(serial===sharedQuerySerial){$('sharedSearchStatus').textContent='Ошибка загрузки';toast(e.message,true)}}
 }
 async function openShareDialog(job) {
   activeShareId=job.id;
@@ -149,15 +195,23 @@ async function addShare(event) {
   } catch(e) { toast(e.message,true); }
 }
 function libraryEvents() {
-  $('archiveAuthorFilter').addEventListener('change',ev=>{archiveFilter=ev.target.value;renderLibraryJobs()});
+  $('archiveAuthorFilter').addEventListener('change',ev=>{archiveFilter=ev.target.value;refreshLibraryCatalog(true)});
+  let catalogTimer;
+  $('archiveTextSearch').addEventListener('input',()=>{clearTimeout(catalogTimer);catalogTimer=setTimeout(()=>refreshLibraryCatalog(true),300)});
+  for(const id of ['archiveStateFilter','archiveSort'])$(id).addEventListener('change',()=>refreshLibraryCatalog(true));
+  $('archivePrev').addEventListener('click',()=>{if(libraryCatalogPage>1){libraryCatalogPage--;refreshLibraryCatalog()}});
+  $('archiveNext').addEventListener('click',()=>{if(libraryCatalogPage<libraryCatalogPages){libraryCatalogPage++;refreshLibraryCatalog()}});
   $('deleteAuthorArchives').addEventListener('click',deleteAuthorArchives);
   $('saveAuthorForm').addEventListener('submit',e=>{e.preventDefault();pinAuthor($('saveAuthorInput').value);$('saveAuthorInput').value=''});
   $('pinFeedAuthor').addEventListener('click',()=>pinAuthor(state.feedAuthor));
   $('refreshShared').addEventListener('click',refreshShared);
-  $('sharedSearchForm').addEventListener('submit',e=>{e.preventDefault();refreshShared()});
+  $('sharedSearchForm').addEventListener('submit',e=>{e.preventDefault();refreshShared(true)});
   let searchTimer;
-  for(const id of ['sharedAuthorSearch','sharedTextSearch'])$(id).addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(refreshShared,320)});
-  $('resetSharedSearch').addEventListener('click',()=>{$('sharedAuthorSearch').value='';$('sharedTextSearch').value='';refreshShared()});
+  for(const id of ['sharedAuthorSearch','sharedTextSearch'])$(id).addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>refreshShared(true),320)});
+  $('resetSharedSearch').addEventListener('click',()=>{$('sharedAuthorSearch').value='';$('sharedTextSearch').value='';refreshShared(true)});
+  $('sharedSort').addEventListener('change',()=>refreshShared(true));
+  $('sharedPrev').addEventListener('click',()=>{if(sharedCatalogPage>1){sharedCatalogPage--;refreshShared()}});
+  $('sharedNext').addEventListener('click',()=>{if(sharedCatalogPage<sharedCatalogPages){sharedCatalogPage++;refreshShared()}});
   $('shareEveryone').addEventListener('change',async e=>{
     if(!activeShareId)return;
     const enabled=e.target.checked;e.target.disabled=true;

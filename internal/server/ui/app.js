@@ -51,14 +51,7 @@ function buildJob(j, shared=false){const item=el('article','job-item');item.appe
  if(actions.children.length)body.append(actions);
  item.append(body);const badge=text('span',jobState(j),`status-badge ${j.state}`);item.append(badge);return item;
 }
-function renderLibraryJobs() {
- const container=$('libraryJobs'); if(!container)return;
- container.replaceChildren();
- const data=state.jobs.filter(j=>!archiveFilter||j.author===archiveFilter);
- if(!data.length)container.append(empty('Архивы не найдены','Откройте публикацию и сохраните её полную копию.'));
- else data.forEach(j=>container.append(buildJob(j)));
- $('deleteAuthorArchives').disabled=!archiveFilter;
-}
+function renderLibraryJobs() { return refreshLibraryCatalog() }
 async function refreshJobs(){
  if(!state.user)return;
  try{
