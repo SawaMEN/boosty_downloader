@@ -1,65 +1,205 @@
 #!/usr/bin/env bash
-# Installation from a checked-out repository. The repo is currently private.
+# Public, idempotent host-side installer. Do not modify archived user data.
 set -Eeuo pipefail
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+umask 077
+
+REPO='https://github.com/SawaMEN/boosty_downloader.git'
 ETC=/etc/boosty-downloader
 DATA=/var/lib/boosty-downloader
 PROJECT=/opt/boosty-downloader
+BIN=/usr/local/boosty-downloader/boosty-downloader
 SERVICE=/etc/systemd/system/boosty-downloader.service
-CMD=/usr/local/bin/bdy
-if [[ ${EUID:-$(id -u)} -ne 0 ]];then echo 'Запустите sudo bash install.sh' >&2;exit 1;fi
-[[ "$(uname -s)" == Linux ]] || { echo 'Требуется Linux.' >&2;exit 1; }
-[[ -f "$ROOT/go.mod" && -f "$ROOT/deploy/docker/compose.yaml" ]] || { echo 'Запускайте установку из исходного репозитория.' >&2;exit 1; }
-MODE="${1:-}"
-if [[ "$MODE" == --mode ]];then MODE="${2:-}";fi
-if [[ "$MODE" != native && "$MODE" != docker ]];then
-  echo 'Boosty Downloader — установка / обновление'
-  echo '1) Нативная установка (systemd)'
-  echo '2) Docker Compose'
-  echo '0) Выход'
-  read -r -p 'Выбор: ' option </dev/tty
-  case "$option" in 1) MODE=native;;2) MODE=docker;;0) exit 0;;*) echo 'Неизвестный вариант';exit 1;;esac
+MODE=''
+ROOT=''
+WORK=''
+STAGE=''
+BACKUP_PROJECT=''
+RESTORE_IMAGE=0
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
+cleanup() {
+  if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi
+  if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
+}
+trap cleanup EXIT
+usage() {
+  cat <<'HELP'
+Boosty Downloader — установка из публичного GitHub.
+  sudo bash install.sh [--mode native|docker]
+  sudo bash install.sh --help
+
+Если install.sh скачан отдельно, исходники будут загружены автоматически.
+Для установки без вопросов задайте BD_PUBLIC_HOST, BD_PORT, BD_TLS_MODE
+и при необходимости BD_ADMIN_USER, BD_ADMIN_PASSWORD.
+BD_BUILD_FROM_SOURCE=1  — собрать native локально (без скачивания релиза)
+BD_NATIVE_BINARY + BD_NATIVE_SHA256 — собственный проверяемый бинарник
+BD_SOURCE_REF=main       — ветка или тег для скачивания исходников
+BD_VIDEO_ACCEL=none|amd|intel|nvidia — аппаратное ускорение (опционально)
+Режим установки сохраняет прежние архивы, ключи и настройки.
+HELP
+}
+while (($#)); do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --mode)
+      (($# >= 2)) || die 'Укажите native или docker после --mode'
+      MODE="$2"; shift 2 ;;
+    --mode=*) MODE="${1#--mode=}"; shift ;;
+    native|docker)
+      [[ -z "$MODE" ]] || die 'Режим указан дважды'
+      MODE="$1"; shift ;;
+    *) die "Неизвестный аргумент: $1 (используйте --help)" ;;
+  esac
+done
+[[ ${EUID:-$(id -u)} -eq 0 ]] || die 'Запустите: sudo bash install.sh'
+[[ "$(uname -s)" == Linux ]] || die 'Поддерживается только Linux'
+command -v systemctl >/dev/null || die 'Требуется Linux с systemd'
+[[ -d /run/systemd/system ]] || die 'Система не запущена с systemd'
+command -v flock >/dev/null || die 'Требуется flock (util-linux)'
+mkdir -p /run/lock
+exec 9>/run/lock/boosty-downloader-install.lock
+flock -n 9 || die 'Установка уже запущена в другом процессе'
+WORK="$(mktemp -d)"
+ORIGIN="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+install_packages() {
+  (($#)) || return 0
+  if command -v apt-get >/dev/null; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+  elif command -v dnf >/dev/null; then dnf install -y "$@"
+  elif command -v zypper >/dev/null; then zypper --non-interactive install "$@"
+  elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed "$@"
+  else die "Установите системные пакеты вручную: $*"; fi
+}
+require_command() {
+  local name="$1" package="$2"
+  if ! command -v "$name" >/dev/null; then
+    say "Установка зависимости: $package"
+    install_packages "$package"
+  fi
+  command -v "$name" >/dev/null || die "Не найдена команда $name"
+}
+require_command curl curl
+require_command openssl openssl
+require_command python3 python3
+require_command sha256sum coreutils
+
+if [[ -f "$ORIGIN/go.mod" && -f "$ORIGIN/deploy/docker/compose.yaml" ]]; then
+  ROOT="$ORIGIN"
+else
+  require_command git git
+  ref="${BD_SOURCE_REF:-main}"
+  [[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$ref" != *..* ]] ||
+    die 'Недопустимый BD_SOURCE_REF'
+  say "Загрузка исходников публичного репозитория ($ref)..."
+  git clone --depth 1 --single-branch --branch "$ref" "$REPO" "$WORK/source" ||
+    die 'Не удалось скачать исходники из GitHub'
+  ROOT="$WORK/source"
 fi
-if [[ "$MODE" == native ]];then command -v systemctl >/dev/null || { echo 'Нужен systemd.' >&2;exit 1; };fi
-if [[ "$MODE" == docker ]];then command -v docker >/dev/null || { echo 'Требуется Docker Engine с docker compose.' >&2;exit 1; };docker compose version >/dev/null || { echo 'Требуется Docker Compose v2.' >&2;exit 1; };fi
-if [[ "$MODE" == native ]] && ! command -v zstd >/dev/null 2>&1; then
-  echo 'Установка Zstandard для экономного хранения текста и метаданных...'
-  if command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y zstd
-  elif command -v dnf >/dev/null 2>&1; then dnf install -y zstd
-  elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed zstd
-  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install zstd
-  else echo 'Установите пакет zstd и повторите установку.' >&2; exit 1; fi
+[[ -f "$ROOT/go.mod" && -f "$ROOT/deploy/systemd/boosty-downloader.service" ]] ||
+  die 'Отсутствуют файлы проекта'
+
+oldmode="$(cat "$ETC/mode" 2>/dev/null || echo none)"
+if [[ -z "$MODE" ]]; then
+  if [[ "$oldmode" == native || "$oldmode" == docker ]]; then
+    MODE="$oldmode"
+    say "Обновление существующего режима: $MODE"
+  else
+    say 'Boosty Downloader — выбор установки'
+    say '1) Native (systemd, без Docker)'
+    say '2) Docker Compose'
+    say '0) Выход'
+    [[ -r /dev/tty ]] || die 'Без терминала укажите --mode native или --mode docker'
+    read -r -p 'Выбор: ' choice </dev/tty
+    case "$choice" in 1) MODE=native ;; 2) MODE=docker ;; 0) exit 0 ;; *) die 'Неверный выбор' ;; esac
+  fi
 fi
-if ! id boosty-downloader >/dev/null 2>&1;then command -v useradd >/dev/null || { echo 'Требуется useradd.' >&2;exit 1; };useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin boosty-downloader;fi
-# Video components are optional. Explicit BD_VIDEO_ACCEL opt-in is required
-# for the first installation; later installations retain the chosen backend.
-VIDEO_ACCEL="${BD_VIDEO_ACCEL:-$(cat "$ETC/video-mode" 2>/dev/null || echo none)}"
-case "$VIDEO_ACCEL" in none|amd|intel|nvidia) ;; *) echo 'BD_VIDEO_ACCEL: none, amd, intel или nvidia' >&2;exit 1;; esac
-if [[ "$MODE" == native && "$VIDEO_ACCEL" != none ]];then
-  bash "$ROOT/deploy/boosty-video-deps" "$VIDEO_ACCEL"
+[[ "$MODE" == native || "$MODE" == docker ]] || die 'Режим: native или docker'
+
+if [[ "$MODE" == docker ]]; then
+  if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+    say 'Требуется Docker Engine с Compose v2; проверка системных пакетов...'
+    if command -v apt-get >/dev/null; then
+      install_packages docker.io docker-compose-v2 ||
+        die 'Установите Docker Engine и Docker Compose v2 по инструкции Docker'
+    else
+      die 'Установите Docker Engine и Docker Compose v2'
+    fi
+  fi
+  systemctl enable --now docker.service >/dev/null 2>&1 || true
+  docker info >/dev/null 2>&1 || die 'Docker daemon недоступен'
+  docker compose version >/dev/null || die 'Отсутствует Docker Compose v2'
 fi
 
+if [[ "$MODE" == native ]]; then
+  require_command zstd zstd
+fi
+if ! id boosty-downloader >/dev/null 2>&1; then
+  require_command useradd passwd
+  useradd --system --home-dir "$DATA" --shell "$(command -v nologin || echo /usr/sbin/nologin)" boosty-downloader
+fi
 install -d -m 0750 -o root -g boosty-downloader "$ETC"
 install -d -m 0700 -o boosty-downloader -g boosty-downloader "$DATA"
 install -d -m 0750 -o root -g boosty-downloader "$ETC/tls"
-# Existing config is preserved across both backends.
-if [[ ! -f "$ETC/environment" ]];then
-  command -v openssl >/dev/null || { echo 'Для генерации ключей требуется openssl.' >&2;exit 1; }
-  if [[ -n "${BD_PUBLIC_HOST:-}" ]];then PUBLIC_HOST="$BD_PUBLIC_HOST";else
-    echo 'Адрес панели: 1) IP-адрес  2) Домен  3) Только локально / SSH-туннель'
-    read -r -p 'Выбор [1]: ' hostmode </dev/tty; hostmode="${hostmode:-1}"
-    case "$hostmode" in 1) read -r -p 'Публичный IP: ' PUBLIC_HOST </dev/tty;;2) read -r -p 'Домен (без https://): ' PUBLIC_HOST </dev/tty;;3) PUBLIC_HOST=127.0.0.1;;*) echo 'Неверный выбор';exit 1;;esac
+[[ ! -L "$ETC/environment" && ! -L "$ETC/public-host" ]] ||
+  die 'Симлинк в конфигурации /etc/boosty-downloader запрещён'
+
+ask() {
+  local label="$1" default="$2" answer=''
+  if [[ -r /dev/tty ]]; then
+    read -r -p "$label [$default]: " answer </dev/tty
   fi
-  [[ -n "$PUBLIC_HOST" && "$PUBLIC_HOST" =~ ^[a-zA-Z0-9.:-]+$ && "$PUBLIC_HOST" != -* ]] || { echo 'Недопустимый IP/домен.' >&2;exit 1; }
-  PORT="${BD_PORT:-8443}";if [[ -z "${BD_PORT:-}" ]];then read -r -p 'Порт панели [8443]: ' answer </dev/tty;PORT="${answer:-8443}";fi
-  [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$PORT >=1024 && 10#$PORT <=65535)) || { echo 'Порт 1024–65535.' >&2;exit 1; }
+  printf '%s' "${answer:-$default}"
+}
+valid_host() {
+  python3 - "$1" <<'PY'
+import ipaddress,re,sys
+s=sys.argv[1]
+try:
+    ipaddress.ip_address(s)
+    sys.exit(0)
+except ValueError: pass
+if not s or len(s)>253 or len(s)<3:
+    sys.exit(1)
+labels=s.split('.')
+if len(labels)<2 or any(not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', p) for p in labels):
+    sys.exit(1)
+PY
+}
+valid_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1024 && 10#$1 <= 65535))
+}
+if [[ ! -f "$ETC/environment" ]]; then
+  if [[ -n "${BD_PUBLIC_HOST:-}" ]]; then
+    PUBLIC_HOST="$BD_PUBLIC_HOST"
+  else
+    say 'Адрес панели: 1) IP; 2) домен; 3) localhost/SSH-туннель'
+    [[ -r /dev/tty ]] || die 'Для установки без терминала укажите BD_PUBLIC_HOST'
+    read -r -p 'Выбор [3]: ' choice </dev/tty
+    case "${choice:-3}" in
+      1) read -r -p 'IP: ' PUBLIC_HOST </dev/tty ;;
+      2) read -r -p 'Домен: ' PUBLIC_HOST </dev/tty ;;
+      3) PUBLIC_HOST=127.0.0.1 ;;
+      *) die 'Неверный выбор адреса' ;;
+    esac
+  fi
+  valid_host "$PUBLIC_HOST" || die 'Недопустимый IP-адрес или домен'
+  PORT="${BD_PORT:-}"
+  if [[ -z "$PORT" ]]; then PORT="$(ask 'Порт HTTPS' 8443)"; fi
+  valid_port "$PORT" || die 'Порт должен быть от 1024 до 65535'
   USERNAME="${BD_ADMIN_USER:-admin}"
-  [[ "$USERNAME" =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || { echo 'Недопустимый логин.' >&2;exit 1; }
+  [[ "$USERNAME" =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die 'Недопустимый логин администратора'
   PASSWORD="${BD_ADMIN_PASSWORD:-$(openssl rand -hex 18)}"
-  [[ ${#PASSWORD} -ge 12 && "$PASSWORD" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo 'Пароль: не менее 12 латинских символов/цифр.' >&2;exit 1; }
+  [[ ${#PASSWORD} -ge 12 && "$PASSWORD" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+    die 'Пароль: не менее 12 латинских букв/цифр'
   SECRET="$(openssl rand -base64 32 | tr -d '\n')"
-  cat > "$ETC/environment" <<ENV
-BD_LISTEN="$(if [[ "$PUBLIC_HOST" == 127.0.0.1 ]]; then printf '127.0.0.1:%s' "$PORT"; else printf ':%s' "$PORT"; fi)"
+  if [[ "$PUBLIC_HOST" == 127.0.0.1 || "$PUBLIC_HOST" == ::1 ]]; then LISTEN="127.0.0.1:$PORT"
+  else LISTEN=":$PORT"; fi
+  tmp_env="$WORK/environment"
+  cat >"$tmp_env" <<ENV
+BD_LISTEN="$LISTEN"
 BD_PORT="$PORT"
 BD_DATA_DIR="$DATA"
 BD_ADMIN_USER="$USERNAME"
@@ -68,177 +208,333 @@ BD_SECRET_KEY="$SECRET"
 BD_TLS_CERT="$ETC/tls/fullchain.pem"
 BD_TLS_KEY="$ETC/tls/privkey.pem"
 ENV
-  chown root:boosty-downloader "$ETC/environment";chmod 0640 "$ETC/environment"
-  printf '\nЛогин: %s\nПароль: %s\nСохраните пароль. Впоследствии он не выводится.\n' "$USERNAME" "$PASSWORD"
-  printf '%s\n' "$PUBLIC_HOST" > "$ETC/public-host";chmod 0640 "$ETC/public-host"
+  install -m 0640 -o root -g boosty-downloader "$tmp_env" "$ETC/environment"
+  printf '%s\n' "$PUBLIC_HOST" > "$ETC/public-host"
+  chown root:boosty-downloader "$ETC/public-host"
+  chmod 0640 "$ETC/public-host"
+  say "Администратор: $USERNAME"
+  say "Первичный пароль: $PASSWORD"
+  say 'Сохраните пароль. В дальнейшем он не будет выведен.'
 else
-  echo 'Существующая конфигурация сохранена.'
+  # Only root can modify this file (0640); preserve existing secrets.
+  [[ -f "$ETC/environment" ]] || die 'Конфигурация должна быть обычным файлом'
   # shellcheck disable=SC1091
-  set -a;source "$ETC/environment";set +a
-  PORT="$BD_PORT";PUBLIC_HOST="$(cat "$ETC/public-host" 2>/dev/null || echo 127.0.0.1)"
+  set -a; source "$ETC/environment"; set +a
+  PORT="${BD_PORT:-}"
+  PUBLIC_HOST="$(cat "$ETC/public-host" 2>/dev/null || echo 127.0.0.1)"
+  valid_port "$PORT" && valid_host "$PUBLIC_HOST" ||
+    die 'Существующая конфигурация содержит неправильный адрес или порт'
+  say 'Существующая конфигурация и учётные данные сохранены.'
 fi
-if [[ ! -s "$ETC/tls/fullchain.pem" || ! -s "$ETC/tls/privkey.pem" ]];then
+VIDEO_ACCEL="${BD_VIDEO_ACCEL:-$(cat "$ETC/video-mode" 2>/dev/null || echo none)}"
+case "$VIDEO_ACCEL" in none|amd|intel|nvidia) ;; *) die 'BD_VIDEO_ACCEL: none, amd, intel, nvidia' ;; esac
+if [[ "$MODE" == native && "$VIDEO_ACCEL" != none ]]; then
+  bash "$ROOT/deploy/boosty-video-deps" "$VIDEO_ACCEL"
+fi
+
+# Do not rotate an existing certificate/key pair on ordinary updates.
+cert="$ETC/tls/fullchain.pem"
+key="$ETC/tls/privkey.pem"
+if [[ -s "$cert" && -s "$key" ]]; then
+  say 'Существующие сертификаты HTTPS сохранены.'
+elif [[ -e "$cert" || -e "$key" ]]; then
+  die 'Найдена только часть TLS-пары. Восстановите сертификат и ключ из резервной копии'
+else
   TLS_MODE="${BD_TLS_MODE:-}"
-  if [[ -z "$TLS_MODE" ]];then
-    echo 'HTTPS: 1) Самоподписанный  2) Свои PEM  3) Let’s Encrypt (домен, порт 80)'
-    read -r -p 'Выбор [1]: ' t </dev/tty
-    case "${t:-1}" in 1) TLS_MODE=selfsigned;;2) TLS_MODE=existing;;3) TLS_MODE=letsencrypt;;*) echo 'Неверный выбор';exit 1;;esac
+  if [[ -z "$TLS_MODE" ]]; then
+    say 'HTTPS: 1) самоподписанный; 2) существующие PEM; 3) Let’s Encrypt (домен, TCP 80)'
+    [[ -r /dev/tty ]] || die 'Укажите BD_TLS_MODE=selfsigned|existing|letsencrypt'
+    read -r -p 'Выбор [1]: ' choice </dev/tty
+    case "${choice:-1}" in 1) TLS_MODE=selfsigned ;; 2) TLS_MODE=existing ;; 3) TLS_MODE=letsencrypt ;; *) die 'Неверный HTTPS-режим' ;; esac
   fi
-  if [[ "$TLS_MODE" == existing ]];then
-    crt="${BD_EXISTING_CERT:-}";key="${BD_EXISTING_KEY:-}"
-    if [[ -z "$crt" ]];then read -r -p 'Путь к fullchain.pem: ' crt </dev/tty;fi
-    if [[ -z "$key" ]];then read -r -p 'Путь к privkey.pem: ' key </dev/tty;fi
-    [[ -f "$crt" && -f "$key" ]] || { echo 'Указанные PEM-файлы отсутствуют';exit 1; }
-    install -m 0640 -o root -g boosty-downloader "$crt" "$ETC/tls/fullchain.pem"
-    install -m 0640 -o root -g boosty-downloader "$key" "$ETC/tls/privkey.pem"
-    printf '%s\n' existing > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
-  elif [[ "$TLS_MODE" == selfsigned ]];then
-    command -v openssl >/dev/null || { echo 'Нужен openssl';exit 1; }
-    san="DNS:$PUBLIC_HOST";if [[ "$PUBLIC_HOST" == 127.0.0.1 || "$PUBLIC_HOST" =~ ^[0-9.]+$ || "$PUBLIC_HOST" == *:* ]];then san="IP:$PUBLIC_HOST";fi
-    openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 -subj '/CN=Boosty Downloader' -addext "subjectAltName=$san" -keyout "$ETC/tls/privkey.pem" -out "$ETC/tls/fullchain.pem" 2>/dev/null
-    chown root:boosty-downloader "$ETC/tls/privkey.pem" "$ETC/tls/fullchain.pem"
-    chmod 0640 "$ETC/tls/privkey.pem" "$ETC/tls/fullchain.pem"
-    printf '%s\n' selfsigned > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
-    echo 'Создан самоподписанный сертификат. Для доверенного HTTPS на домене используйте Let’s Encrypt.'
-  elif [[ "$TLS_MODE" == letsencrypt ]];then
-    [[ "$PUBLIC_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$PUBLIC_HOST" == *.* && ! "$PUBLIC_HOST" =~ ^[0-9.]+$ ]] || { echo 'Let’s Encrypt здесь поддерживается только для домена.' >&2;exit 1; }
-    if ! command -v certbot >/dev/null;then
-      echo 'Для автоматического HTTPS нужен certbot. Устанавливаем системный пакет...'
-      if command -v apt-get >/dev/null;then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y certbot
-      elif command -v dnf >/dev/null;then dnf install -y certbot
-      elif command -v pacman >/dev/null;then pacman -S --noconfirm --needed certbot
-      else echo 'Установите certbot и повторите команду.' >&2;exit 1;fi
-    fi
-    echo 'Для Let’s Encrypt домен должен указывать на VPS, TCP 80 должен быть доступен из интернета.'
-    certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email \
-      --cert-name boosty-downloader -d "$PUBLIC_HOST" --config-dir "$ETC/acme" --work-dir "$DATA/acme-work" --logs-dir "$DATA/acme-logs"
-    install -m 0640 -o root -g boosty-downloader "$ETC/acme/live/boosty-downloader/fullchain.pem" "$ETC/tls/fullchain.pem"
-    install -m 0640 -o root -g boosty-downloader "$ETC/acme/live/boosty-downloader/privkey.pem" "$ETC/tls/privkey.pem"
-    printf '%s\n' letsencrypt > "$ETC/tls/mode";chmod 0640 "$ETC/tls/mode"
-  else echo 'BD_TLS_MODE: selfsigned, existing или letsencrypt';exit 1;fi
+  case "$TLS_MODE" in
+    selfsigned)
+      if [[ "$PUBLIC_HOST" == *:* || "$PUBLIC_HOST" =~ ^[0-9.]+$ ]]; then san="IP:$PUBLIC_HOST"
+      else san="DNS:$PUBLIC_HOST"; fi
+      openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+        -subj '/CN=Boosty Downloader' -addext "subjectAltName=$san" \
+        -keyout "$key" -out "$cert" >/dev/null 2>&1 ||
+        die 'Не удалось создать самоподписанный сертификат'
+      say 'HTTPS: самоподписанный сертификат (предупреждение браузера ожидаемо).'
+      ;;
+    existing)
+      crt="${BD_EXISTING_CERT:-}"
+      pemkey="${BD_EXISTING_KEY:-}"
+      if [[ -z "$crt" ]]; then crt="$(ask 'Путь к сертификату PEM' '')"; fi
+      if [[ -z "$pemkey" ]]; then pemkey="$(ask 'Путь к ключу PEM' '')"; fi
+      [[ -f "$crt" && -f "$pemkey" ]] || die 'Нет указанных файлов PEM'
+      openssl x509 -in "$crt" -noout >/dev/null 2>&1 || die 'Недопустимый сертификат PEM'
+      openssl pkey -in "$pemkey" -noout >/dev/null 2>&1 || die 'Недопустимый TLS-ключ PEM'
+      certpub="$(openssl x509 -in "$crt" -pubkey -noout | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)"
+      keypub="$(openssl pkey -in "$pemkey" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)"
+      [[ "$certpub" == "$keypub" ]] || die 'Сертификат и приватный ключ не совпадают'
+      install -m 0640 -o root -g boosty-downloader "$crt" "$cert"
+      install -m 0640 -o root -g boosty-downloader "$pemkey" "$key"
+      ;;
+    letsencrypt)
+      [[ "$PUBLIC_HOST" == *.* && "$PUBLIC_HOST" != *:* && ! "$PUBLIC_HOST" =~ ^[0-9.]+$ ]] ||
+        die 'Для Let’s Encrypt необходим домен, а не IP'
+      require_command certbot certbot
+      say 'Домен должен указывать на VPS, TCP 80 должен быть доступен.'
+      certbot certonly --standalone --non-interactive --agree-tos \
+        --register-unsafely-without-email --cert-name boosty-downloader \
+        --config-dir "$ETC/acme" --work-dir "$DATA/acme-work" \
+        --logs-dir "$DATA/acme-logs" -d "$PUBLIC_HOST" ||
+        die 'Не удалось получить сертификат Let’s Encrypt'
+      install -m 0640 -o root -g boosty-downloader \
+        "$ETC/acme/live/boosty-downloader/fullchain.pem" "$cert"
+      install -m 0640 -o root -g boosty-downloader \
+        "$ETC/acme/live/boosty-downloader/privkey.pem" "$key"
+      ;;
+    *) die 'BD_TLS_MODE: selfsigned, existing, letsencrypt' ;;
+  esac
+  chown root:boosty-downloader "$cert" "$key"
+  chmod 0640 "$cert" "$key"
+  printf '%s\n' "$TLS_MODE" > "$ETC/tls/mode"
+  chown root:boosty-downloader "$ETC/tls/mode"
+  chmod 0640 "$ETC/tls/mode"
 fi
-install -m 0755 "$ROOT/deploy/boosty-downloader-manager" "$CMD"
-oldmode="$(cat "$ETC/mode" 2>/dev/null || echo none)"
-download_release_binary() {
-  local temp_dir="$1" arch
-  case "$(uname -m)" in x86_64|amd64) arch=amd64;;aarch64|arm64) arch=arm64;;*) echo 'Архитектура не поддерживается';return 1;;esac
-  if [[ -n "${BD_NATIVE_BINARY:-}" ]];then
-    [[ -f "$BD_NATIVE_BINARY" ]] || { echo 'BD_NATIVE_BINARY не найден.' >&2;return 1; }
-    [[ -n "${BD_NATIVE_SHA256:-}" ]] || { echo 'Для собственного бинарника обязательно укажите BD_NATIVE_SHA256.' >&2;return 1; }
-    install -m 0755 "$BD_NATIVE_BINARY" "$temp_dir/boosty-downloader"
-    [[ "$(sha256sum "$temp_dir/boosty-downloader" | cut -d ' ' -f 1)" == "$BD_NATIVE_SHA256" ]] || { echo 'SHA256 не совпадает.' >&2;return 1; }
+
+release_binary() {
+  local arch name url sum actual expected
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
+    *) die 'Native поддерживает x86_64 и aarch64' ;;
+  esac
+  name="boosty-downloader-linux-$arch"
+  if [[ -n "${BD_NATIVE_BINARY:-}" ]]; then
+    [[ -f "$BD_NATIVE_BINARY" && "${BD_NATIVE_SHA256:-}" =~ ^[a-fA-F0-9]{64}$ ]] ||
+      die 'Для BD_NATIVE_BINARY требуется файл и BD_NATIVE_SHA256'
+    install -m 0755 "$BD_NATIVE_BINARY" "$WORK/boosty-downloader"
+    actual="$(sha256sum "$WORK/boosty-downloader" | cut -d' ' -f1)"
+    [[ "$actual" == "${BD_NATIVE_SHA256,,}" ]] || die 'SHA-256 собственного бинарника не совпадает'
     return 0
   fi
-  if command -v gh >/dev/null 2>&1 && { [[ -n "${GH_TOKEN:-}" ]] || gh auth status >/dev/null 2>&1; };then
-    local tag="${BD_RELEASE_TAG:-}" selector=()
-    if [[ -n "$tag" ]];then selector=(--tag "$tag");fi
-    if gh release download "${selector[@]}" --repo SawaMEN/boosty_downloader --dir "$temp_dir" --pattern "boosty-downloader-linux-$arch" --pattern SHA256SUMS --clobber;then
-      if [[ -f "$temp_dir/SHA256SUMS" && -f "$temp_dir/boosty-downloader-linux-$arch" ]] &&
-         (cd "$temp_dir" && sha256sum --check --ignore-missing SHA256SUMS | grep -Fq "boosty-downloader-linux-$arch: OK");then
-        install -m 0755 "$temp_dir/boosty-downloader-linux-$arch" "$temp_dir/boosty-downloader"
-        return 0
-      fi
-      echo 'Контрольная сумма релиза не подтверждена.' >&2
-      return 2
-    fi
-    local run_id
-    run_id="$(gh run list --repo SawaMEN/boosty_downloader --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-    if [[ "$run_id" =~ ^[0-9]+$ ]];then
-      if gh run download "$run_id" --repo SawaMEN/boosty_downloader --name "boosty-downloader-linux-$arch" --dir "$temp_dir";then
-        if [[ -f "$temp_dir/SHA256SUMS" && -f "$temp_dir/boosty-downloader-linux-$arch" ]] &&
-           (cd "$temp_dir" && sha256sum --check --ignore-missing SHA256SUMS | grep -Fq "boosty-downloader-linux-$arch: OK");then
-          install -m 0755 "$temp_dir/boosty-downloader-linux-$arch" "$temp_dir/boosty-downloader"
-          return 0
-        fi
-        echo 'Контрольная сумма CI-артефакта не подтверждена.' >&2
-        return 2
-      fi
+  if [[ -n "${BD_RELEASE_TAG:-}" ]]; then
+    [[ "$BD_RELEASE_TAG" =~ ^v[0-9]+(\.[0-9]+){2}([-+][A-Za-z0-9.-]+)?$ ]] ||
+      die 'Недопустимый тег релиза'
+    url="https://github.com/SawaMEN/boosty_downloader/releases/download/$BD_RELEASE_TAG"
+  else
+    url='https://github.com/SawaMEN/boosty_downloader/releases/latest/download'
+  fi
+  # Missing release -> build the exact checked-out sources. Published release
+  # with a failed checksum -> NEVER silently fall back to a different binary.
+  if ! curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
+    "$url/SHA256SUMS" -o "$WORK/SHA256SUMS"; then
+    [[ -z "${BD_RELEASE_TAG:-}" ]] || die 'Не удалось скачать указанный релиз'
+    return 1
+  fi
+  curl -fLsS --retry 2 --connect-timeout 12 \
+    "$url/$name" -o "$WORK/$name" || die 'Не удалось скачать релизный бинарник'
+  expected="$(awk -v f="$name" '$2==f {print $1}' "$WORK/SHA256SUMS")"
+  actual="$(sha256sum "$WORK/$name" | cut -d ' ' -f1)"
+  [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
+    die 'Контрольная сумма релиза не совпала!'
+  install -m 0755 "$WORK/$name" "$WORK/boosty-downloader"
+}
+
+go_binary() {
+  local existing='' arch json version filename expected actual dest
+  if command -v go >/dev/null; then
+    existing="$(command -v go)"
+    if "$existing" version | grep -Eq 'go1\.(2[3-9]|[3-9][0-9])\.'; then
+      printf '%s' "$existing"
+      return 0
     fi
   fi
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
+    *) die 'Для сборки требуется amd64 или arm64' ;;
+  esac
+  say 'Загрузка актуального стабильного Go с go.dev (SHA-256 обязателен)...' >&2
+  json="$WORK/go-versions.json"
+  curl -fLsS --retry 3 --connect-timeout 12 \
+    'https://go.dev/dl/?mode=json' -o "$json" ||
+    die 'Не удалось определить версию Go; установите Go >= 1.23 вручную'
+  read -r version filename expected < <(python3 - "$json" "$arch" <<'PY'
+import json,sys
+data=json.load(open(sys.argv[1],encoding='utf-8'))
+for release in data:
+    if not release.get('stable'): continue
+    for item in release.get('files',[]):
+        if item.get('os')=='linux' and item.get('arch')==sys.argv[2] and item.get('kind')=='archive':
+            print(release['version'],item['filename'],item['sha256'])
+            sys.exit(0)
+sys.exit(1)
+PY
+  )
+  [[ "$version" =~ ^go1\.(2[3-9]|[3-9][0-9])\.[0-9]+$ &&
+     "$filename" =~ ^go[0-9.]+\.linux-(amd64|arm64)\.tar\.gz$ &&
+     "$expected" =~ ^[a-f0-9]{64}$ ]] ||
+    die 'Невозможно проверить архив Go'
+  dest="/opt/boosty-downloader-go/$version"
+  if [[ ! -x "$dest/go/bin/go" ]]; then
+    mkdir -p /opt/boosty-downloader-go
+    curl -fLsS --retry 3 --connect-timeout 12 \
+      "https://go.dev/dl/$filename" -o "$WORK/go.tar.gz" ||
+      die 'Не удалось загрузить архив Go'
+    actual="$(sha256sum "$WORK/go.tar.gz" | cut -d ' ' -f1)"
+    [[ "$actual" == "$expected" ]] || die 'SHA-256 официального Go не совпадает'
+    local stage="$WORK/go-extract"
+    mkdir -p "$stage"
+    tar -xzf "$WORK/go.tar.gz" -C "$stage"
+    [[ -x "$stage/go/bin/go" ]] || die 'Архив Go повреждён'
+    mv "$stage" "$dest"
+  fi
+  printf '%s' "$dest/go/bin/go"
+}
+
+health() {
+  local n
+  for n in $(seq 1 30); do
+    if curl -kfsS --connect-timeout 2 --max-time 3 \
+      "https://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
   return 1
 }
-if [[ "$MODE" == native ]];then
-  tmp="$(mktemp -d)";trap 'rm -rf -- "$tmp"' EXIT
-  if [[ "${BD_BUILD_FROM_SOURCE:-0}" == 1 ]];then
-    echo 'Локальная сборка из исходников...'
-    command -v go >/dev/null || { echo 'Нужен Go >= 1.23.' >&2;exit 1; }
-    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$tmp/boosty-downloader" ./cmd/boosty-downloader)
-  elif download_release_binary "$tmp";then
-    echo 'Получен готовый бинарник, SHA256 проверен.'
+
+compose() {
+  local -a files=(-f "$PROJECT/compose.yaml")
+  case "$VIDEO_ACCEL" in
+    amd|intel) files+=(-f "$PROJECT/compose.gpu-amd.yaml") ;;
+    nvidia) files+=(-f "$PROJECT/compose.gpu-nvidia.yaml") ;;
+  esac
+  docker compose --project-name boosty-downloader --project-directory "$PROJECT" "${files[@]}" "$@"
+}
+
+native_install() {
+  if [[ "${BD_BUILD_FROM_SOURCE:-0}" == 1 ]]; then
+    say 'Сборка из исходников...'
+    local go; go="$(go_binary)"
+    (cd "$ROOT" && CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
+      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader)
+  elif ! release_binary; then
+    say 'Опубликованный релиз не найден; сборка из исходников...'
+    local go; go="$(go_binary)"
+    (cd "$ROOT" && CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
+      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader)
   else
-    if [[ -n "${BD_NATIVE_BINARY:-}" ]];then echo 'Локальный бинарник не прошёл проверку.' >&2;exit 1;fi
-    echo 'Релиз недоступен или GitHub не авторизован; сборка из текущих исходников.'
-    command -v go >/dev/null || { echo 'Нужен Go >= 1.23 либо gh с доступом к релизу GitHub.' >&2;exit 1; }
-    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$tmp/boosty-downloader" ./cmd/boosty-downloader)
+    say 'Бинарник релиза загружен и проверен по SHA-256.'
   fi
-  [[ -s "$tmp/boosty-downloader" ]] || { echo 'Сборка не выполнена';exit 1; }
-  if [[ "$oldmode" == docker && -f "$PROJECT/compose.yaml" ]];then docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" down;fi
+  [[ -s "$WORK/boosty-downloader" ]] || die 'Бинарник не создан'
+  local previous=''
+  if [[ -f "$BIN" ]]; then
+    cp -p "$BIN" "$WORK/old-binary"
+    previous="$WORK/old-binary"
+  fi
   install -d -m 0755 /usr/local/boosty-downloader
-  install -m 0755 "$tmp/boosty-downloader" /usr/local/boosty-downloader/boosty-downloader
+  install -m 0755 "$WORK/boosty-downloader" "$BIN.new"
+  if [[ "$oldmode" == docker && -f "$PROJECT/compose.yaml" ]]; then
+    compose down || die 'Не удалось остановить прежний Docker-контейнер'
+  fi
+  mv -f "$BIN.new" "$BIN"
   install -m 0644 "$ROOT/deploy/systemd/boosty-downloader.service" "$SERVICE"
   systemctl daemon-reload
-  if ! systemctl enable --now boosty-downloader.service || ! systemctl restart boosty-downloader.service;then
-    echo 'Служба не запустилась, проверьте: journalctl -u boosty-downloader -n 100' >&2
-    if [[ "$oldmode" == docker ]];then docker compose --project-directory "$PROJECT" -f "$PROJECT/compose.yaml" up -d || true;fi
-    exit 1
+  if ! systemctl enable boosty-downloader.service ||
+     ! systemctl restart boosty-downloader.service ||
+     ! health; then
+    say 'Новая версия не прошла проверку. Восстанавливаем прежнюю...' >&2
+    systemctl stop boosty-downloader.service >/dev/null 2>&1 || true
+    if [[ -n "$previous" ]]; then
+      install -m 0755 "$previous" "$BIN.new"
+      mv -f "$BIN.new" "$BIN"
+      systemctl restart boosty-downloader.service || true
+    elif [[ "$oldmode" == docker ]]; then
+      systemctl disable boosty-downloader.service >/dev/null 2>&1 || true
+      compose up -d || true
+    fi
+    die 'Установка native не завершена, прежние данные сохранены'
   fi
-else
-  echo 'Сборка Docker-образа...'
-  install -d -m 0755 "$PROJECT"
-  cp -a "$ROOT/go.mod" "$ROOT/go.sum" "$ROOT/cmd" "$ROOT/internal" "$PROJECT/"
-  install -d -m 0755 "$PROJECT/deploy/docker"
-  cp "$ROOT/deploy/docker/Dockerfile" "$PROJECT/deploy/docker/Dockerfile"
-  cp "$ROOT/deploy/docker/compose.yaml" "$PROJECT/compose.yaml"
-  cp "$ROOT/deploy/docker/compose.gpu-amd.yaml" "$PROJECT/compose.gpu-amd.yaml"
-  cp "$ROOT/deploy/docker/compose.gpu-nvidia.yaml" "$PROJECT/compose.gpu-nvidia.yaml"
-  compose_files=(-f "$PROJECT/compose.yaml")
-  if [[ "$VIDEO_ACCEL" == amd || "$VIDEO_ACCEL" == intel ]];then
-    [[ -c /dev/dri/renderD128 ]] || { echo 'Нет /dev/dri/renderD128. Настройте Mesa и GPU хоста.' >&2;exit 1; }
-    compose_files+=(-f "$PROJECT/compose.gpu-amd.yaml")
-    BD_RENDER_GID="$(stat -c '%g' /dev/dri/renderD128)"
-    export BD_RENDER_GID
-  elif [[ "$VIDEO_ACCEL" == nvidia ]];then
-    compose_files+=(-f "$PROJECT/compose.gpu-nvidia.yaml")
+  if [[ -n "$previous" ]]; then cp -p "$previous" "$BIN.prev"; fi
+}
+
+docker_install() {
+  STAGE="$(mktemp -d /opt/.boosty-install-XXXXXXXX)"
+  install -d -m 0755 "$STAGE/deploy/docker"
+  cp -a "$ROOT/go.mod" "$ROOT/go.sum" "$ROOT/cmd" "$ROOT/internal" "$STAGE/"
+  cp "$ROOT/deploy/docker/"*.yaml "$ROOT/deploy/docker/Dockerfile" "$STAGE/deploy/docker/"
+  cp "$ROOT/deploy/docker/compose.yaml" "$STAGE/compose.yaml"
+  cp "$ROOT/deploy/docker/compose.gpu-amd.yaml" "$STAGE/compose.gpu-amd.yaml"
+  cp "$ROOT/deploy/docker/compose.gpu-nvidia.yaml" "$STAGE/compose.gpu-nvidia.yaml"
+  local render_gid=0
+  if [[ "$VIDEO_ACCEL" == amd || "$VIDEO_ACCEL" == intel ]]; then
+    [[ -c /dev/dri/renderD128 ]] || die 'Нет /dev/dri/renderD128 для VA-API'
+    render_gid="$(stat -c %g /dev/dri/renderD128)"
   fi
-  id_num="$(id -u boosty-downloader)";group_num="$(id -g boosty-downloader)"
-  publish_ip="0.0.0.0";[[ "$PUBLIC_HOST" != 127.0.0.1 ]] || publish_ip="127.0.0.1"
-  printf 'BD_UID=%s\nBD_GID=%s\nBD_PORT=%s\nBD_PUBLISH_IP=%s\nBD_RENDER_GID=%s\n' "$id_num" "$group_num" "$PORT" "$publish_ip" "${BD_RENDER_GID:-0}" > "$PROJECT/.env"
-  chmod 0600 "$PROJECT/.env"
-  docker compose --project-directory "$PROJECT" "${compose_files[@]}" build
-  if [[ "$oldmode" == native ]];then systemctl stop boosty-downloader.service;fi
-  if ! docker compose --project-directory "$PROJECT" "${compose_files[@]}" up -d;then
-    echo 'Не удалось запустить Docker. Проверяйте docker compose logs.' >&2
-    if [[ "$oldmode" == native ]];then systemctl start boosty-downloader.service || true;fi
-    exit 1
+  local publish_ip='0.0.0.0'
+  [[ "$PUBLIC_HOST" == 127.0.0.1 || "$PUBLIC_HOST" == ::1 ]] && publish_ip='127.0.0.1'
+  printf 'BD_UID=%s\nBD_GID=%s\nBD_PORT=%s\nBD_PUBLISH_IP=%s\nBD_RENDER_GID=%s\n' \
+    "$(id -u boosty-downloader)" "$(id -g boosty-downloader)" "$PORT" "$publish_ip" "$render_gid" \
+    > "$STAGE/.env"
+  chmod 0600 "$STAGE/.env"
+  say 'Сборка Docker-кандидата без остановки рабочей версии...'
+  docker build -f "$STAGE/deploy/docker/Dockerfile" -t boosty-downloader:install-candidate "$STAGE"
+  if docker image inspect boosty-downloader:local >/dev/null 2>&1; then
+    docker tag boosty-downloader:local boosty-downloader:install-rollback
+    RESTORE_IMAGE=1
   fi
-  systemctl disable boosty-downloader.service >/dev/null 2>&1 || true
-fi
+  local had_project=0
+  BACKUP_PROJECT="$WORK/previous-project"
+  if [[ -e "$PROJECT" ]]; then
+    [[ -d "$PROJECT" && ! -L "$PROJECT" ]] || die 'Каталог Docker не является обычной папкой'
+    cp -a "$PROJECT" "$BACKUP_PROJECT"
+    had_project=1
+  fi
+  install -d -m 0755 /opt
+  if ((had_project)); then rm -rf -- "$PROJECT"; fi
+  mv "$STAGE" "$PROJECT"
+  STAGE=''
+  docker tag boosty-downloader:install-candidate boosty-downloader:local
+  if ! compose config --quiet; then die 'Неверная конфигурация Docker Compose'; fi
+  if [[ "$oldmode" == native ]]; then systemctl stop boosty-downloader.service; fi
+  if ! compose up -d --force-recreate || ! health; then
+    say 'Docker не прошёл проверку. Восстанавливаем прежнюю версию...' >&2
+    compose down >/dev/null 2>&1 || true
+    if ((RESTORE_IMAGE)); then
+      docker tag boosty-downloader:install-rollback boosty-downloader:local
+    fi
+    if ((had_project)); then
+      rm -rf -- "$PROJECT"
+      cp -a "$BACKUP_PROJECT" "$PROJECT"
+    fi
+    if [[ "$oldmode" == native ]]; then
+      systemctl start boosty-downloader.service || true
+    elif [[ "$oldmode" == docker && $had_project -eq 1 ]]; then
+      compose up -d --force-recreate || true
+    fi
+    die 'Установка Docker не завершена, прежние данные сохранены'
+  fi
+  if [[ "$oldmode" == native ]]; then
+    systemctl disable boosty-downloader.service >/dev/null 2>&1 || true
+  fi
+}
+
+install -m 0755 "$ROOT/deploy/boosty-downloader-manager" /usr/local/bin/bdy
+if [[ "$MODE" == native ]]; then native_install; else docker_install; fi
 printf '%s\n' "$VIDEO_ACCEL" > "$ETC/video-mode"
-chmod 0640 "$ETC/video-mode"
 printf '%s\n' "$MODE" > "$ETC/mode"
-chmod 0640 "$ETC/mode"
-if [[ -f "$ETC/tls/mode" && "$(cat "$ETC/tls/mode")" == letsencrypt ]];then
-  if command -v systemctl >/dev/null;then
-    install -m 0755 "$ROOT/deploy/boosty-downloader-cert-renew" /usr/local/bin/bdy-cert-renew
-    install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.service" /etc/systemd/system/boosty-downloader-cert-renew.service
-    install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.timer" /etc/systemd/system/boosty-downloader-cert-renew.timer
-    systemctl daemon-reload
-    systemctl enable --now boosty-downloader-cert-renew.timer
-    echo 'Включено автоматическое продление сертификата.'
-  else
-    echo 'Для автоматического продления сертификата необходим systemd timer.'
-  fi
-fi
-# The updater is a separate root-owned timer, never a privileged web endpoint.
-if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
-  install -m 0755 "$ROOT/deploy/boosty-auto-update" /usr/local/bin/bdy-auto-update
-  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.service" /etc/systemd/system/boosty-downloader-update.service
-  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.timer" /etc/systemd/system/boosty-downloader-update.timer
+chown root:boosty-downloader "$ETC/video-mode" "$ETC/mode"
+chmod 0640 "$ETC/video-mode" "$ETC/mode"
+
+if [[ "$(cat "$ETC/tls/mode" 2>/dev/null || echo '')" == letsencrypt ]]; then
+  install -m 0755 "$ROOT/deploy/boosty-downloader-cert-renew" /usr/local/bin/bdy-cert-renew
+  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.service" /etc/systemd/system/
+  install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-cert-renew.timer" /etc/systemd/system/
   systemctl daemon-reload
-  if ! systemctl enable --now boosty-downloader-update.timer; then
-    echo "Автопроверку обновлений не удалось включить. Проверьте systemd timer." >&2
-  fi
+  systemctl enable --now boosty-downloader-cert-renew.timer
 fi
-echo "Установлен режим: $MODE"
-echo "Панель: https://$PUBLIC_HOST:$PORT/"
-echo 'Управление: sudo bdy'
+install -m 0755 "$ROOT/deploy/boosty-auto-update" /usr/local/bin/bdy-auto-update
+install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.service" /etc/systemd/system/
+install -m 0644 "$ROOT/deploy/systemd/boosty-downloader-update.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now boosty-downloader-update.timer ||
+  say 'Предупреждение: таймер проверки обновлений не запущен.'
+
+display="$PUBLIC_HOST"
+[[ "$display" == *:* ]] && display="[$display]"
+say ''
+say "Установлен режим: $MODE"
+say "Панель: https://$display:$PORT/"
+say 'Управление: sudo bdy'
+say 'Данные и настройки обновление не удаляет.'
