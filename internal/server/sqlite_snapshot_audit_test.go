@@ -42,8 +42,8 @@ func sqliteSnapshotAuditFixture(t *testing.T) (root, jobID, histID, media string
 			t.Fatal(err)
 		}
 		for name, data := range map[string][]byte{
-			"index.html": []byte("<html>private</html>"),
-			"manifest.json": raw,
+			"index.html":                  []byte("<html>private</html>"),
+			"manifest.json":               raw,
 			filepath.Join("media", media): contents,
 		} {
 			if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
