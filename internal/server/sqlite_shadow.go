@@ -273,18 +273,18 @@ func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error
 	}
 	grantRows.Close()
 	rows, err := tx.QueryContext(ctx, `SELECT a.archive_id,a.owner_id,p.author_slug,p.remote_post_id,
-		a.job_state,a.auto_sync,a.shared_for_all,a.deleted_at,a.payload_json
+		a.job_state,a.title,a.created_at,a.updated_at,a.archived_at,a.auto_sync,a.shared_for_all,a.deleted_at,a.payload_json
 		FROM owner_archives a JOIN source_posts p ON a.post_key=p.post_key`)
 	if err != nil {
 		return nil, err
 	}
 	result := make(map[string]Job)
 	for rows.Next() {
-		var id, owner, author, post, state, raw string
+		var id, owner, author, post, state, title, created, updated, raw string
 		var autoSync, sharedForAll int
-		var deleted sql.NullString
-		if err := rows.Scan(&id, &owner, &author, &post, &state, &autoSync,
-			&sharedForAll, &deleted, &raw); err != nil {
+		var archived, deleted sql.NullString
+		if err := rows.Scan(&id, &owner, &author, &post, &state, &title,
+			&created, &updated, &archived, &autoSync, &sharedForAll, &deleted, &raw); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -294,7 +294,10 @@ func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error
 			return nil, err
 		}
 		if job.ID != id || job.OwnerID != owner || job.Author != author ||
-			job.PostID != post || job.State != state ||
+			job.PostID != post || job.State != state || job.Title != title ||
+			!sqliteShadowDateMatches(created, job.CreatedAt) ||
+			!sqliteShadowDateMatches(updated, job.UpdatedAt) ||
+			!sqliteShadowArchivedMatches(archived, job.ArchiveUpdatedAt) ||
 			sqliteBool(job.AutoSync) != autoSync ||
 			sqliteBool(job.SharedForAll) != sharedForAll ||
 			!sqliteShadowDeletedMatches(deleted, job.DeletedAt) {
@@ -344,17 +347,29 @@ func sqliteShadowDeletedMatches(value sql.NullString, deleted *time.Time) bool {
 	return err == nil && parsed.Equal(*deleted)
 }
 
+func sqliteShadowDateMatches(raw string, want time.Time) bool {
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && parsed.Equal(want)
+}
+
+func sqliteShadowArchivedMatches(raw sql.NullString, want time.Time) bool {
+	if !raw.Valid {
+		return want.IsZero()
+	}
+	return sqliteShadowDateMatches(raw.String, want)
+}
+
 func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorImport, error) {
 	rows, err := tx.QueryContext(ctx,
-		"SELECT import_id,owner_id,author_slug,job_state,auto_sync,payload_json FROM author_imports")
+		"SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json FROM author_imports")
 	if err != nil {
 		return nil, err
 	}
 	result := make(map[string]AuthorImport)
 	for rows.Next() {
-		var id, owner, author, state, raw string
+		var id, owner, author, state, updated, raw string
 		var autoSync int
-		if err := rows.Scan(&id, &owner, &author, &state, &autoSync, &raw); err != nil {
+		if err := rows.Scan(&id, &owner, &author, &state, &autoSync, &updated, &raw); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -364,7 +379,8 @@ func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorI
 			return nil, err
 		}
 		if imp.ID != id || imp.OwnerID != owner || imp.Author != author ||
-			imp.State != state || sqliteBool(imp.AutoSync) != autoSync {
+			imp.State != state || sqliteBool(imp.AutoSync) != autoSync ||
+			!sqliteShadowDateMatches(updated, imp.UpdatedAt) {
 			rows.Close()
 			return nil, fmt.Errorf("SQLite shadow import identity mismatch: %q", id)
 		}
