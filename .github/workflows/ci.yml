@@ -38,8 +38,13 @@ jobs:
             done <<< "$changed"
             exit 1
           fi
-      - name: Check shell syntax
-        run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update
+      - name: Check shell syntax and installer help
+        run: |
+          bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update
+          bash install.sh --help >/dev/null
+          if bash install.sh --mode invalid >/dev/null 2>&1; then
+            echo "invalid installation mode was accepted"; exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Install Zstd for storage tests
@@ -90,10 +95,16 @@ jobs:
           MODE: ${{ matrix.mode }}
         run: |
           set -euo pipefail
-          sudo env PATH="$PATH" BD_PUBLIC_HOST=127.0.0.1 BD_PORT=18443 \
-            BD_TLS_MODE=selfsigned BD_BUILD_FROM_SOURCE=1 \
-            BD_ADMIN_USER=admin BD_ADMIN_PASSWORD='test-admin-password-123' \
-            bash install.sh --mode "$MODE"
+          # Exercise the same root-privileged, standalone stdin bootstrap as
+          # curl -fsSL .../install.sh | sudo bash, not just a checked-out repo.
+          mkdir -p "$RUNNER_TEMP/standalone-install"
+          (
+            cd "$RUNNER_TEMP/standalone-install"
+            sudo env PATH="$PATH" BD_PUBLIC_HOST=127.0.0.1 BD_PORT=18443 \
+              BD_TLS_MODE=selfsigned BD_BUILD_FROM_SOURCE=1 \
+              BD_ADMIN_USER=admin BD_ADMIN_PASSWORD='test-admin-password-123' \
+              bash -s -- --mode "$MODE" < "$GITHUB_WORKSPACE/install.sh"
+          )
           for attempt in $(seq 1 30); do
             if curl -kfsS https://127.0.0.1:18443/healthz >/dev/null; then break; fi
             sleep 2
