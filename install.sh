@@ -298,7 +298,7 @@ else
 fi
 
 release_binary() {
-  local arch name url sum actual expected
+  local arch name url tag expected actual edge_api
   case "$(uname -m)" in
     x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
     *) die 'Native поддерживает x86_64 и aarch64' ;;
@@ -313,25 +313,55 @@ release_binary() {
     return 0
   fi
   if [[ -n "${BD_RELEASE_TAG:-}" ]]; then
-    [[ "$BD_RELEASE_TAG" =~ ^v[0-9]+(\.[0-9]+){2}([-+][A-Za-z0-9.-]+)?$ ]] ||
-      die 'Недопустимый тег релиза'
-    url="https://github.com/SawaMEN/boosty_downloader/releases/download/$BD_RELEASE_TAG"
+    tag="$BD_RELEASE_TAG"
+    [[ "$tag" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?|edge-[a-f0-9]{12})$ ]] ||
+      die 'BD_RELEASE_TAG: ожидается vX.Y.Z либо edge-<12-hex>'
+    url="https://github.com/SawaMEN/boosty_downloader/releases/download/$tag"
+    curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
+      "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" || die "Нет манифеста контрольных сумм у релиза $tag"
   else
     url='https://github.com/SawaMEN/boosty_downloader/releases/latest/download'
+    if curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
+      "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" 2>/dev/null; then
+      say 'Найден последний стабильный релиз.'
+    else
+      # The latest stable GitHub release is absent until the first vX.Y.Z tag.
+      # Preview releases are only published AFTER successful main CI.
+      edge_api="$WORK/releases.json"
+      if ! curl -fLsS --retry 2 --connect-timeout 12 --max-time 30 \
+        'https://api.github.com/repos/SawaMEN/boosty_downloader/releases?per_page=25' \
+        -o "$edge_api"; then return 1; fi
+      tag="$(python3 - "$edge_api" <<'PY'
+import json,re,sys
+with open(sys.argv[1],encoding='utf-8') as file:
+    releases=json.load(file)
+if not isinstance(releases,list):
+    sys.exit(1)
+for item in releases:
+    tag=item.get('tag_name','')
+    assets={asset.get('name') for asset in item.get('assets',[])}
+    if (item.get('prerelease') and not item.get('draft')
+        and re.fullmatch(r'edge-[0-9a-f]{12}',tag)
+        and {'SHA256SUMS','boosty-downloader-linux-amd64',
+             'boosty-downloader-linux-arm64'} <= assets):
+        print(tag)
+        break
+PY
+      )"
+      [[ "$tag" =~ ^edge-[a-f0-9]{12}$ ]] || return 1
+      url="https://github.com/SawaMEN/boosty_downloader/releases/download/$tag"
+      curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
+        "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" ||
+        die 'Не удалось скачать контрольные суммы preview-релиза'
+      say "Стабильный релиз отсутствует; используется проверенная CI-сборка $tag (preview)."
+    fi
   fi
-  # Missing release -> build the exact checked-out sources. Published release
-  # with a failed checksum -> NEVER silently fall back to a different binary.
-  if ! curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
-    "$url/SHA256SUMS" -o "$WORK/SHA256SUMS"; then
-    [[ -z "${BD_RELEASE_TAG:-}" ]] || die 'Не удалось скачать указанный релиз'
-    return 1
-  fi
-  curl -fLsS --retry 2 --connect-timeout 12 \
-    "$url/$name" -o "$WORK/$name" || die 'Не удалось скачать релизный бинарник'
+  curl -fLsS --retry 2 --connect-timeout 12 --max-time 90 \
+    "$url/$name" -o "$WORK/$name" || die 'Не удалось скачать бинарник релиза'
   expected="$(awk -v f="$name" '$2==f {print $1}' "$WORK/SHA256SUMS")"
   actual="$(sha256sum "$WORK/$name" | cut -d ' ' -f1)"
   [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
-    die 'Контрольная сумма релиза не совпала!'
+    die 'Контрольная сумма релиза не совпала! Отмена установки.'
   install -m 0755 "$WORK/$name" "$WORK/boosty-downloader"
 }
 
