@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -96,7 +97,7 @@ func VerifySQLiteMetadataBackup(dir string) error {
 		return err
 	}
 	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := db.BeginTx(ctx, nil) // connection itself is immutable + read-only
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func openSQLiteReadOnly(path string) (*sql.DB, error) {
 	}
 	// Append a URL escaped path so spaces and special characters cannot
 	// change query options. Read-only connection never creates a new file.
-	uri := "file:" + filepath.ToSlash(path) + "?mode=ro&_pragma=query_only(1)"
+	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1&_pragma=query_only(1)"}).String()
 	db, err := sql.Open("sqlite", uri)
 	if err != nil {
 		return nil, err
