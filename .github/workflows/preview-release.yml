@@ -1,0 +1,72 @@
+name: Publish preview binaries
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Avoid overlapping publishes without cancelling the version under upload.
+concurrency:
+  group: preview-releases
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Never build/publish untrusted pull request code in a privileged workflow.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build checked commit for both Linux architectures
+        env:
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHECKED_SHA"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' \
+              -o "dist/boosty-downloader-linux-$arch" ./cmd/boosty-downloader
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' \
+              -o "dist/boosty-dbcheck-linux-$arch" ./cmd/boosty-dbcheck
+          done
+          (cd dist && sha256sum boosty-downloader-linux-* boosty-dbcheck-linux-* > SHA256SUMS)
+      - name: Compute immutable preview tag
+        id: version
+        env:
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "tag=edge-${CHECKED_SHA:0:12}" >> "$GITHUB_OUTPUT"
+      - name: Publish verified preview assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: "Preview ${{ steps.version.outputs.tag }}"
+          body: |
+            Automated preview from a successful CI run of main.
+            This is NOT a stable release. Back up your data before upgrading.
+            Linux amd64/arm64 binaries and SHA256SUMS are attached.
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/boosty-downloader-linux-amd64
+            dist/boosty-downloader-linux-arm64
+            dist/boosty-dbcheck-linux-amd64
+            dist/boosty-dbcheck-linux-arm64
+            dist/SHA256SUMS
