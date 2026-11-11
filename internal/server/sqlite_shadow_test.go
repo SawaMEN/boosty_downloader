@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,5 +264,45 @@ func TestSQLiteShadowExplicitOptInAndExistingDBRequired(t *testing.T) {
 	if err == nil {
 		app.Close()
 		t.Fatal("shadow+preflight conflict accepted")
+	}
+}
+
+func TestSQLiteShadowStatusOnlyVisibleToAdmin(t *testing.T) {
+	app, _ := sqliteShadowApp(t)
+	url := "/api/admin/sqlite-shadow"
+	anonymous := httptest.NewRecorder()
+	app.Handler().ServeHTTP(anonymous, reqAs("GET", url, "", nil))
+	if anonymous.Code != 401 {
+		t.Fatalf("anonymous shadow status was exposed: HTTP %d", anonymous.Code)
+	}
+	cookie := testLogin(t, app, "admin", "strong-password-123")
+	admin := httptest.NewRecorder()
+	app.Handler().ServeHTTP(admin, reqAs("GET", url, "", cookie))
+	if admin.Code != 200 {
+		t.Fatalf("admin shadow status unavailable: HTTP %d %s", admin.Code, admin.Body.String())
+	}
+	var status struct {
+		Enabled bool   `json:"enabled"`
+		Source  string `json:"authoritative"`
+		State   string `json:"status"`
+	}
+	if err := json.Unmarshal(admin.Body.Bytes(), &status); err != nil ||
+		!status.Enabled || status.Source != "json" || status.State != "healthy" {
+		t.Fatalf("unexpected shadow status: %+v, %v", status, err)
+	}
+	if err := app.accounts.setRegistration(true); err != nil {
+		t.Fatal(err)
+	}
+	register := httptest.NewRecorder()
+	app.Handler().ServeHTTP(register, reqAs("POST", "/api/account/register",
+		`{"username":"anothermember","password":"another-secure-pass"}`, nil))
+	if register.Code != 201 {
+		t.Fatalf("register non-admin failed: HTTP %d %s", register.Code, register.Body.String())
+	}
+	other := testLogin(t, app, "anothermember", "another-secure-pass")
+	denied := httptest.NewRecorder()
+	app.Handler().ServeHTTP(denied, reqAs("GET", url, "", other))
+	if denied.Code != 403 {
+		t.Fatalf("non-admin accessed shadow status: HTTP %d", denied.Code)
 	}
 }
