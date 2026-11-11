@@ -196,7 +196,11 @@ func (s *Storage) saveImportsLocked() error {
 	if err := recoverMetadataPair(s.root); err != nil {
 		return err
 	}
-	return writeSyncedMetadata(s.root, "imports.json", raw)
+	if err := writeSyncedMetadata(s.root, "imports.json", raw); err != nil {
+		return err
+	}
+	s.notifySQLiteShadowLocked()
+	return nil
 }
 func (s *Storage) importsFor(owner string) []AuthorImport {
 	s.mu.Lock()
