@@ -206,3 +206,116 @@ func TestSQLiteMetadataRejectsUnsafeAndCrossOwnerMutations(t *testing.T) {
 		t.Fatal("symlink database accepted")
 	}
 }
+
+func TestSQLiteMetadataTrashRevokesSharingAndHidesArchive(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	store, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	ctx := context.Background()
+	id := strings.Repeat("1", 24)
+	before, err := store.job(ctx, "first", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := before
+	when := time.Now().UTC()
+	bad.DeletedAt = &when
+	if err := store.apply(ctx, []sqliteArchiveChange{{Before: &before, After: bad}}, nil); err == nil {
+		t.Fatal("trash operation retaining shared grants accepted")
+	}
+	deleted := before
+	deleted.DeletedAt = &when
+	deleted.SharedWith = nil
+	deleted.SharedForAll = false
+	deleted.AutoSync = false
+	deleted.UpdatedAt = when
+	if err := store.apply(ctx, []sqliteArchiveChange{{Before: &before, After: deleted}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.job(ctx, "first", id); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted archive remains readable: %v", err)
+	}
+	var grants, visible int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM archive_grants WHERE archive_id=?", id).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow("SELECT shared_for_all FROM owner_archives WHERE archive_id=?", id).Scan(&visible); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 0 || visible != 0 {
+		t.Fatal("deleted archive retained sharing")
+	}
+	if _, err := store.job(ctx, "second", strings.Repeat("2", 24)); err != nil {
+		t.Fatal("independent owner's archive became inaccessible:", err)
+	}
+}
+
+func TestSQLiteMetadataImportFailureRollsBackEarlierArchiveWrite(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	store, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	ctx := context.Background()
+	id := strings.Repeat("1", 24)
+	before, err := store.job(ctx, "first", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousImport, err := store.authorImport(ctx, "first", strings.Repeat("a", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE TRIGGER reject_import BEFORE UPDATE ON author_imports
+		BEGIN SELECT RAISE(ABORT, 'simulated disk error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.Title = "Must not be committed"
+	nextImport := previousImport
+	nextImport.State = "canceled"
+	if err := store.apply(ctx, []sqliteArchiveChange{{Before: &before, After: after}},
+		[]sqliteImportChange{{Before: &previousImport, After: nextImport}}); err == nil {
+		t.Fatal("failed import unexpectedly committed transaction")
+	}
+	unchanged, err := store.job(ctx, "first", id)
+	if err != nil || unchanged.Title != before.Title {
+		t.Fatalf("failed import left partial archive update: %+v %v", unchanged, err)
+	}
+	var events int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM archive_events").Scan(&events); err != nil || events != 0 {
+		t.Fatalf("partial event committed: %d %v", events, err)
+	}
+}
+
+func TestSQLiteMetadataPreventsImmutableCreationTimeChanges(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	store, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	ctx := context.Background()
+	before, err := store.job(ctx, "first", strings.Repeat("1", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := before
+	changed.CreatedAt = changed.CreatedAt.Add(time.Hour)
+	if err := store.apply(ctx, []sqliteArchiveChange{{Before: &before, After: changed}}, nil); err == nil {
+		t.Fatal("archive creation date was rewritten")
+	}
+	imp, err := store.authorImport(ctx, "first", strings.Repeat("a", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := imp
+	next.CreatedAt = next.CreatedAt.Add(time.Hour)
+	if err := store.apply(ctx, nil, []sqliteImportChange{{Before: &imp, After: next}}); err == nil {
+		t.Fatal("import creation date was rewritten")
+	}
+}
