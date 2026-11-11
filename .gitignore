@@ -1,4 +1,7 @@
+# Local builds and editor artifacts
 .env
+.env.*
+!.env.example
 *.log
 *.part
 *.tmp
@@ -6,3 +9,31 @@ bin/
 dist/
 state/
 .DS_Store
+
+# Never commit real user archives, databases or session secrets.
+data/
+library/
+revisions/
+blobs/
+vault/
+tls/
+**/jobs.json
+**/imports.json
+**/authors.json
+**/accounts.json
+**/metadata.db*
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/.metadata-transaction.json
+**/update-status.json
+**/environment
+**/public-host
+**/installed-release
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+*.cookies
