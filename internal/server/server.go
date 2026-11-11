@@ -59,6 +59,9 @@ func New(cfg Config) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
+	if os.Getenv("BD_SQLITE_SHADOW") == "1" && os.Getenv("BD_SQLITE_VERIFY") == "1" {
+		return nil, errors.New("BD_SQLITE_SHADOW и BD_SQLITE_VERIFY не должны использоваться одновременно")
+	}
 	// A crash may have interrupted the JSON two-file transaction. Resolve the
 	// journal before comparing either JSON file with an offline SQLite export.
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
@@ -92,8 +95,18 @@ func New(cfg Config) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	if os.Getenv("BD_SQLITE_SHADOW") == "1" {
+		if err := s.enableSQLiteShadow(ctx); err != nil {
+			cancel()
+			return nil, fmt.Errorf("режим SQLite shadow не включён; JSON остаётся основным: %w", err)
+		}
+	}
 	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	a.wg.Add(6)
+	if s.shadow != nil {
+		a.wg.Add(1)
+		go func() { defer a.wg.Done(); s.sqliteShadowLoop(ctx) }()
+	}
 	go func() { defer a.wg.Done(); a.worker() }()
 	go func() { defer a.wg.Done(); a.importWorker() }()
 	go func() { defer a.wg.Done(); a.syncLoop() }()
@@ -125,7 +138,13 @@ func (a *App) client(owner string) (*boosty.Client, error) {
 
 // Close stops discovery, streaming downloads and scheduled work. Persisted
 // queued jobs are picked up by the next service process.
-func (a *App) Close() { a.cancel(); a.wg.Wait() }
+func (a *App) Close() {
+	a.cancel()
+	a.wg.Wait()
+	if a.store.shadow != nil {
+		_ = a.store.shadow.meta.close()
+	}
+}
 func (a *App) queueJob(id string) bool {
 	select {
 	case <-a.ctx.Done():
