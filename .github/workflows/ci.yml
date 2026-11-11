@@ -26,13 +26,6 @@ jobs:
         run: go mod download
       - name: Verify offline SQLite export and safety
         run: python3 -m unittest discover -s tests -p 'test_sqlite_migrate.py' -v
-      - name: Install Zstd for storage tests
-        run: command -v zstd >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq zstd)
-      - name: Install FFmpeg for offline HLS remux test (bounded)
-        run: |
-          if ! command -v ffmpeg >/dev/null; then
-            timeout 90s sudo apt-get update -qq && timeout 90s sudo apt-get install -y -qq ffmpeg || echo "FFmpeg unavailable: optional offline remux tests may skip"
-          fi
       - name: Check interface scripts
         run: node --check internal/server/ui/app.js && node --check internal/server/ui/library.js && node --check internal/server/ui/subscriptions.js && node --check internal/server/ui/admin.js && python3 tests/ui_contract.py
       - name: Check formatting
@@ -49,6 +42,13 @@ jobs:
         run: bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update
       - name: Vet
         run: go vet ./...
+      - name: Install Zstd for storage tests
+        run: command -v zstd >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq zstd)
+      - name: Install FFmpeg for offline HLS remux test (bounded)
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            timeout 90s sudo apt-get update -qq && timeout 90s sudo apt-get install -y -qq ffmpeg || echo "FFmpeg unavailable: optional offline remux tests may skip"
+          fi
       - name: Unit tests and race detector
         run: go test -race ./...
       - name: Docker image build
