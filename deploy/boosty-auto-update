@@ -46,7 +46,6 @@ mode="$(cat "$ETC/mode")"
 [[ "$mode" == native || "$mode" == docker ]] || { echo 'Invalid installation mode.' >&2;exit 1; }
 current="$(cat "$ETC/installed-release" 2>/dev/null || true)"
 latest=''
-run_id=''
 
 status() {
   local state="$1" message="$2"
@@ -132,15 +131,9 @@ last="$(cat "$ETC/update-last-check" 2>/dev/null || echo 0)"
 if (( !force && now-last < hours*3600 ));then exit 0;fi
 printf '%s\n' "$now" > "$ETC/update-last-check"
 
-# Stable public releases require no GitHub CLI login or access token.
-# GitHub Actions artifacts in the dev channel still require authenticated gh.
+# Both stable and preview releases are public. No GitHub credentials required.
 if ! command -v curl >/dev/null; then
   status unavailable 'Для проверок и скачивания релизов требуется curl.'
-  exit 0
-fi
-if [[ "$channel" == dev ]] && { ! command -v gh >/dev/null ||
-  ! gh auth status >/dev/null 2>&1; }; then
-  status unavailable 'Для dev-канала CI требуется авторизованный GitHub CLI: sudo gh auth login.'
   exit 0
 fi
 
@@ -153,11 +146,22 @@ if [[ "$channel" == stable ]]; then
     exit 0
   fi
 else
-  latest="$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)"
-  run_id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-  if [[ ! "$latest" =~ ^[0-9a-f]{40}$ || ! "$run_id" =~ ^[0-9]+$ ]]; then
+  latest="$(curl -fLsS --retry 2 --connect-timeout 10     "https://api.github.com/repos/$REPO/releases?per_page=25" 2>/dev/null |
+    python3 -c '
+import json,re,sys
+releases=json.load(sys.stdin)
+if not isinstance(releases,list): sys.exit(1)
+for item in releases:
+    tag=item.get("tag_name","")
+    assets={x.get("name") for x in item.get("assets",[])}
+    if (item.get("prerelease") and not item.get("draft")
+        and re.fullmatch(r"edge-[0-9a-f]{12}",tag)
+        and {"SHA256SUMS","boosty-downloader-linux-amd64","boosty-downloader-linux-arm64"}<=assets):
+        print(tag);break
+' 2>/dev/null || true)"
+  if [[ ! "$latest" =~ ^edge-[0-9a-f]{12}$ ]]; then
     latest=''
-    status unavailable 'Не найдена успешная CI-сборка ветки main.'
+    status unavailable 'Пока нет опубликованных CI preview-релизов.'
     exit 0
   fi
 fi
@@ -170,8 +174,7 @@ if (( !apply && !apply_override ));then
   exit 0
 fi
 
-# The update credentials remain on the host. Never mount the Docker socket or
-# GitHub token into the web application's container.
+# The updater runs on the host. Never mount the Docker socket into the web container.
 work="$(mktemp -d "$DATA/.auto-update-XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 if [[ "$mode" == native ]];then
@@ -181,16 +184,10 @@ if [[ "$mode" == native ]];then
     *) status failed 'Архитектура процессора не поддерживается релизными бинарниками.'; exit 1;;
   esac
   name="boosty-downloader-linux-$arch"
-  if [[ "$channel" == stable ]];then
-    release_url="https://github.com/$REPO/releases/download/$latest"
-    if ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/$name" -o "$work/$name" ||
-       ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/SHA256SUMS" -o "$work/SHA256SUMS"; then
-      status failed 'Не удалось скачать публичный релиз и его SHA256SUMS.';exit 1
-    fi
-  else
-    if ! gh run download "$run_id" --repo "$REPO" --name "$name" --dir "$work";then
-      status failed 'Не удалось скачать успешную CI-сборку.';exit 1
-    fi
+  release_url="https://github.com/$REPO/releases/download/$latest"
+  if ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/$name" -o "$work/$name" ||
+     ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/SHA256SUMS" -o "$work/SHA256SUMS"; then
+    status failed 'Не удалось скачать бинарник релиза и SHA256SUMS.';exit 1
   fi
   [[ -s "$work/$name" && -s "$work/SHA256SUMS" ]] || { status failed 'Нет бинарника или контрольной суммы.';exit 1; }
   expected="$(awk -v f="$name" '$2==f {print $1}' "$work/SHA256SUMS")"
@@ -206,18 +203,8 @@ if [[ "$mode" == native ]];then
   fi
 else
   command -v git >/dev/null && command -v docker >/dev/null || { status failed 'Для обновления Docker нужны git и docker compose.';exit 1; }
-  if [[ "$channel" == stable ]];then
-    if ! git clone --depth 1 --single-branch --branch "$latest"       "https://github.com/$REPO.git" "$work/source"; then
-      status failed 'Не удалось получить исходники публичного релиза.';exit 1
-    fi
-  else
-    if ! gh repo clone "$REPO" "$work/source" -- --depth 1 --branch main;then
-      status failed 'Не удалось получить исходники проверенной сборки.';exit 1
-    fi
-    if ! git -C "$work/source" fetch --depth 1 origin "$latest" || ! git -C "$work/source" checkout --detach "$latest";then
-      status failed 'Не удалось закрепить исходники на успешном коммите CI.';exit 1
-    fi
-    [[ "$(git -C "$work/source" rev-parse HEAD)" == "$latest" ]] || { status failed 'Версия исходников не совпадает с успешной сборкой.';exit 1; }
+  if ! git clone --depth 1 --single-branch --branch "$latest"     "https://github.com/$REPO.git" "$work/source"; then
+    status failed 'Не удалось получить исходники выбранного публичного релиза.';exit 1
   fi
   [[ -d "$PROJECT" && ! -L "$PROJECT" && -f "$PROJECT/.env" ]] || { status failed 'Каталог Docker не распознан.';exit 1; }
   [[ -f "$work/source/go.mod" && -f "$work/source/deploy/docker/compose.yaml" ]] || { status failed 'В релизе отсутствуют исходники сервиса.';exit 1; }
