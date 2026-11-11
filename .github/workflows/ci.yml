@@ -118,4 +118,8 @@ jobs:
             https://127.0.0.1:18443/api/account/login
           curl -kfsS -b "$RUNNER_TEMP/boosty-cookies.txt" https://127.0.0.1:18443/api/jobs
           sudo bdy status
+          if [ "$MODE" = native ]; then
+            command -v boosty-dbcheck
+            boosty-dbcheck --help >/dev/null 2>&1
+          fi
           sudo bdy uninstall
