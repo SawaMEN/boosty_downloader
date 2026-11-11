@@ -239,3 +239,7 @@ func sqliteSameJSON(a, b []byte) bool {
 		json.Unmarshal(b, &right) == nil &&
 		reflect.DeepEqual(left, right)
 }
+
+// VerifySQLiteExport provides a one-shot preflight for the administrator CLI.
+// It does not mutate SQLite or switch the application's JSON data backend.
+func VerifySQLiteExport(root string) error { return verifySQLiteExport(root) }
