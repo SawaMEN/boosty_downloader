@@ -49,7 +49,7 @@ func TestOwnerScopedTiersAndSharedPhysicalMedia(t *testing.T) {
 		}
 		if err := writeJSON(filepath.Join(folder, "manifest.json"), ArchiveManifest{
 			Author: j.Author, PostID: j.PostID, Title: j.Title, Subscription: j.Subscription,
-			Assets: []ArchiveAsset{{Filename: "video.mp4", Type: "ok_video", Size: int64(len(body)), SHA256: digest}},
+			Assets:        []ArchiveAsset{{Filename: "video.mp4", Type: "ok_video", Size: int64(len(body)), SHA256: digest}},
 			ContentSHA256: strings.Repeat("f", 64),
 		}); err != nil {
 			t.Fatal(err)
