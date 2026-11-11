@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -235,8 +236,11 @@ func sqliteSourceJSON(path string) (string, []byte, error) {
 
 func sqliteSameJSON(a, b []byte) bool {
 	var left, right any
-	return json.Unmarshal(a, &left) == nil &&
-		json.Unmarshal(b, &right) == nil &&
+	da := json.NewDecoder(bytes.NewReader(a))
+	db := json.NewDecoder(bytes.NewReader(b))
+	da.UseNumber()
+	db.UseNumber()
+	return da.Decode(&left) == nil && db.Decode(&right) == nil &&
 		reflect.DeepEqual(left, right)
 }
 
