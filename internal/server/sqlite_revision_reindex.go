@@ -430,7 +430,7 @@ func sqliteReindexReadRevision(root string, job Job, id string, parts []string, 
 	}
 	revision := sqliteDiskRevision{
 		id: id, archiveID: job.ID, owner: job.OwnerID, author: job.Author,
-		path: filepath.ToSlash(filepath.Join(parts...)),
+		path:  filepath.ToSlash(filepath.Join(parts...)),
 		title: man.Title, captured: man.CapturedAt, current: current,
 		subscription: man.Subscription, assets: make([]sqliteDiskAsset, 0, len(man.Assets)),
 	}
