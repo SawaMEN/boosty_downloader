@@ -333,3 +333,41 @@ func TestSQLiteShadowDetectsSQLIndexedMetadataTampering(t *testing.T) {
 		t.Fatal("shadow remained degraded after SQL title repair:", err)
 	}
 }
+
+func TestSQLiteShadowReportsPendingUntilLatestCommitReplicated(t *testing.T) {
+	app, _ := sqliteShadowApp(t)
+	ctx := context.Background()
+	id := strings.Repeat("1", 24)
+	if _, err := app.store.shadow.meta.db.Exec(`
+		CREATE TRIGGER block_shadow_pending BEFORE UPDATE ON owner_archives
+		BEGIN SELECT RAISE(ABORT, 'shadow temporarily unavailable'); END`); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := app.store.get(id)
+	if !ok {
+		t.Fatal("missing original job")
+	}
+	job.Title = "new JSON revision"
+	if err := app.store.upsert(job); err != nil {
+		t.Fatal(err)
+	}
+	if !app.store.sqliteShadowStatus().Pending {
+		t.Fatal("authoritative JSON write was incorrectly marked as replicated")
+	}
+	if err := app.store.syncSQLiteShadow(ctx); err == nil {
+		t.Fatal("blocked SQL update unexpectedly succeeded")
+	}
+	if !app.store.sqliteShadowStatus().Pending {
+		t.Fatal("failed mirror cleared pending work")
+	}
+	if _, err := app.store.shadow.meta.db.Exec("DROP TRIGGER block_shadow_pending"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.syncSQLiteShadow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	status := app.store.sqliteShadowStatus()
+	if status.Pending || status.LastError != "" || status.LastSuccess.IsZero() {
+		t.Fatalf("successful SQL catch-up did not clear pending work: %+v", status)
+	}
+}
