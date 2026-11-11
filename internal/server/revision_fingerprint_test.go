@@ -11,15 +11,15 @@ import (
 func TestArchiveContentFingerprintIgnoresCaptureTimeButTracksChanges(t *testing.T) {
 	man := ArchiveManifest{
 		Title: "Post", Author: "creator", PostID: "post-1",
-		Source: "https://boosty.to/creator/posts/post-1",
-		CapturedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+		Source:         "https://boosty.to/creator/posts/post-1",
+		CapturedAt:     time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 		CommentsStatus: "сохранены полностью (по данным API)",
-		CommentCount: 1, CommentExpected: 1,
+		CommentCount:   1, CommentExpected: 1,
 		Assets: []ArchiveAsset{{Filename: "video.mp4", Type: "ok_video", SHA256: strings.Repeat("a", 64), Size: 200}},
 		Subscription: &CapturedSubscription{
 			Level: "Tier A", LevelID: "123", Paid: true,
 			ObservedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
-			Source: "boosty_subscriptions",
+			Source:     "boosty_subscriptions",
 		},
 	}
 	blocks := []archiveBlock{{Type: "text", Text: "Post body"}, {Type: "ok_video", Asset: &man.Assets[0]}}
@@ -90,7 +90,7 @@ func TestDiscardIdenticalArchiveRevisionsSafely(t *testing.T) {
 			old := ArchiveManifest{
 				Author: job.Author, PostID: job.PostID, Title: "Post",
 				ContentSHA256: tt.oldHash,
-				Assets: []ArchiveAsset{{Filename: "clip.mp4", Type: "ok_video", Size: 14}},
+				Assets:        []ArchiveAsset{{Filename: "clip.mp4", Type: "ok_video", Size: 14}},
 			}
 			if err := writeJSON(filepath.Join(live, "manifest.json"), old); err != nil {
 				t.Fatal(err)
