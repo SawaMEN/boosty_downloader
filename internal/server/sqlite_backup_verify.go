@@ -155,7 +155,6 @@ func backupReadPrivateFile(dir, name string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-
 func backupFileDigest(dir, name string) (string, int64, error) {
 	path := filepath.Join(dir, name)
 	info, err := os.Lstat(path)
