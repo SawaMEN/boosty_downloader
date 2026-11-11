@@ -185,7 +185,7 @@ if [[ "$MODE" == native ]];then
 else
   echo 'Сборка Docker-образа...'
   install -d -m 0755 "$PROJECT"
-  cp -a "$ROOT/go.mod" "$ROOT/cmd" "$ROOT/internal" "$PROJECT/"
+  cp -a "$ROOT/go.mod" "$ROOT/go.sum" "$ROOT/cmd" "$ROOT/internal" "$PROJECT/"
   install -d -m 0755 "$PROJECT/deploy/docker"
   cp "$ROOT/deploy/docker/Dockerfile" "$PROJECT/deploy/docker/Dockerfile"
   cp "$ROOT/deploy/docker/compose.yaml" "$PROJECT/compose.yaml"
