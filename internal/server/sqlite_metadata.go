@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -81,7 +80,7 @@ func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error)
 	}
 	var raw string
 	err := m.db.QueryRowContext(ctx,
-		"SELECT payload_json FROM owner_archives WHERE owner_id=? AND archive_id=?",
+		"SELECT payload_json FROM owner_archives WHERE owner_id=? AND archive_id=? AND deleted_at IS NULL",
 		owner, id).Scan(&raw)
 	if err != nil {
 		return Job{}, err
@@ -150,6 +149,9 @@ func validSQLiteArchive(j Job) error {
 	}
 	if j.CreatedAt.IsZero() || j.UpdatedAt.IsZero() {
 		return errors.New("archive timestamps are required")
+	}
+	if j.DeletedAt != nil && (j.AutoSync || j.SharedForAll || len(j.SharedWith) != 0) {
+		return errors.New("deleted archives cannot retain active sharing or synchronization")
 	}
 	seen := make(map[string]bool, len(j.SharedWith))
 	for _, member := range j.SharedWith {
@@ -232,7 +234,7 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 	}
 	if c.Before != nil && (c.Before.ID != j.ID ||
 		c.Before.OwnerID != j.OwnerID || c.Before.Author != j.Author ||
-		c.Before.PostID != j.PostID) {
+		c.Before.PostID != j.PostID || !c.Before.CreatedAt.Equal(j.CreatedAt)) {
 		return errors.New("archive ownership and post identity cannot change")
 	}
 	found, err := sqliteCheckBefore(ctx, tx,
@@ -243,6 +245,18 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 	payload, err := json.Marshal(j)
 	if err != nil {
 		return err
+	}
+	if found {
+		var owner, author, postID string
+		err = tx.QueryRowContext(ctx, `SELECT a.owner_id,p.author_slug,p.remote_post_id
+			FROM owner_archives a JOIN source_posts p ON p.post_key=a.post_key
+			WHERE a.archive_id=?`, j.ID).Scan(&owner, &author, &postID)
+		if err != nil {
+			return err
+		}
+		if owner != j.OwnerID || author != j.Author || postID != j.PostID {
+			return errSQLiteConflict
+		}
 	}
 	if !found {
 		_, err = tx.ExecContext(ctx,
@@ -315,7 +329,7 @@ func sqliteApplyImport(ctx context.Context, tx *sql.Tx, c sqliteImportChange) er
 		return err
 	}
 	if c.Before != nil && (c.Before.ID != v.ID ||
-		c.Before.OwnerID != v.OwnerID || !strings.EqualFold(c.Before.Author, v.Author)) {
+		c.Before.OwnerID != v.OwnerID || c.Before.Author != v.Author || !c.Before.CreatedAt.Equal(v.CreatedAt)) {
 		return errors.New("import ownership and author cannot change")
 	}
 	found, err := sqliteCheckBefore(ctx, tx,
