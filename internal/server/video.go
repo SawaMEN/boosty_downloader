@@ -591,6 +591,9 @@ func (a *App) processVideoTask(task VideoTask) {
 		}
 		filtered = append(filtered, ArchiveAsset{Filename: targetName, Type: "transcoded_video", Title: original.Title, Size: size, SHA256: digest, SourceFile: original.Filename, SourceSHA256: original.SHA256})
 		updated.Assets = filtered
+		// The content changed outside the ordinary archiver. Never leave an
+		// old digest that could incorrectly suppress the next revision.
+		updated.ContentSHA256 = ""
 		if err = writeJSON(filepath.Join(folder, "manifest.json"), updated); err != nil {
 			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: err.Error()})
 			continue
