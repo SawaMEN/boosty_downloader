@@ -24,7 +24,7 @@ type Storage struct {
 	jobs    map[string]*Job
 	authors map[string][]string
 	imports map[string]*AuthorImport
-	shadow *sqliteShadow
+	shadow  *sqliteShadow
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
