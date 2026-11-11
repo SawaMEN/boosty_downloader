@@ -50,6 +50,7 @@ func TestOwnerScopedTiersAndSharedPhysicalMedia(t *testing.T) {
 		if err := writeJSON(filepath.Join(folder, "manifest.json"), ArchiveManifest{
 			Author: j.Author, PostID: j.PostID, Title: j.Title, Subscription: j.Subscription,
 			Assets: []ArchiveAsset{{Filename: "video.mp4", Type: "ok_video", Size: int64(len(body)), SHA256: digest}},
+			ContentSHA256: strings.Repeat("f", 64),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +93,7 @@ func TestOwnerScopedTiersAndSharedPhysicalMedia(t *testing.T) {
 		t.Fatal("owner tier exposed via shared catalogue")
 	}
 	manifest := testArchiveResponse(t, app, other, "GET", "/api/jobs/"+jobs[0].ID+"/manifest", "", 200)
-	if bytes.Contains(manifest, []byte("Tier A")) {
+	if bytes.Contains(manifest, []byte("Tier A")) || bytes.Contains(manifest, []byte(strings.Repeat("f", 64))) {
 		t.Fatal("owner subscription exposed via shared manifest")
 	}
 	zipped := testArchiveResponse(t, app, other, "GET", "/api/jobs/"+jobs[0].ID+"/zip", "", 200)
@@ -109,7 +110,7 @@ func TestOwnerScopedTiersAndSharedPhysicalMedia(t *testing.T) {
 			buf := make([]byte, 4096)
 			n, _ := r.Read(buf)
 			r.Close()
-			if bytes.Contains(buf[:n], []byte("Tier A")) {
+			if bytes.Contains(buf[:n], []byte("Tier A")) || bytes.Contains(buf[:n], []byte(strings.Repeat("f", 64))) {
 				t.Fatal("owner subscription exposed via shared ZIP")
 			}
 		}
