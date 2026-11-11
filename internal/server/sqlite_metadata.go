@@ -47,8 +47,8 @@ func openSQLiteMetadata(path string) (*sqliteMetadata, error) {
 	}
 	// mode=rw refuses to initialize an empty database accidentally.
 	dsn := (&url.URL{
-		Scheme: "file",
-		Path:   abs,
+		Scheme:   "file",
+		Path:     abs,
 		RawQuery: "mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)",
 	}).String()
 	db, err := sql.Open("sqlite", dsn)
