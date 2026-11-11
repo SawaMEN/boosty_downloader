@@ -306,3 +306,30 @@ func TestSQLiteShadowStatusOnlyVisibleToAdmin(t *testing.T) {
 		t.Fatalf("non-admin accessed shadow status: HTTP %d", denied.Code)
 	}
 }
+
+func TestSQLiteShadowDetectsSQLIndexedMetadataTampering(t *testing.T) {
+	app, _ := sqliteShadowApp(t)
+	ctx := context.Background()
+	id := strings.Repeat("1", 24)
+	job, ok := app.store.get(id)
+	if !ok {
+		t.Fatal("missing fixture job")
+	}
+	if _, err := app.store.shadow.meta.db.Exec(
+		"UPDATE owner_archives SET title='untrusted override' WHERE archive_id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.syncSQLiteShadow(ctx); err == nil {
+		t.Fatal("SQL title tampering was not detected")
+	}
+	if got, ok := app.store.get(id); !ok || got.Title != job.Title {
+		t.Fatal("SQL projection tampering changed the live JSON job")
+	}
+	if _, err := app.store.shadow.meta.db.Exec(
+		"UPDATE owner_archives SET title=? WHERE archive_id=?", job.Title, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.syncSQLiteShadow(ctx); err != nil {
+		t.Fatal("shadow remained degraded after SQL title repair:", err)
+	}
+}
