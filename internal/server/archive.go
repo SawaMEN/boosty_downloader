@@ -30,6 +30,7 @@ type ArchiveManifest struct {
 	PostID          string                  `json:"postId"`
 	Source          string                  `json:"source"`
 	CapturedAt      time.Time               `json:"capturedAt"`
+	ContentSHA256   string                  `json:"contentSha256,omitempty"`
 	Assets          []ArchiveAsset          `json:"assets"`
 	CommentsStatus  string                  `json:"commentsStatus"`
 	CommentCount    int                     `json:"commentCount"`
@@ -236,7 +237,8 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	// Capture last completed copy before modifying raw JSON, comments or
 	// media, so refresh failures never destroy the previous version.
-	if _, e = a.store.saveArchiveRevision(*j); e != nil {
+	revisionID, e := a.store.saveArchiveRevision(*j)
+	if e != nil {
 		return fmt.Errorf("не удалось сохранить прошлую версию: %w", e)
 	}
 	mediaFolder := filepath.Join(folder, "media")
@@ -358,17 +360,27 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	// A completed archive has its own immutable capture date, independent of
 	// the task's UpdatedAt (which changes on shares, retries and progress).
 	man.CapturedAt = time.Now().UTC()
+	blocks := archiveContentBlocks(p, man.Assets)
+	man.ContentSHA256, e = archiveContentFingerprint(man, blocks, cv)
+	if e != nil {
+		return e
+	}
 	if e = writeJSON(filepath.Join(folder, "manifest.json"), man); e != nil {
 		return e
 	}
 	var html bytes.Buffer
-	if e = pageTemplate.Execute(&html, renderData{ArchiveManifest: man, Blocks: archiveContentBlocks(p, man.Assets), Comments: cv}); e != nil {
+	if e = pageTemplate.Execute(&html, renderData{ArchiveManifest: man, Blocks: blocks, Comments: cv}); e != nil {
 		return e
 	}
 	if e = writeAtomic(filepath.Join(folder, "index.html"), html.Bytes()); e != nil {
 		return e
 	}
 	j.ArchiveUpdatedAt = man.CapturedAt
+	if len(man.Failures) == 0 && !j.CommentsPartial {
+		if _, err := a.store.discardIdenticalRevision(*j, revisionID); err != nil {
+			fmt.Fprintf(os.Stderr, "revisions dedup: %v\n", err)
+		}
+	}
 	if err := a.store.pruneArchiveRevisions(*j); err != nil {
 		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
 	}
