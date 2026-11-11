@@ -248,5 +248,9 @@ func (s *Storage) saveJobsImportsLocked() error {
 	if err != nil {
 		return err
 	}
-	return writeMetadataPair(s.root, jobs, imports)
+	if err := writeMetadataPair(s.root, jobs, imports); err != nil {
+		return err
+	}
+	s.notifySQLiteShadowLocked()
+	return nil
 }
