@@ -308,7 +308,12 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		if previous, known := prior[name]; known && previous.Type == m.Type {
 			valid, err := verifyAsset(dest, previous)
 			if err == nil && valid && (m.Size <= 0 || m.Size == previous.Size) {
-				man.Assets = append(man.Assets, previous)
+				verified := previous
+				verified.Title = m.Title
+				if verified.Title == "" {
+					verified.Title = m.Type
+				}
+				man.Assets = append(man.Assets, verified)
 				if compressionPolicy.DeduplicateMedia {
 					_ = a.store.deduplicateAsset(dest, previous.SHA256, previous.Size)
 				}
@@ -353,6 +358,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		j.DoneFiles++
 		_ = a.store.upsert(*j)
 	}
+	// Keep completed encodes only when the original SHA-256 still matches.
+	// This prevents a refresh from losing an Immich-style derivative copy.
+	retainVerifiedRenditions(&man, prior, mediaFolder)
 	var cv []commentView
 	if j.IncludeComments {
 		appendComments(&cv, comments.Comments, 0)
