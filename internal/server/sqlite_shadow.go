@@ -20,6 +20,7 @@ import (
 type sqliteShadow struct {
 	meta        *sqliteMetadata
 	wake        chan struct{}
+	syncMu      sync.Mutex // serializes snapshots and SQL commits to prevent stale overwrites
 	mu          sync.Mutex
 	lastAttempt time.Time
 	lastSuccess time.Time
@@ -129,6 +130,10 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 	if s.shadow == nil {
 		return errors.New("SQLite shadow not enabled")
 	}
+	// Do not allow an older JSON snapshot to commit AFTER a newer one.
+	// This also guards explicit sync calls racing with the background worker.
+	s.shadow.syncMu.Lock()
+	defer s.shadow.syncMu.Unlock()
 	s.shadow.mu.Lock()
 	checkpoint := s.shadow.changed
 	s.shadow.mu.Unlock()
