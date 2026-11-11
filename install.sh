@@ -369,6 +369,15 @@ PY
   [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
     die 'Контрольная сумма релиза не совпала! Отмена установки.'
   install -m 0755 "$WORK/$name" "$WORK/boosty-downloader"
+  # Ship the matching database inspection utility, not a stale helper.
+  local helper="boosty-dbcheck-linux-$arch" helper_expected helper_actual
+  curl -fLsS --retry 2 --connect-timeout 12 --max-time 90 \
+    "$url/$helper" -o "$WORK/$helper" || die 'Нет утилиты boosty-dbcheck в релизе'
+  helper_expected="$(awk -v f="$helper" '$2==f {print $1}' "$WORK/SHA256SUMS")"
+  helper_actual="$(sha256sum "$WORK/$helper" | cut -d ' ' -f1)"
+  [[ "$helper_expected" =~ ^[a-f0-9]{64}$ && "$helper_actual" == "$helper_expected" ]] ||
+    die 'SHA-256 boosty-dbcheck не совпала'
+  install -m 0755 "$WORK/$helper" "$WORK/boosty-dbcheck"
   RELEASE_ID="$tag"
 }
 
@@ -448,12 +457,16 @@ native_install() {
     say 'Сборка из исходников...'
     local go; go="$(go_binary)"
     (cd "$ROOT" && CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
-      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader)
+      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader &&
+      CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
+      -o "$WORK/boosty-dbcheck" ./cmd/boosty-dbcheck)
   elif ! release_binary; then
     say 'Опубликованный релиз не найден; сборка из исходников...'
     local go; go="$(go_binary)"
     (cd "$ROOT" && CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
-      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader)
+      -o "$WORK/boosty-downloader" ./cmd/boosty-downloader &&
+      CGO_ENABLED=0 "$go" build -trimpath -ldflags='-s -w' \
+      -o "$WORK/boosty-dbcheck" ./cmd/boosty-dbcheck)
   else
     say 'Бинарник релиза загружен и проверен по SHA-256.'
   fi
@@ -487,6 +500,9 @@ native_install() {
     die 'Установка native не завершена, прежние данные сохранены'
   fi
   if [[ -n "$previous" ]]; then cp -p "$previous" "$BIN.prev"; fi
+  if [[ -s "$WORK/boosty-dbcheck" ]]; then
+    install -m 0755 "$WORK/boosty-dbcheck" /usr/local/bin/boosty-dbcheck
+  fi
 }
 
 docker_install() {
