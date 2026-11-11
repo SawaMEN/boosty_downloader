@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify offline SQLite export and safety
+        run: python3 -m unittest discover -s tests -p 'test_sqlite_migrate.py' -v
       - name: Install Zstd for storage tests
         run: command -v zstd >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq zstd)
       - name: Install FFmpeg for offline HLS remux test
