@@ -144,3 +144,14 @@ func TestSQLiteDeepAuditAllowsIncompleteRevisionStage(t *testing.T) {
 		t.Fatalf("uncommitted staging directory blocked offline audit: %v", err)
 	}
 }
+
+func TestSQLiteDeepAuditRejectsUncheckpointedWAL(t *testing.T) {
+	root, _, _, _ := sqliteSnapshotAuditFixture(t)
+	wal := filepath.Join(root, "metadata.db-wal")
+	if err := os.WriteFile(wal, []byte("pending-SQL-writes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySQLiteSnapshotInventory(root); err == nil {
+		t.Fatal("uncheckpointed SQLite WAL must not be silently ignored")
+	}
+}
