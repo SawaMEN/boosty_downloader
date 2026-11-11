@@ -24,6 +24,7 @@ type Storage struct {
 	jobs    map[string]*Job
 	authors map[string][]string
 	imports map[string]*AuthorImport
+	shadow *sqliteShadow
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
@@ -153,7 +154,11 @@ func (s *Storage) saveJobsLocked() error {
 	if err := recoverMetadataPair(s.root); err != nil {
 		return err
 	}
-	return writeSyncedMetadata(s.root, "jobs.json", b)
+	if err := writeSyncedMetadata(s.root, "jobs.json", b); err != nil {
+		return err
+	}
+	s.notifySQLiteShadowLocked()
+	return nil
 }
 func (s *Storage) upsert(job Job) error {
 	s.mu.Lock()
