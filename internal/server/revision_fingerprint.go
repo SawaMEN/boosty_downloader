@@ -15,12 +15,12 @@ import (
 // must never create a new revision of otherwise identical content.
 func archiveContentFingerprint(man ArchiveManifest, blocks []archiveBlock, comments []commentView) (string, error) {
 	type subscriptionIdentity struct {
-		Level	string	`json:"level,omitempty"`
-		LevelID	string	`json:"levelId,omitempty"`
-		Price	int64	`json:"price,omitempty"`
-		Paid	bool	`json:"paid"`
-		Paused	bool	`json:"paused,omitempty"`
-		Source	string	`json:"source"`
+		Level   string `json:"level,omitempty"`
+		LevelID string `json:"levelId,omitempty"`
+		Price   int64  `json:"price,omitempty"`
+		Paid    bool   `json:"paid"`
+		Paused  bool   `json:"paused,omitempty"`
+		Source  string `json:"source"`
 	}
 	var tier *subscriptionIdentity
 	if s := man.Subscription; s != nil {
@@ -30,19 +30,19 @@ func archiveContentFingerprint(man ArchiveManifest, blocks []archiveBlock, comme
 		}
 	}
 	payload := struct {
-		Title	string	`json:"title"`
-		Author	string	`json:"author"`
-		PostID	string	`json:"postId"`
-		Source	string	`json:"source"`
-		CommentsStatus	string	`json:"commentsStatus"`
-		CommentCount	int	`json:"commentCount"`
-		CommentExpected	int	`json:"commentExpected"`
-		Failures	[]string	`json:"failures,omitempty"`
-		Assets	[]ArchiveAsset	`json:"assets"`
-		Blocks	[]archiveBlock	`json:"blocks"`
-		Comments	[]commentView	`json:"comments"`
-		RequiredTier	any	`json:"requiredTier,omitempty"`
-		Subscription	*subscriptionIdentity	`json:"subscription,omitempty"`
+		Title           string                `json:"title"`
+		Author          string                `json:"author"`
+		PostID          string                `json:"postId"`
+		Source          string                `json:"source"`
+		CommentsStatus  string                `json:"commentsStatus"`
+		CommentCount    int                   `json:"commentCount"`
+		CommentExpected int                   `json:"commentExpected"`
+		Failures        []string              `json:"failures,omitempty"`
+		Assets          []ArchiveAsset        `json:"assets"`
+		Blocks          []archiveBlock        `json:"blocks"`
+		Comments        []commentView         `json:"comments"`
+		RequiredTier    any                   `json:"requiredTier,omitempty"`
+		Subscription    *subscriptionIdentity `json:"subscription,omitempty"`
 	}{
 		Title: man.Title, Author: man.Author, PostID: man.PostID,
 		Source: man.Source, CommentsStatus: man.CommentsStatus,
