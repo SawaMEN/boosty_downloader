@@ -1,5 +1,5 @@
--- Target schema for a future transactional SQLite metadata migration.
--- NOT enabled by the current Go server. Never point older versions at this DB.
+-- Offline migration inventory schema. NOT enabled by the current Go server.
+-- JSON remains authoritative until a separately tested Go SQLite adapter ships.
 -- Media bytes remain on disk in SHA-256 content-addressed blobs.
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS owner_archives (
     deleted_at TEXT,
     auto_sync INTEGER NOT NULL DEFAULT 0 CHECK(auto_sync IN (0,1)),
     shared_for_all INTEGER NOT NULL DEFAULT 0 CHECK(shared_for_all IN (0,1)),
+    -- Lossless private job payload for a future audited Go adapter.
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
     UNIQUE(owner_id, post_key)
 );
 CREATE INDEX IF NOT EXISTS idx_owner_archives_list ON owner_archives(owner_id, deleted_at, archived_at DESC);
@@ -76,13 +78,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_revision_current
 CREATE INDEX IF NOT EXISTS idx_revision_history
     ON archive_revisions(archive_id, captured_at DESC);
 
--- One physical immutable object by verified SHA-256, across all accounts.
--- File paths use a server-generated CAS layout, not user-supplied URLs.
+-- One logical content identity per verified SHA-256. A verified CAS path is
+-- optional: libraries may have deduplication disabled or legacy media copies.
+-- NULL relative_path MUST NOT be interpreted as an already deduplicated inode.
 CREATE TABLE IF NOT EXISTS media_blobs (
     sha256 TEXT PRIMARY KEY CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
     byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
     stored_at TEXT NOT NULL,
-    relative_path TEXT NOT NULL UNIQUE
+    relative_path TEXT UNIQUE
 );
 
 -- Cross-user archive revisions may reference exactly the same blob.
@@ -117,6 +120,19 @@ CREATE TABLE IF NOT EXISTS archive_events (
     detail_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_owner_created ON archive_events(owner_id, created_at DESC);
+
+-- Author-import jobs are not included in source_posts: discovery progress is
+-- private account state, preserved losslessly until Go uses SQLite natively.
+CREATE TABLE IF NOT EXISTS author_imports (
+    import_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    author_slug TEXT NOT NULL COLLATE NOCASE,
+    job_state TEXT NOT NULL CHECK(job_state IN ('queued','running','done','failed','canceled')),
+    auto_sync INTEGER NOT NULL DEFAULT 0 CHECK(auto_sync IN (0,1)),
+    updated_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json))
+);
+CREATE INDEX IF NOT EXISTS idx_author_imports_owner ON author_imports(owner_id, updated_at DESC);
 
 -- Secrets/tokens and account password hashes remain in their existing
 -- encrypted vault/account store until independently migrated and audited.
