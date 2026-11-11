@@ -1,6 +1,7 @@
 FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 ARG TARGETOS=linux
