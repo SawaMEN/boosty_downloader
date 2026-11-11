@@ -130,6 +130,7 @@ type PlayerURL struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
 }
+
 // PostRequirement is the tier Boosty reports on the post itself, which
 // differs from the viewer's own subscribed tier. All fields are observational:
 // the server must still verify Post.HasAccess with that specific account.
