@@ -59,6 +59,11 @@ func New(cfg Config) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
+	// A crash may have interrupted the JSON two-file transaction. Resolve the
+	// journal before comparing either JSON file with an offline SQLite export.
+	if err := recoverMetadataPair(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("восстановление метаданных не удалось: %w", err)
+	}
 	// Validate against the raw JSON before any legacy migration or default
 	// serialization can rewrite authoritative files. No workers run yet.
 	if os.Getenv("BD_SQLITE_VERIFY") == "1" {
