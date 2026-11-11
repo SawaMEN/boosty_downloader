@@ -123,11 +123,13 @@ if [[ "$MODE" == docker ]]; then
     say 'Требуется Docker Engine с Compose v2; проверка системных пакетов...'
     if command -v apt-get >/dev/null; then
       install_packages docker.io docker-compose-v2 ||
-        die 'Установите Docker Engine и Docker Compose v2 по инструкции Docker'
+        install_packages docker.io docker-compose-plugin ||
+        die 'Не удалось установить Docker Engine + Compose v2. Используйте официальный репозиторий Docker.'
     else
       die 'Установите Docker Engine и Docker Compose v2'
     fi
   fi
+  require_command git git
   systemctl enable --now docker.service >/dev/null 2>&1 || true
   docker info >/dev/null 2>&1 || die 'Docker daemon недоступен'
   docker compose version >/dev/null || die 'Отсутствует Docker Compose v2'
@@ -369,6 +371,7 @@ PY
     die 'Невозможно проверить архив Go'
   dest="/opt/boosty-downloader-go/$version"
   if [[ ! -x "$dest/go/bin/go" ]]; then
+    [[ ! -e "$dest" ]] || die 'На диске имеется повреждённый каталог Go; удалите его вручную после проверки'
     mkdir -p /opt/boosty-downloader-go
     curl -fLsS --retry 3 --connect-timeout 12 \
       "https://go.dev/dl/$filename" -o "$WORK/go.tar.gz" ||
@@ -468,6 +471,14 @@ docker_install() {
     "$(id -u boosty-downloader)" "$(id -g boosty-downloader)" "$PORT" "$publish_ip" "$render_gid" \
     > "$STAGE/.env"
   chmod 0600 "$STAGE/.env"
+  say 'Проверка новой конфигурации Compose до остановки службы...'
+  local -a stagefiles=(-f "$STAGE/compose.yaml")
+  case "$VIDEO_ACCEL" in
+    amd|intel) stagefiles+=(-f "$STAGE/compose.gpu-amd.yaml") ;;
+    nvidia) stagefiles+=(-f "$STAGE/compose.gpu-nvidia.yaml") ;;
+  esac
+  docker compose --project-name boosty-downloader --project-directory "$STAGE" "${stagefiles[@]}" config --quiet ||
+    die 'Новая конфигурация Docker Compose некорректна'
   say 'Сборка Docker-кандидата без остановки рабочей версии...'
   docker build -f "$STAGE/deploy/docker/Dockerfile" -t boosty-downloader:install-candidate "$STAGE"
   if docker image inspect boosty-downloader:local >/dev/null 2>&1; then
@@ -475,18 +486,20 @@ docker_install() {
     RESTORE_IMAGE=1
   fi
   local had_project=0
-  BACKUP_PROJECT="$WORK/previous-project"
   if [[ -e "$PROJECT" ]]; then
     [[ -d "$PROJECT" && ! -L "$PROJECT" ]] || die 'Каталог Docker не является обычной папкой'
-    cp -a "$PROJECT" "$BACKUP_PROJECT"
+    BACKUP_PROJECT="$(mktemp -d /opt/.boosty-previous-XXXXXXXX)"
+    rmdir "$BACKUP_PROJECT"
     had_project=1
+    mv -T "$PROJECT" "$BACKUP_PROJECT"
   fi
-  install -d -m 0755 /opt
-  if ((had_project)); then rm -rf -- "$PROJECT"; fi
-  mv "$STAGE" "$PROJECT"
+  if ! mv -T "$STAGE" "$PROJECT"; then
+    if ((had_project)); then mv -T "$BACKUP_PROJECT" "$PROJECT" || true; fi
+    die 'Не удалось заменить каталог Docker; прежний каталог сохранён'
+  fi
   STAGE=''
-  docker tag boosty-downloader:install-candidate boosty-downloader:local
-  if ! compose config --quiet; then die 'Неверная конфигурация Docker Compose'; fi
+  docker tag boosty-downloader:install-candidate boosty-downloader:local ||
+    die 'Не удалось включить новый Docker-образ'
   if [[ "$oldmode" == native ]]; then systemctl stop boosty-downloader.service; fi
   if ! compose up -d --force-recreate || ! health; then
     say 'Docker не прошёл проверку. Восстанавливаем прежнюю версию...' >&2
@@ -496,7 +509,7 @@ docker_install() {
     fi
     if ((had_project)); then
       rm -rf -- "$PROJECT"
-      cp -a "$BACKUP_PROJECT" "$PROJECT"
+      mv -T "$BACKUP_PROJECT" "$PROJECT"
     fi
     if [[ "$oldmode" == native ]]; then
       systemctl start boosty-downloader.service || true
@@ -508,6 +521,7 @@ docker_install() {
   if [[ "$oldmode" == native ]]; then
     systemctl disable boosty-downloader.service >/dev/null 2>&1 || true
   fi
+  if ((had_project)); then rm -rf -- "$BACKUP_PROJECT"; fi
 }
 
 install -m 0755 "$ROOT/deploy/boosty-downloader-manager" /usr/local/bin/bdy
