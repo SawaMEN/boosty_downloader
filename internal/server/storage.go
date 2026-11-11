@@ -84,6 +84,11 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = os.Chmod(root, 0700); e != nil {
 		return nil, e
 	}
+	// Repair an interrupted cross-file metadata commit before parsing either
+	// JSON store or accepting any background work. Invalid journals fail closed.
+	if e = recoverMetadataPair(root); e != nil {
+		return nil, fmt.Errorf("metadata transaction recovery failed: %w", e)
+	}
 	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport)}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if e == nil {
@@ -145,7 +150,10 @@ func (s *Storage) saveJobsLocked() error {
 	if e != nil {
 		return e
 	}
-	return writeAtomic(filepath.Join(s.root, "jobs.json"), b)
+	if err := recoverMetadataPair(s.root); err != nil {
+		return err
+	}
+	return writeSyncedMetadata(s.root, "jobs.json", b)
 }
 func (s *Storage) upsert(job Job) error {
 	s.mu.Lock()
