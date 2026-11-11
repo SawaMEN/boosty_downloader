@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -192,9 +191,6 @@ func TestSQLiteOfflineReindexRollbackOnSQLInsertFailure(t *testing.T) {
 	if got := sqliteReindexRevisionCount(t, root); got != 2 {
 		t.Fatalf("failed SQL transaction did not roll back: %d", got)
 	}
-	if _, err := sql.Open("sqlite", filepath.Join(root, "metadata.db")); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestSQLiteOfflineReindexRequiresBackup(t *testing.T) {
@@ -239,5 +235,4 @@ func TestSQLiteOfflineReindexPreservesEmptyOwnerArchiveSet(t *testing.T) {
 	if err := sqliteAuditDatabaseIntegrity(db); err != nil {
 		t.Fatal(err)
 	}
-	_ = context.Background()
 }
