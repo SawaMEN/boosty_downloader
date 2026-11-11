@@ -74,7 +74,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags='-s -w' -o dist/boosty-downloader-linux-${{ matrix.arch }} ./cmd/boosty-downloader
-      - run: cd dist && sha256sum boosty-downloader-linux-${{ matrix.arch }} > SHA256SUMS
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags='-s -w' -o dist/boosty-dbcheck-linux-${{ matrix.arch }} ./cmd/boosty-dbcheck
+      - run: cd dist && sha256sum boosty-downloader-linux-${{ matrix.arch }} boosty-dbcheck-linux-${{ matrix.arch }} > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: boosty-downloader-linux-${{ matrix.arch }}
