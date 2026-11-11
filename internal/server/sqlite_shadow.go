@@ -78,8 +78,11 @@ func sqliteShadowReadJobs(path string) (map[string]Job, error) {
 		return nil, err
 	}
 	var records map[string]Job
-	if err := json.Unmarshal(raw, &records); err != nil || records == nil {
+	if err := json.Unmarshal(raw, &records); err != nil {
 		return nil, fmt.Errorf("invalid authoritative jobs.json: %w", err)
+	}
+	if records == nil {
+		return nil, errors.New("jobs.json cannot contain null")
 	}
 	for id, value := range records {
 		if id != value.ID {
@@ -98,8 +101,11 @@ func sqliteShadowReadImports(path string) (map[string]AuthorImport, error) {
 		return nil, err
 	}
 	var records map[string]AuthorImport
-	if err := json.Unmarshal(raw, &records); err != nil || records == nil {
+	if err := json.Unmarshal(raw, &records); err != nil {
 		return nil, fmt.Errorf("invalid authoritative imports.json: %w", err)
+	}
+	if records == nil {
+		return nil, errors.New("imports.json cannot contain null")
 	}
 	for id, value := range records {
 		if id != value.ID {
