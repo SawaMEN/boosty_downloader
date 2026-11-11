@@ -14,10 +14,20 @@ func main() {
 	root := flag.String("data-dir", "", "the stopped server's data directory")
 	backup := flag.String("backup-dir", "", "create a new private metadata rollback backup directory (must not exist)")
 	auditMedia := flag.Bool("audit-media", false, "read-only audit of SQL snapshot index against revision directories and SHA-256 media bytes")
+	verifyBackup := flag.String("verify-backup-dir", "", "read-only verify a metadata recovery backup and its JSON/SQL parity")
 	flag.Parse()
-	if *root == "" || flag.NArg() != 0 || (*backup != "" && *auditMedia) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir /var/lib/boosty-downloader [--backup-dir /secure/backups/boosty-YYYYMMDD | --audit-media]")
+	if flag.NArg() != 0 || (*verifyBackup != "" && (*root != "" || *backup != "" || *auditMedia)) ||
+		(*verifyBackup == "" && (*root == "" || (*backup != "" && *auditMedia))) {
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --audit-media] | --verify-backup-dir EXISTING-DIR")
 		os.Exit(2)
+	}
+	if *verifyBackup != "" {
+		if err := server.VerifySQLiteMetadataBackup(*verifyBackup); err != nil {
+			fmt.Fprintln(os.Stderr, "Metadata recovery backup verification failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Metadata recovery backup OK: SHA-256 manifest, JSON, SQLite schema and owner ACLs match")
+		return
 	}
 	if *backup != "" {
 		if err := server.PrepareSQLiteBackup(*root, *backup); err != nil {
