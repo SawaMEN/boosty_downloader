@@ -193,7 +193,10 @@ func (s *Storage) saveImportsLocked() error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(s.root, "imports.json"), raw)
+	if err := recoverMetadataPair(s.root); err != nil {
+		return err
+	}
+	return writeSyncedMetadata(s.root, "imports.json", raw)
 }
 func (s *Storage) importsFor(owner string) []AuthorImport {
 	s.mu.Lock()
@@ -320,14 +323,8 @@ func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 		for jobID, enabled := range previous {
 			s.jobs[jobID].AutoSync = enabled
 		}
-		_ = s.saveJobsLocked()
-		_ = s.saveImportsLocked()
 	}
-	if err := s.saveJobsLocked(); err != nil {
-		rollback()
-		return err
-	}
-	if err := s.saveImportsLocked(); err != nil {
+	if err := s.saveJobsImportsLocked(); err != nil {
 		rollback()
 		return err
 	}
