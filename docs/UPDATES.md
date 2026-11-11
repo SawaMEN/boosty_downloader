@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/SawaMEN/boosty_downloader/main/inst
 2. **Preview:** при отсутствии стабильного релиза берётся последняя предварительная сборка `edge-<12-hex>`, опубликованная **после успешного CI main**.
 3. **Fallback:** если подходящего релиза нет, выполняется сборка из текущих исходников. При отсутствии Go установщик скачивает официальный архив Go и проверяет SHA-256.
 
-Готовые бинарники `boosty-downloader-linux-amd64`, `boosty-downloader-linux-arm64`, `boosty-dbcheck-linux-*` публикуются вместе с `SHA256SUMS` в [GitHub Releases](https://github.com/SawaMEN/boosty_downloader/releases). Preview не является стабильным выпуском.
+Готовые бинарники `boosty-downloader-linux-amd64`, `boosty-downloader-linux-arm64`, `boosty-dbcheck-linux-*` публикуются вместе с `SHA256SUMS` в [GitHub Releases](https://github.com/SawaMEN/boosty_downloader/releases). В Native устанавливаются сервер и `boosty-dbcheck`; Docker собирает сервер в образе. Preview не является стабильным выпуском.
 
 ## Управление
 
