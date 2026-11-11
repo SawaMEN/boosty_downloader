@@ -17,8 +17,8 @@ import (
 // metadata only. It never implies that library and revisions media bytes were
 // backed up; those need their own filesystem snapshot before a live cutover.
 type metadataBackupManifest struct {
-	Version    int                `json:"version"`
-	CapturedAt time.Time          `json:"capturedAt"`
+	Version    int                  `json:"version"`
+	CapturedAt time.Time            `json:"capturedAt"`
 	Files      []metadataBackupFile `json:"files"`
 }
 
