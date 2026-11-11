@@ -65,9 +65,11 @@ WORK="$(mktemp -d)"
 # When invoked via curl | sudo bash, BASH_SOURCE[0] is unset under set -u.
 # In that case there is no adjacent checkout; clone public sources below.
 SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+STREAMED=0
 if [[ -n "$SCRIPT_PATH" ]]; then
   ORIGIN="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 else
+  STREAMED=1
   ORIGIN="$(pwd -P)"
 fi
 
@@ -94,7 +96,8 @@ require_command openssl openssl
 require_command python3 python3
 require_command sha256sum coreutils
 
-if [[ -f "$ORIGIN/go.mod" && -f "$ORIGIN/deploy/docker/compose.yaml" ]]; then
+# Never accidentally install a stale checkout when the installer came via stdin.
+if ((STREAMED == 0)) && [[ -f "$ORIGIN/go.mod" && -f "$ORIGIN/deploy/docker/compose.yaml" ]]; then
   ROOT="$ORIGIN"
 else
   require_command git git
