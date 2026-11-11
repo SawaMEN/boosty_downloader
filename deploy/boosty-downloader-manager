@@ -65,7 +65,7 @@ case "${1:-menu}" in
    rm -f /etc/systemd/system/boosty-downloader.service /etc/systemd/system/boosty-downloader-cert-renew.service /etc/systemd/system/boosty-downloader-cert-renew.timer /usr/local/bin/bdy-cert-renew /usr/local/bin/bdy-auto-update /etc/systemd/system/boosty-downloader-update.service /etc/systemd/system/boosty-downloader-update.timer
    systemctl daemon-reload >/dev/null 2>&1 || true
    rm -rf -- /usr/local/boosty-downloader "$PROJECT"
-   rm -f -- "$MODE_FILE"
+   rm -f -- "$MODE_FILE" /usr/local/bin/bdy
    if [[ "${2:-}" == --purge ]]; then
       read -r -p 'Безвозвратно удалить токены, архивы и настройки? Напишите DELETE: ' confirmation </dev/tty
       if [[ "$confirmation" == DELETE ]]; then rm -rf -- /var/lib/boosty-downloader /etc/boosty-downloader; echo 'Данные удалены.';else echo 'Данные сохранены.';fi
