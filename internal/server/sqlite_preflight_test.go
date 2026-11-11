@@ -138,3 +138,25 @@ func TestSQLitePreflightRunsBeforeServerWrites(t *testing.T) {
 		t.Fatal("server started with a mismatching SQLite audit")
 	}
 }
+
+
+func TestSQLitePreflightRejectsCrossOwnerRevisionPath(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("1", 24)
+	_, err = db.Exec(`INSERT INTO archive_revisions
+		(revision_id,archive_id,captured_at,title,snapshot_relpath,asset_count,is_current)
+		VALUES (?,?,?,?,?,?,?)`,
+		"current:"+id, id, "2026-11-11T12:00:00Z", "Wrong owner",
+		"library/second/creator/post-1", 0, 1)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySQLiteExport(root); err == nil {
+		t.Fatal("cross-owner revision path accepted in SQLite")
+	}
+}
