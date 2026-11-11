@@ -12,6 +12,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,8 +25,8 @@ jobs:
       - name: Prepare Go SQLite dependencies and formatting
         run: |
           go mod tidy
-          gofmt -w internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go
-          for file in go.mod go.sum internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go; do
+          gofmt -w internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go internal/server/sqlite_snapshot_verify.go
+          for file in go.mod go.sum internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go internal/server/sqlite_snapshot_verify.go; do
             echo "__BEGIN_FILE_${file}__"
             base64 -w0 "$file"
             echo
@@ -35,8 +36,11 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_sqlite_migrate.py' -v
       - name: Install Zstd for storage tests
         run: command -v zstd >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq zstd)
-      - name: Install FFmpeg for offline HLS remux test
-        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+      - name: Install FFmpeg for offline HLS remux test (bounded)
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            timeout 90s sudo apt-get update -qq && timeout 90s sudo apt-get install -y -qq ffmpeg || echo "FFmpeg unavailable: optional offline remux tests may skip"
+          fi
       - name: Check interface scripts
         run: node --check internal/server/ui/app.js && node --check internal/server/ui/library.js && node --check internal/server/ui/subscriptions.js && node --check internal/server/ui/admin.js && python3 tests/ui_contract.py
       - name: Check formatting
