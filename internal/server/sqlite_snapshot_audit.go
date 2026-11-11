@@ -43,13 +43,19 @@ func VerifySQLiteSnapshotInventory(root string) error {
 	if err := db.Ping(); err != nil {
 		return err
 	}
+	if err := sqliteAuditDatabaseIntegrity(db); err != nil {
+		return err
+	}
 	if err := verifySQLiteSnapshots(root, db); err != nil {
 		return err
 	}
 	if err := sqliteAuditInventory(root, db); err != nil {
 		return err
 	}
-	return nil
+	if err := sqliteAuditUnindexedSnapshots(root, db); err != nil {
+		return err
+	}
+	return sqliteAuditCAS(root, db)
 }
 
 type sqliteAuditRevision struct {
