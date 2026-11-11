@@ -63,9 +63,11 @@ func TestSQLiteDeepAuditChecksCanonicalCASContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 	canonical := filepath.ToSlash(filepath.Join("blobs", "sha256", digest[:2], digest))
 	if _, err := db.Exec("UPDATE media_blobs SET relative_path=? WHERE sha256=?", canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifySQLiteSnapshotInventory(root); err != nil {
@@ -91,15 +93,24 @@ func TestSQLiteDeepAuditRejectsNonCanonicalCASAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 	if _, err := db.Exec("UPDATE media_blobs SET relative_path='blobs/sha256/other' WHERE sha256=?", digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifySQLiteSnapshotInventory(root); err == nil {
 		t.Fatal("noncanonical SQL CAS path accepted")
 	}
 	canonical := filepath.ToSlash(filepath.Join("blobs", "sha256", digest[:2], digest))
+	db, err = sql.Open("sqlite", filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec("UPDATE media_blobs SET relative_path=? WHERE sha256=?", canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, "blobs", "sha256", digest[:2])
@@ -120,13 +131,15 @@ func TestSQLiteDeepAuditRejectsOrphanForeignKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 	if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO archive_grants
 		(archive_id,grantee_owner_id,created_at)
 		VALUES ('missing-owner','someone',?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifySQLiteSnapshotInventory(root); err == nil {
