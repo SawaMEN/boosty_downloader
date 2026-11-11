@@ -18,6 +18,8 @@ SQLite v1 используется для офлайн-экспорта, про�
 
 Схема: [schema_v1.sql](../deploy/sqlite/schema_v1.sql).
 
+При Native утилита `boosty-dbcheck` устанавливается вместе с сервером. Для Docker скачайте одноимённый бинарник своей архитектуры из GitHub Releases и проверьте его SHA-256, либо соберите `go build ./cmd/boosty-dbcheck` из исходников и запускайте на хосте. Docker-образ не получает root-доступ к хосту.
+
 ## Безопасная офлайн-проверка
 
 **Перед началом остановите сервис и все фоновые процессы записи, сделайте полную копию `/etc/boosty-downloader/` и `/var/lib/boosty-downloader/`.** Не выполняйте операции на изменяющихся архивных файлах. Если используется Docker, остановите контейнер через `sudo bdy stop`.
@@ -36,7 +38,7 @@ sudo python3 tools/sqlite_migrate.py \
 sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader
 
-sudo go run ./cmd/boosty-dbcheck \
+sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader --audit-media
 ```
 
@@ -45,11 +47,11 @@ sudo go run ./cmd/boosty-dbcheck \
 ## Проверенная копия метаданных
 
 ```bash
-sudo go run ./cmd/boosty-dbcheck \
+sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader \
   --backup-dir /root/boosty-metadata-backup-001
 
-sudo go run ./cmd/boosty-dbcheck \
+sudo boosty-dbcheck \
   --verify-backup-dir /root/boosty-metadata-backup-001
 ```
 
@@ -60,11 +62,11 @@ sudo go run ./cmd/boosty-dbcheck \
 Только при остановленном сервере и после проверки актуальной копии метаданных:
 
 ```bash
-sudo go run ./cmd/boosty-dbcheck \
+sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader \
   --reindex-media --recovery-dir /root/boosty-metadata-backup-001
 
-sudo go run ./cmd/boosty-dbcheck \
+sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader --audit-media
 ```
 
