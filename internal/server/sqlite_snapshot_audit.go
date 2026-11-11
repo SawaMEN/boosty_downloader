@@ -131,7 +131,7 @@ func sqliteAuditInventory(root string, db *sql.DB) error {
 			return errors.New("unsafe archive identity in SQLite inventory")
 		}
 		current := []string{"library", owner, author, post}
-		currentManifest, err := sqliteAuditSafePath(root, append(current, "manifest.json"))
+		_, err := sqliteAuditSafePath(root, append(current, "manifest.json"))
 		if err == nil {
 			if err := sqliteAuditSingle(root, id, "current:"+id, current, all, assets, seen, author, post); err != nil {
 				archiveRows.Close()
@@ -144,7 +144,6 @@ func sqliteAuditInventory(root string, db *sql.DB) error {
 			archiveRows.Close()
 			return fmt.Errorf("completed SQLite archive has no current manifest: %s", id)
 		}
-		_ = currentManifest
 
 		history := []string{"revisions", owner, author, post}
 		dir, err := sqliteAuditSafePath(root, history)
@@ -226,8 +225,13 @@ func sqliteAuditSingle(root, jobID, revision string, parts []string,
 	if err != nil {
 		return err
 	}
-	if _, err := sqliteAuditSafePath(root, append(append([]string{}, parts...), "index.html")); err != nil {
+	index, err := sqliteAuditSafePath(root, append(append([]string{}, parts...), "index.html"))
+	if err != nil {
 		return err
+	}
+	pageInfo, err := os.Lstat(index)
+	if err != nil || !pageInfo.Mode().IsRegular() {
+		return fmt.Errorf("revision HTML is missing or unsafe: %s", revision)
 	}
 	info, err := os.Lstat(base)
 	if err != nil || !info.IsDir() {
