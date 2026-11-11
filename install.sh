@@ -62,7 +62,14 @@ mkdir -p /run/lock
 exec 9>/run/lock/boosty-downloader-install.lock
 flock -n 9 || die 'Установка уже запущена в другом процессе'
 WORK="$(mktemp -d)"
-ORIGIN="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# When invoked via curl | sudo bash, BASH_SOURCE[0] is unset under set -u.
+# In that case there is no adjacent checkout; clone public sources below.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_PATH" ]]; then
+  ORIGIN="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+else
+  ORIGIN="$(pwd -P)"
+fi
 
 install_packages() {
   (($#)) || return 0
