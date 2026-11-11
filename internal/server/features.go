@@ -217,6 +217,7 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 			if rel == "manifest.json" && j.OwnerID != principal(r).ID {
 				sanitized := manifest
 				sanitized.Subscription = nil
+				sanitized.ContentSHA256 = "" // Fingerprint may encode the private tier.
 				err = json.NewEncoder(entry).Encode(sanitized)
 			} else {
 				_, err = io.Copy(entry, f)
@@ -248,6 +249,7 @@ func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		man.Subscription = nil
+		man.ContentSHA256 = "" // Fingerprint may encode the private tier.
 		reply(w, 200, man)
 		return
 	}
