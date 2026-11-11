@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,15 +56,18 @@ func VerifySQLiteMetadataBackup(dir string) error {
 		}
 		seen[entry.Name] = true
 		delete(required, entry.Name)
-		raw, err := backupReadPrivateFile(dir, entry.Name)
+		digest, size, err := backupFileDigest(dir, entry.Name)
 		if err != nil {
 			return err
 		}
-		if int64(len(raw)) != entry.Size || metadataDigest(raw) != entry.SHA256 {
+		if size != entry.Size || digest != entry.SHA256 {
 			return fmt.Errorf("backup SHA-256 mismatch for %s", entry.Name)
 		}
-		if filepath.Ext(entry.Name) == ".json" && !json.Valid(raw) {
-			return fmt.Errorf("backup contains invalid JSON: %s", entry.Name)
+		if filepath.Ext(entry.Name) == ".json" {
+			raw, err := backupReadPrivateFile(dir, entry.Name)
+			if err != nil || !json.Valid(raw) {
+				return fmt.Errorf("backup contains invalid JSON: %s", entry.Name)
+			}
 		}
 	}
 	if len(required) != 0 {
@@ -134,6 +139,9 @@ func backupReadPrivateFile(dir, name string) ([]byte, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("unsafe backup metadata file permissions or type: %s", name)
 	}
+	if name == "backup-manifest.json" && info.Size() > 1<<20 {
+		return nil, errors.New("backup manifest exceeds 1 MiB")
+	}
 	// Do not follow a replaced symlink if the directory was raced.
 	file, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
@@ -145,6 +153,39 @@ func backupReadPrivateFile(dir, name string) ([]byte, error) {
 		return nil, errors.New("backup entry changed while opening")
 	}
 	return io.ReadAll(file)
+}
+
+
+func backupFileDigest(dir, name string) (string, int64, error) {
+	path := filepath.Join(dir, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", 0, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		return "", 0, fmt.Errorf("unsafe backup file: %s", name)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return "", 0, errors.New("backup file changed before reading")
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	if err != nil {
+		return "", 0, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) ||
+		size != opened.Size() || size != after.Size() ||
+		!opened.ModTime().Equal(after.ModTime()) {
+		return "", 0, errors.New("backup file changed while hashing")
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
 }
 
 func openSQLiteReadOnly(path string) (*sql.DB, error) {
