@@ -81,6 +81,9 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 	if err := sqliteAuditDatabaseIntegrity(meta.db); err != nil {
 		return err
 	}
+	if err := sqliteAuditCAS(root, meta.db); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	tx, err := meta.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -275,11 +278,11 @@ func sqliteReindexWriteRevision(ctx context.Context, tx *sql.Tx, revision sqlite
 
 func sqliteReindexSameBackup(root, backup string) error {
 	for _, name := range []string{"jobs.json", "imports.json", "metadata.db"} {
-		want, err := backupFileDigest(backup, name)
+		want, _, err := backupFileDigest(backup, name)
 		if err != nil {
 			return err
 		}
-		have, err := backupFileDigest(root, name)
+		have, _, err := backupFileDigest(root, name)
 		if err != nil {
 			return err
 		}
