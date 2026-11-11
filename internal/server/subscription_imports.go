@@ -447,14 +447,20 @@ func (a *App) cancelImport(w http.ResponseWriter, r *http.Request) {
 func (s *Storage) updateImport(v AuthorImport) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if old, ok := s.imports[v.ID]; !ok {
+	previous, ok := s.imports[v.ID]
+	if !ok {
 		return errors.New("импорт не найден")
-	} else if old.State == "canceled" {
+	}
+	if previous.State == "canceled" {
 		return errImportCanceled
 	}
 	v.UpdatedAt = time.Now().UTC()
 	s.imports[v.ID] = &v
-	return s.saveImportsLocked()
+	if err := s.saveImportsLocked(); err != nil {
+		s.imports[v.ID] = previous
+		return err
+	}
+	return nil
 }
 func (s *Storage) claimImport(id string) (AuthorImport, bool) {
 	s.mu.Lock()
