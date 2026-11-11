@@ -59,6 +59,13 @@ func New(cfg Config) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
+	// Validate against the raw JSON before any legacy migration or default
+	// serialization can rewrite authoritative files. No workers run yet.
+	if os.Getenv("BD_SQLITE_VERIFY") == "1" {
+		if err := verifySQLiteExport(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("проверка SQLite не пройдена; JSON остаётся основной базой: %w", err)
+		}
+	}
 	s, err := newStorage(cfg.DataDir, cfg.SecretKey)
 	if err != nil {
 		return nil, err
@@ -78,13 +85,6 @@ func New(cfg Config) (*App, error) {
 	}
 	if err = s.migrateArchiveTimestamps(); err != nil {
 		return nil, err
-	}
-	// Read-only canary: SQLite is NEVER authoritative in this mode. Reject
-	// any mismatch before starting background workers; normal installs use JSON.
-	if os.Getenv("BD_SQLITE_VERIFY") == "1" {
-		if err := verifySQLiteExport(cfg.DataDir); err != nil {
-			return nil, fmt.Errorf("проверка SQLite не пройдена; JSON остаётся основной базой: %w", err)
-		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
