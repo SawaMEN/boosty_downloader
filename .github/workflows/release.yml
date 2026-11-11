@@ -16,6 +16,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags='-s -w' -o dist/boosty-downloader-linux-${{ matrix.arch }} ./cmd/boosty-downloader
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags='-s -w' -o dist/boosty-dbcheck-linux-${{ matrix.arch }} ./cmd/boosty-dbcheck
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch }}
@@ -29,7 +30,7 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: dist
-      - run: cd dist && sha256sum boosty-downloader-linux-* > SHA256SUMS
+      - run: cd dist && sha256sum boosty-downloader-linux-* boosty-dbcheck-linux-* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
