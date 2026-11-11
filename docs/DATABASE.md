@@ -32,8 +32,8 @@ sudo python3 tools/sqlite_migrate.py \
   --data-dir /var/lib/boosty-downloader \
   --output /var/lib/boosty-downloader/metadata.db
 
-# Можно использовать go run или отдельно собранный boosty-dbcheck.
-sudo go run ./cmd/boosty-dbcheck \
+# В Native используется boosty-dbcheck, установленный вместе с сервером.
+sudo boosty-dbcheck \
   --data-dir /var/lib/boosty-downloader
 
 sudo go run ./cmd/boosty-dbcheck \
