@@ -33,7 +33,16 @@ func VerifySQLiteSnapshotInventory(root string) error {
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("snapshot audit needs a regular SQLite file: %w", err)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: dbFile, RawQuery: "mode=ro&_pragma=query_only(1)"}).String()
+	// Immutable read-only mode avoids sidecar writes, but must NEVER ignore an
+	// uncheckpointed WAL. Audit only against a stopped, checkpointed database.
+	if wal, err := os.Lstat(dbFile + "-wal"); err == nil {
+		if !wal.Mode().IsRegular() || wal.Size() != 0 {
+			return errors.New("SQLite audit requires a checkpointed database without a nonempty WAL")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: dbFile, RawQuery: "mode=ro&immutable=1&_pragma=query_only(1)"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return err
