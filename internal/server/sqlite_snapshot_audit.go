@@ -240,11 +240,11 @@ func sqliteAuditSingle(root, jobID, revision string, parts []string,
 	if err != nil {
 		return err
 	}
-	index, err := sqliteAuditSafePath(root, append(append([]string{}, parts...), "index.html"))
+	indexHTML, err := sqliteAuditSafePath(root, append(append([]string{}, parts...), "index.html"))
 	if err != nil {
 		return err
 	}
-	pageInfo, err := os.Lstat(index)
+	pageInfo, err := os.Lstat(indexHTML)
 	if err != nil || !pageInfo.Mode().IsRegular() {
 		return fmt.Errorf("revision HTML is missing or unsafe: %s", revision)
 	}
