@@ -132,17 +132,21 @@ last="$(cat "$ETC/update-last-check" 2>/dev/null || echo 0)"
 if (( !force && now-last < hours*3600 ));then exit 0;fi
 printf '%s\n' "$now" > "$ETC/update-last-check"
 
-if ! command -v gh >/dev/null || ! gh auth status >/dev/null 2>&1;then
-  status unavailable 'GitHub CLI не авторизован для приватного репозитория. Настройте gh auth login от root на VPS.'
+# Stable public releases require no GitHub CLI login or access token.
+# GitHub Actions artifacts in the dev channel still require authenticated gh.
+if ! command -v curl >/dev/null; then
+  status unavailable 'Для проверок и скачивания релизов требуется curl.'
   exit 0
 fi
-if ! command -v curl >/dev/null; then
-  status unavailable 'Для проверок работоспособности требуется curl на сервере.'
+if [[ "$channel" == dev ]] && { ! command -v gh >/dev/null ||
+  ! gh auth status >/dev/null 2>&1; }; then
+  status unavailable 'Для dev-канала CI требуется авторизованный GitHub CLI: sudo gh auth login.'
   exit 0
 fi
 
 if [[ "$channel" == stable ]]; then
-  latest="$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+  latest="$(curl -fLsS --retry 2 --connect-timeout 10     "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+    python3 -c 'import json,sys;print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
   if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
     latest=''
     status unavailable 'Стабильный релиз не опубликован или недоступен.'
@@ -178,8 +182,10 @@ if [[ "$mode" == native ]];then
   esac
   name="boosty-downloader-linux-$arch"
   if [[ "$channel" == stable ]];then
-    if ! gh release download "$latest" --repo "$REPO" --dir "$work" --pattern "$name" --pattern SHA256SUMS --clobber;then
-      status failed 'Не удалось скачать релизный бинарник.';exit 1
+    release_url="https://github.com/$REPO/releases/download/$latest"
+    if ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/$name" -o "$work/$name" ||
+       ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/SHA256SUMS" -o "$work/SHA256SUMS"; then
+      status failed 'Не удалось скачать публичный релиз и его SHA256SUMS.';exit 1
     fi
   else
     if ! gh run download "$run_id" --repo "$REPO" --name "$name" --dir "$work";then
@@ -201,8 +207,8 @@ if [[ "$mode" == native ]];then
 else
   command -v git >/dev/null && command -v docker >/dev/null || { status failed 'Для обновления Docker нужны git и docker compose.';exit 1; }
   if [[ "$channel" == stable ]];then
-    if ! gh repo clone "$REPO" "$work/source" -- --depth 1 --branch "$latest";then
-      status failed 'Не удалось получить исходники стабильной версии.';exit 1
+    if ! git clone --depth 1 --single-branch --branch "$latest"       "https://github.com/$REPO.git" "$work/source"; then
+      status failed 'Не удалось получить исходники публичного релиза.';exit 1
     fi
   else
     if ! gh repo clone "$REPO" "$work/source" -- --depth 1 --branch main;then
