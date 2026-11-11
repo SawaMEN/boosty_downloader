@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -374,4 +375,29 @@ func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorI
 		return nil, err
 	}
 	return result, rows.Close()
+}
+
+// adminSQLiteShadow reports mirror lag and errors without changing the backend.
+// Non-administrators cannot query the SQLite state or obtain its errors.
+func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
+	if !principal(r).Admin {
+		fail(w, http.StatusForbidden, "только администратор")
+		return
+	}
+	if a.store.shadow == nil {
+		reply(w, http.StatusOK, map[string]any{
+			"enabled": false, "authoritative": "json", "status": "disabled",
+		})
+		return
+	}
+	state := a.store.sqliteShadowStatus()
+	status := "healthy"
+	if state.LastError != "" || state.LastSuccess.IsZero() {
+		status = "degraded"
+	}
+	reply(w, http.StatusOK, map[string]any{
+		"enabled": true, "authoritative": "json", "status": status,
+		"lastAttempt": state.LastAttempt, "lastSuccess": state.LastSuccess,
+		"lastError": state.LastError,
+	})
 }
