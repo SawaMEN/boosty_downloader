@@ -200,11 +200,11 @@ func (m *sqliteMetadata) apply(ctx context.Context, archives []sqliteArchiveChan
 	return tx.Commit()
 }
 
-func sqliteCheckBefore(ctx context.Context, tx *sql.Tx, query, id string, before any) (bool, error) {
+func sqliteCheckBefore(ctx context.Context, tx *sql.Tx, query, id string, before any, creating bool) (bool, error) {
 	var raw string
 	err := tx.QueryRowContext(ctx, query, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		if before != nil {
+		if !creating {
 			return false, errSQLiteConflict
 		}
 		return false, nil
@@ -212,7 +212,7 @@ func sqliteCheckBefore(ctx context.Context, tx *sql.Tx, query, id string, before
 	if err != nil {
 		return false, err
 	}
-	if before == nil {
+	if creating {
 		return true, errSQLiteConflict
 	}
 	expected, err := json.Marshal(before)
@@ -236,7 +236,7 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 		return errors.New("archive ownership and post identity cannot change")
 	}
 	found, err := sqliteCheckBefore(ctx, tx,
-		"SELECT payload_json FROM owner_archives WHERE archive_id=?", j.ID, c.Before)
+		"SELECT payload_json FROM owner_archives WHERE archive_id=?", j.ID, c.Before, c.Before == nil)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func sqliteApplyImport(ctx context.Context, tx *sql.Tx, c sqliteImportChange) er
 		return errors.New("import ownership and author cannot change")
 	}
 	found, err := sqliteCheckBefore(ctx, tx,
-		"SELECT payload_json FROM author_imports WHERE import_id=?", v.ID, c.Before)
+		"SELECT payload_json FROM author_imports WHERE import_id=?", v.ID, c.Before, c.Before == nil)
 	if err != nil {
 		return err
 	}
