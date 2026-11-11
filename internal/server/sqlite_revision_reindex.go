@@ -20,14 +20,17 @@ import (
 // sqliteDiskRevision represents verified filesystem metadata, not access rights.
 // Every revision belongs to one owner_archives row. Media stays on disk.
 type sqliteDiskRevision struct {
-	id          string
-	archiveID   string
-	path        string
-	title       string
-	captured    time.Time
-	fingerprint any
-	current     bool
-	assets      []sqliteDiskAsset
+	id           string
+	archiveID    string
+	owner        string
+	author       string
+	path         string
+	title        string
+	captured     time.Time
+	fingerprint  any
+	subscription *CapturedSubscription
+	current      bool
+	assets       []sqliteDiskAsset
 }
 
 type sqliteDiskAsset struct {
@@ -125,17 +128,12 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 	}
 	for _, snapshot := range revisions {
 		if old, ok := oldIndex[snapshot.id]; ok && !snapshot.current {
-			if old.archiveID != snapshot.archiveID || old.path != snapshot.path ||
-				old.title != snapshot.title || !old.captured.Equal(snapshot.captured) ||
-				len(snapshot.assets) != len(oldAssets[snapshot.id]) {
-				return fmt.Errorf("historical SQLite revision changed: %s", snapshot.id)
+			equal, err := sqliteReindexUnchanged(ctx, tx, old, snapshot, oldAssets[snapshot.id])
+			if err != nil {
+				return err
 			}
-			for _, asset := range snapshot.assets {
-				previous, ok := oldAssets[snapshot.id][asset.path]
-				if !ok || previous.digest != asset.digest || previous.role != asset.role ||
-					previous.size != asset.size {
-					return fmt.Errorf("immutable historical media changed: %s/%s", snapshot.id, asset.path)
-				}
+			if !equal {
+				return fmt.Errorf("immutable historical SQLite revision changed: %s", snapshot.id)
 			}
 		}
 	}
@@ -143,7 +141,24 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 		return err
 	}
 	for _, snapshot := range revisions {
-		if err := sqliteReindexWriteRevision(ctx, tx, snapshot); err != nil {
+		var observation any
+		if old, ok := oldIndex[snapshot.id]; ok {
+			unchanged, err := sqliteReindexUnchanged(ctx, tx, old, snapshot, oldAssets[snapshot.id])
+			if err != nil {
+				return err
+			}
+			if unchanged && old.observation.Valid {
+				observation = old.observation.Int64
+			}
+		}
+		if observation == nil {
+			var err error
+			observation, err = sqliteReindexObservation(ctx, tx, snapshot)
+			if err != nil {
+				return err
+			}
+		}
+		if err := sqliteReindexWriteRevision(ctx, tx, snapshot, observation); err != nil {
 			return err
 		}
 	}
@@ -171,15 +186,17 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 }
 
 type sqliteIndexedRevision struct {
-	archiveID string
-	path      string
-	title     string
-	captured  time.Time
+	archiveID   string
+	path        string
+	title       string
+	captured    time.Time
+	fingerprint sql.NullString
+	observation sql.NullInt64
 }
 
 func sqliteReindexOldRevisions(ctx context.Context, tx *sql.Tx, jobs map[string]Job) (map[string]sqliteIndexedRevision, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT revision_id,archive_id,snapshot_relpath,title,captured_at,is_current
-		FROM archive_revisions`)
+	rows, err := tx.QueryContext(ctx, `SELECT revision_id,archive_id,snapshot_relpath,title,captured_at,is_current,
+		source_fingerprint_sha256,subscription_observation_id FROM archive_revisions`)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +205,10 @@ func sqliteReindexOldRevisions(ctx context.Context, tx *sql.Tx, jobs map[string]
 	for rows.Next() {
 		var id, archiveID, path, title, at string
 		var isCurrent int
-		if err := rows.Scan(&id, &archiveID, &path, &title, &at, &isCurrent); err != nil {
+		var fingerprint sql.NullString
+		var observation sql.NullInt64
+		if err := rows.Scan(&id, &archiveID, &path, &title, &at, &isCurrent,
+			&fingerprint, &observation); err != nil {
 			return nil, err
 		}
 		job, ok := jobs[archiveID]
@@ -213,7 +233,10 @@ func sqliteReindexOldRevisions(ctx context.Context, tx *sql.Tx, jobs map[string]
 		if err != nil {
 			return nil, err
 		}
-		out[id] = sqliteIndexedRevision{archiveID: archiveID, path: path, title: title, captured: date}
+		out[id] = sqliteIndexedRevision{
+			archiveID: archiveID, path: path, title: title, captured: date,
+			fingerprint: fingerprint, observation: observation,
+		}
 	}
 	return out, rows.Err()
 }
@@ -240,13 +263,13 @@ func sqliteReindexOldAssets(ctx context.Context, tx *sql.Tx) (map[string]map[str
 	return out, rows.Err()
 }
 
-func sqliteReindexWriteRevision(ctx context.Context, tx *sql.Tx, revision sqliteDiskRevision) error {
+func sqliteReindexWriteRevision(ctx context.Context, tx *sql.Tx, revision sqliteDiskRevision, observation any) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_revisions
 		(revision_id,archive_id,captured_at,title,source_fingerprint_sha256,
-		 snapshot_relpath,asset_count,is_current)
-		VALUES (?,?,?,?,?,?,?,?)`, revision.id, revision.archiveID,
+		 snapshot_relpath,subscription_observation_id,asset_count,is_current)
+		VALUES (?,?,?,?,?,?,?,?,?)`, revision.id, revision.archiveID,
 		sqliteDate(revision.captured), revision.title, revision.fingerprint,
-		revision.path, len(revision.assets), sqliteBool(revision.current)); err != nil {
+		revision.path, observation, len(revision.assets), sqliteBool(revision.current)); err != nil {
 		return err
 	}
 	for _, asset := range revision.assets {
@@ -406,9 +429,10 @@ func sqliteReindexReadRevision(root string, job Job, id string, parts []string, 
 		return sqliteDiskRevision{}, fmt.Errorf("snapshot identity or date mismatch: %s", id)
 	}
 	revision := sqliteDiskRevision{
-		id: id, archiveID: job.ID, path: filepath.ToSlash(filepath.Join(parts...)),
+		id: id, archiveID: job.ID, owner: job.OwnerID, author: job.Author,
+		path: filepath.ToSlash(filepath.Join(parts...)),
 		title: man.Title, captured: man.CapturedAt, current: current,
-		assets: make([]sqliteDiskAsset, 0, len(man.Assets)),
+		subscription: man.Subscription, assets: make([]sqliteDiskAsset, 0, len(man.Assets)),
 	}
 	if sqliteReindexDigestValid(man.ContentSHA256) {
 		revision.fingerprint = man.ContentSHA256
