@@ -15,6 +15,7 @@ WORK=''
 STAGE=''
 BACKUP_PROJECT=''
 RESTORE_IMAGE=0
+RELEASE_ID=''
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
@@ -320,13 +321,18 @@ release_binary() {
     curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
       "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" || die "Нет манифеста контрольных сумм у релиза $tag"
   else
-    url='https://github.com/SawaMEN/boosty_downloader/releases/latest/download'
-    if curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
-      "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" 2>/dev/null; then
-      say 'Найден последний стабильный релиз.'
+    # Pin both manifest and binary to one immutable release tag.
+    tag="$(curl -fLsS --retry 2 --connect-timeout 12 --max-time 25 \
+      'https://api.github.com/repos/SawaMEN/boosty_downloader/releases/latest' 2>/dev/null |
+      python3 -c 'import json,sys;print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+    if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$ ]]; then
+      url="https://github.com/SawaMEN/boosty_downloader/releases/download/$tag"
+      curl -fLsS --retry 2 --connect-timeout 12 --max-time 70 \
+        "$url/SHA256SUMS" -o "$WORK/SHA256SUMS" ||
+        die "Не удалось скачать SHA256SUMS стабильного релиза $tag"
+      say "Выбран стабильный релиз $tag."
     else
-      # The latest stable GitHub release is absent until the first vX.Y.Z tag.
-      # Preview releases are only published AFTER successful main CI.
+      # Stable not published yet. Preview follows successful main CI.
       edge_api="$WORK/releases.json"
       if ! curl -fLsS --retry 2 --connect-timeout 12 --max-time 30 \
         'https://api.github.com/repos/SawaMEN/boosty_downloader/releases?per_page=25' \
@@ -363,6 +369,7 @@ PY
   [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
     die 'Контрольная сумма релиза не совпала! Отмена установки.'
   install -m 0755 "$WORK/$name" "$WORK/boosty-downloader"
+  RELEASE_ID="$tag"
 }
 
 go_binary() {
@@ -558,6 +565,13 @@ install -m 0755 "$ROOT/deploy/boosty-downloader-manager" /usr/local/bin/bdy
 if [[ "$MODE" == native ]]; then native_install; else docker_install; fi
 printf '%s\n' "$VIDEO_ACCEL" > "$ETC/video-mode"
 printf '%s\n' "$MODE" > "$ETC/mode"
+if [[ "$MODE" == native && -n "$RELEASE_ID" ]]; then
+  printf '%s\n' "$RELEASE_ID" > "$ETC/installed-release"
+  chmod 0640 "$ETC/installed-release"
+else
+  # A local source build is not necessarily an immutable published release.
+  rm -f -- "$ETC/installed-release"
+fi
 chown root:boosty-downloader "$ETC/video-mode" "$ETC/mode"
 chmod 0640 "$ETC/video-mode" "$ETC/mode"
 
