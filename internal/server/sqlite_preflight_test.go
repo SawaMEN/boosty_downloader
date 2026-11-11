@@ -139,7 +139,6 @@ func TestSQLitePreflightRunsBeforeServerWrites(t *testing.T) {
 	}
 }
 
-
 func TestSQLitePreflightRejectsCrossOwnerRevisionPath(t *testing.T) {
 	root, _ := sqliteCanaryFixture(t)
 	db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
