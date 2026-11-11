@@ -204,6 +204,9 @@ func verifySQLiteExport(root string) error {
 	if len(seen) != len(imports) {
 		return fmt.Errorf("SQLite import count mismatch: %d / %d", len(seen), len(imports))
 	}
+	if err := verifySQLiteSnapshots(root, db); err != nil {
+		return err
+	}
 	// A writer racing with verification is a hard failure, not a reason to
 	// trust stale metadata. No SQL database state is activated on failure.
 	_, afterJobs, err := sqliteSourceJSON(jobsFile)
