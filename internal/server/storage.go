@@ -163,9 +163,18 @@ func (s *Storage) saveJobsLocked() error {
 func (s *Storage) upsert(job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous, exists := s.jobs[job.ID]
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[job.ID] = &job
-	return s.saveJobsLocked()
+	if err := s.saveJobsLocked(); err != nil {
+		if exists {
+			s.jobs[job.ID] = previous
+		} else {
+			delete(s.jobs, job.ID)
+		}
+		return err
+	}
+	return nil
 }
 func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()
