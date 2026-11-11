@@ -24,18 +24,24 @@ type sqliteShadow struct {
 	lastAttempt time.Time
 	lastSuccess time.Time
 	lastError   string
+	changed     uint64
+	mirrored    uint64
 }
 
 type sqliteShadowStatus struct {
 	LastAttempt time.Time
 	LastSuccess time.Time
 	LastError   string
+	Pending     bool
 }
 
 func (s *Storage) notifySQLiteShadowLocked() {
 	if s.shadow == nil {
 		return
 	}
+	s.shadow.mu.Lock()
+	s.shadow.changed++
+	s.shadow.mu.Unlock()
 	select {
 	case s.shadow.wake <- struct{}{}:
 	default:
@@ -52,6 +58,7 @@ func (s *Storage) sqliteShadowStatus() sqliteShadowStatus {
 		LastAttempt: s.shadow.lastAttempt,
 		LastSuccess: s.shadow.lastSuccess,
 		LastError:   s.shadow.lastError,
+		Pending:     s.shadow.changed != s.shadow.mirrored,
 	}
 }
 
@@ -122,6 +129,9 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 	if s.shadow == nil {
 		return errors.New("SQLite shadow not enabled")
 	}
+	s.shadow.mu.Lock()
+	checkpoint := s.shadow.changed
+	s.shadow.mu.Unlock()
 	jobs, imports, err := s.shadowJSONSnapshot()
 	if err == nil {
 		err = s.shadow.meta.reconcile(ctx, jobs, imports)
@@ -131,7 +141,10 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 	if err == nil {
 		s.shadow.lastSuccess = s.shadow.lastAttempt
 		s.shadow.lastError = ""
-	} else {
+		if checkpoint > s.shadow.mirrored {
+			s.shadow.mirrored = checkpoint
+		}
+	} else if checkpoint >= s.shadow.mirrored {
 		s.shadow.lastError = err.Error()
 	}
 	s.shadow.mu.Unlock()
@@ -149,6 +162,13 @@ func (s *Storage) sqliteShadowLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-s.shadow.wake:
+			// Coalesce rapid progress writes without creating a goroutine per
+			// event; the 1-element wake channel remains bounded.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 		case <-ticker.C:
 		}
 		if err := s.syncSQLiteShadow(ctx); err != nil && ctx.Err() == nil {
@@ -409,10 +429,12 @@ func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
 	status := "healthy"
 	if state.LastError != "" || state.LastSuccess.IsZero() {
 		status = "degraded"
+	} else if state.Pending {
+		status = "pending"
 	}
 	reply(w, http.StatusOK, map[string]any{
 		"enabled": true, "authoritative": "json", "status": status,
 		"lastAttempt": state.LastAttempt, "lastSuccess": state.LastSuccess,
-		"lastError": state.LastError,
+		"lastError": state.LastError, "pending": state.Pending,
 	})
 }
