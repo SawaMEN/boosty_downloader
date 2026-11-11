@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -51,7 +51,7 @@ func verifySQLiteExport(root string) error {
 	if err != nil {
 		return err
 	}
-	dsn := "file://" + strings.ReplaceAll(abs, "?", "%3F") + "?mode=ro&_pragma=query_only(1)"
+	dsn := (&url.URL{Scheme: "file", Path: abs, RawQuery: "mode=ro&_pragma=query_only(1)"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return err
