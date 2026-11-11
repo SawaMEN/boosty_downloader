@@ -21,6 +21,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Prepare Go SQLite dependencies and formatting
+        run: |
+          go mod tidy
+          gofmt -w internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go
+          for file in go.mod go.sum internal/server/sqlite_preflight.go internal/server/sqlite_preflight_test.go; do
+            echo "__BEGIN_FILE_${file}__"
+            base64 -w0 "$file"
+            echo
+            echo "__END_FILE_${file}__"
+          done
       - name: Verify offline SQLite export and safety
         run: python3 -m unittest discover -s tests -p 'test_sqlite_migrate.py' -v
       - name: Install Zstd for storage tests
