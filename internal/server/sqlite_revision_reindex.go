@@ -362,6 +362,10 @@ func sqliteReindexNoWAL(root string) error {
 }
 
 func sqliteReindexDisk(root string, jobs map[string]Job) ([]sqliteDiskRevision, error) {
+	return sqliteReindexDiskContext(context.Background(), root, jobs)
+}
+
+func sqliteReindexDiskContext(ctx context.Context, root string, jobs map[string]Job) ([]sqliteDiskRevision, error) {
 	keys := make([]string, 0, len(jobs))
 	for id := range jobs {
 		keys = append(keys, id)
@@ -371,11 +375,14 @@ func sqliteReindexDisk(root string, jobs map[string]Job) ([]sqliteDiskRevision, 
 	index := make(map[string]bool)
 	ids := make(map[string]bool)
 	for _, id := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		job := jobs[id]
 		current := []string{"library", job.OwnerID, job.Author, job.PostID}
 		_, err := sqliteAuditSafePath(root, append(append([]string{}, current...), "manifest.json"))
 		if err == nil {
-			revision, err := sqliteReindexReadRevision(root, job, "current:"+id, current, true)
+			revision, err := sqliteReindexReadRevisionContext(ctx, root, job, "current:"+id, current, true)
 			if err != nil {
 				return nil, err
 			}
@@ -410,7 +417,7 @@ func sqliteReindexDisk(root string, jobs map[string]Job) ([]sqliteDiskRevision, 
 			if !validRevisionID(revisionID) || !entry.IsDir() || ids[revisionID] {
 				return nil, fmt.Errorf("invalid or repeated revision ID: %s", revisionID)
 			}
-			snapshot, err := sqliteReindexReadRevision(root, job, revisionID,
+			snapshot, err := sqliteReindexReadRevisionContext(ctx, root, job, revisionID,
 				append(append([]string{}, history...), revisionID), false)
 			if err != nil {
 				return nil, err
@@ -431,6 +438,13 @@ func sqliteReindexDisk(root string, jobs map[string]Job) ([]sqliteDiskRevision, 
 }
 
 func sqliteReindexReadRevision(root string, job Job, id string, parts []string, current bool) (sqliteDiskRevision, error) {
+	return sqliteReindexReadRevisionContext(context.Background(), root, job, id, parts, current)
+}
+
+func sqliteReindexReadRevisionContext(ctx context.Context, root string, job Job, id string, parts []string, current bool) (sqliteDiskRevision, error) {
+	if err := ctx.Err(); err != nil {
+		return sqliteDiskRevision{}, err
+	}
 	manifestPath, err := sqliteAuditSafePath(root, append(append([]string{}, parts...), "manifest.json"))
 	if err != nil {
 		return sqliteDiskRevision{}, err
@@ -468,6 +482,9 @@ func sqliteReindexReadRevision(root string, job Job, id string, parts []string, 
 	}
 	seen := make(map[string]bool, len(man.Assets))
 	for _, asset := range man.Assets {
+		if err := ctx.Err(); err != nil {
+			return sqliteDiskRevision{}, err
+		}
 		if !safeArchivePart(asset.Filename) || seen[asset.Filename] {
 			return sqliteDiskRevision{}, errors.New("unsafe or duplicate archive media filename")
 		}
@@ -477,7 +494,7 @@ func sqliteReindexReadRevision(root string, job Job, id string, parts []string, 
 		if err != nil {
 			return sqliteDiskRevision{}, err
 		}
-		digest, size, err := sqliteReindexHashFile(file)
+		digest, size, err := sqliteReindexHashFileContext(ctx, file)
 		if err != nil {
 			return sqliteDiskRevision{}, err
 		}
@@ -492,8 +509,12 @@ func sqliteReindexReadRevision(root string, job Job, id string, parts []string, 
 		casParts := []string{"blobs", "sha256", digest[:2], digest}
 		cas, err := sqliteAuditSafePath(root, casParts)
 		if err == nil {
-			if err := sqliteAuditFileDigest(cas, digest, size); err != nil {
+			gotDigest, gotSize, err := sqliteReindexHashFileContext(ctx, cas)
+			if err != nil {
 				return sqliteDiskRevision{}, err
+			}
+			if gotDigest != digest || gotSize != size {
+				return sqliteDiskRevision{}, fmt.Errorf("CAS media differs from original archive: %s", digest)
 			}
 			item.casPath = filepath.ToSlash(filepath.Join(casParts...))
 		} else if !os.IsNotExist(err) {
@@ -509,6 +530,25 @@ func sqliteReindexDigestValid(digest string) bool {
 }
 
 func sqliteReindexHashFile(path string) (string, int64, error) {
+	return sqliteReindexHashFileContext(context.Background(), path)
+}
+
+type sqliteContextReader struct {
+	ctx context.Context
+	file io.Reader
+}
+
+func (reader sqliteContextReader) Read(p []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.file.Read(p)
+}
+
+func sqliteReindexHashFileContext(ctx context.Context, path string) (string, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
 	before, err := os.Lstat(path)
 	if err != nil {
 		return "", 0, err
@@ -526,7 +566,7 @@ func sqliteReindexHashFile(path string) (string, int64, error) {
 		return "", 0, errors.New("archive asset changed before read")
 	}
 	hash := sha256.New()
-	size, err := io.Copy(hash, f)
+	size, err := io.Copy(hash, sqliteContextReader{ctx: ctx, file: f})
 	if err != nil {
 		return "", 0, err
 	}
