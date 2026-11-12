@@ -197,7 +197,13 @@ func (a *App) runJob(id string) {
 	} else {
 		job.State = "done"
 	}
-	_ = a.store.upsert(job)
+	if err := a.store.upsert(job); err == nil {
+		// File history and manifest changes have finished. SQL media shadow
+		// is non-authoritative and follows only after the durable JSON status.
+		a.store.notifySQLiteMedia()
+	} else {
+		fmt.Fprintf(os.Stderr, "cannot persist archive completion: %v\n", err)
+	}
 }
 func (a *App) archive(ctx context.Context, j *Job) error {
 	policy := a.accounts.policy()
