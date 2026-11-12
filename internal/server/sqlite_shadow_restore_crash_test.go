@@ -70,7 +70,7 @@ func TestSQLiteShadowRestorePartialCopyENOSPCPreservesOriginal(t *testing.T) {
 	dbPath := filepath.Join(root, "metadata.db")
 	oldSQL := sqliteRestoreReadTestFile(t, dbPath)
 	expected := map[string][]byte{
-		"jobs.json": sqliteRestoreReadTestFile(t, filepath.Join(root, "jobs.json")),
+		"jobs.json":    sqliteRestoreReadTestFile(t, filepath.Join(root, "jobs.json")),
 		"imports.json": sqliteRestoreReadTestFile(t, filepath.Join(root, "imports.json")),
 	}
 	err := restoreSQLiteShadowWithHooks(root, backup, &restoreSQLiteShadowHooks{
@@ -136,7 +136,7 @@ func TestSQLiteShadowRestoreSIGKILLIsCrashConsistent(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := map[string][]byte{
-				"jobs.json": sqliteRestoreReadTestFile(t, filepath.Join(root, "jobs.json")),
+				"jobs.json":    sqliteRestoreReadTestFile(t, filepath.Join(root, "jobs.json")),
 				"imports.json": sqliteRestoreReadTestFile(t, filepath.Join(root, "imports.json")),
 			}
 			cmd := exec.Command(os.Args[0], "-test.run=^TestSQLiteShadowRestoreCrashHelper$")
