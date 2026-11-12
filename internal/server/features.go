@@ -144,16 +144,11 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
-	if _, err := os.Stat(filepath.Join(base, "manifest.json")); err != nil {
-		fail(w, 404, "архив отсутствует")
-		return
-	}
 	// Only portable snapshot artefacts belong in a shared ZIP. Raw Boosty
 	// payloads can contain signed CDN URLs and must never be redistributed.
-	var manifest ArchiveManifest
-	manBytes, err := os.ReadFile(filepath.Join(base, "manifest.json"))
-	if err != nil || json.Unmarshal(manBytes, &manifest) != nil {
-		fail(w, 500, "повреждён манифест архива")
+	_, manifest, err := readArchiveManifestNoFollow(base)
+	if err != nil {
+		fail(w, 404, "манифест архива отсутствует или повреждён")
 		return
 	}
 	allowed := map[string]bool{"index.html": true, "manifest.json": true}
@@ -203,13 +198,12 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() != nil {
 			return
 		}
-		f, err := os.Open(path)
+		rel, err := filepath.Rel(base, path)
 		if err != nil {
 			return
 		}
-		rel, err := filepath.Rel(base, path)
+		f, err := openArchiveRegular(base, filepath.ToSlash(rel))
 		if err != nil {
-			f.Close()
 			return
 		}
 		entry, err := writer.Create(filepath.ToSlash(rel))
@@ -236,18 +230,13 @@ func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "задача не найдена")
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), "manifest.json"))
+	b, man, err := readArchiveManifestNoFollow(a.store.archiveDir(j.OwnerID, j.Author, j.PostID))
 	if err != nil {
 		fail(w, 404, "архив ещё не готов")
 		return
 	}
 	// A subscriber's tier is private metadata, not part of a share grant.
 	if j.OwnerID != principal(r).ID {
-		var man ArchiveManifest
-		if json.Unmarshal(b, &man) != nil {
-			fail(w, 500, "повреждён манифест архива")
-			return
-		}
 		man.Subscription = nil
 		man.ContentSHA256 = "" // Fingerprint may encode the private tier.
 		reply(w, 200, man)
