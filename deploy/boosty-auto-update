@@ -101,6 +101,10 @@ restore_native() {
   cp -p "$BIN" "$backup" 2>/dev/null || true
   cp -p "$BIN.prev" "$BIN.rollback"
   mv -f "$BIN.rollback" "$BIN"
+  if [[ -s /usr/local/bin/boosty-dbcheck.prev ]]; then
+    install -m 0755 /usr/local/bin/boosty-dbcheck.prev /usr/local/bin/boosty-dbcheck.new || return 1
+    mv -f /usr/local/bin/boosty-dbcheck.new /usr/local/bin/boosty-dbcheck || return 1
+  fi
   systemctl restart boosty-downloader.service || return 1
   health
 }
@@ -116,12 +120,28 @@ restore_docker() {
   health
 }
 
+# Persist the version represented by the saved rollback binary/image. This
+# metadata never grants access to media and remains private to the host.
+remember_previous_release() {
+  local before="$current"
+  if [[ ! "$before" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?|edge-[a-f0-9]{12})$ ]]; then
+    before='unknown'
+  fi
+  printf '%s\n' "$before" > "$ETC/installed-release.prev.tmp"
+  chmod 0640 "$ETC/installed-release.prev.tmp"
+  mv -f "$ETC/installed-release.prev.tmp" "$ETC/installed-release.prev"
+}
+
 if ((rollback)); then
   if [[ "$mode" == native ]];then restore_native || { status failed 'Откат native не прошёл проверку.'; exit 1; }
   else restore_docker || { status failed 'Откат Docker не прошёл проверку.'; exit 1; }
   fi
-  current='предыдущая версия'
+  current="$(cat "$ETC/installed-release.prev" 2>/dev/null || true)"
+  if [[ ! "$current" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?|edge-[a-f0-9]{12})$ ]]; then
+    current='unknown'
+  fi
   printf '%s\n' "$current" > "$ETC/installed-release"
+  chmod 0640 "$ETC/installed-release"
   status rolled_back 'Предыдущая версия восстановлена владельцем сервера.'
   exit 0
 fi
@@ -185,18 +205,31 @@ if [[ "$mode" == native ]];then
     *) status failed 'Архитектура процессора не поддерживается релизными бинарниками.'; exit 1;;
   esac
   name="boosty-downloader-linux-$arch"
+  checker="boosty-dbcheck-linux-$arch"
   release_url="https://github.com/$REPO/releases/download/$latest"
   if ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/$name" -o "$work/$name" ||
+     ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/$checker" -o "$work/$checker" ||
      ! curl -fLsS --retry 3 --connect-timeout 12 "$release_url/SHA256SUMS" -o "$work/SHA256SUMS"; then
-    status failed 'Не удалось скачать бинарник релиза и SHA256SUMS.';exit 1
+    status failed 'Не удалось скачать оба бинарника релиза и SHA256SUMS.';exit 1
   fi
-  [[ -s "$work/$name" && -s "$work/SHA256SUMS" ]] || { status failed 'Нет бинарника или контрольной суммы.';exit 1; }
-  expected="$(awk -v f="$name" '$2==f {print $1}' "$work/SHA256SUMS")"
-  actual="$(sha256sum "$work/$name" | cut -d' ' -f1)"
-  [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] || { status failed 'Контрольная сумма загруженного бинарника не совпала.';exit 1; }
+  for asset in "$name" "$checker"; do
+    [[ -s "$work/$asset" && -s "$work/SHA256SUMS" ]] ||
+      { status failed "Отсутствует бинарник $asset или контрольная сумма.";exit 1; }
+    expected="$(awk -v f="$asset" '$2==f {print $1}' "$work/SHA256SUMS")"
+    actual="$(sha256sum "$work/$asset" | cut -d' ' -f1)"
+    [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
+      { status failed "SHA-256 бинарника $asset не совпала.";exit 1; }
+  done
   [[ -s "$BIN" ]] || { status failed 'Предыдущий бинарник отсутствует.';exit 1; }
   cp -p "$BIN" "$BIN.prev" || { status failed 'Не удалось сохранить предыдущий бинарник.';exit 1; }
+  if [[ -s /usr/local/bin/boosty-dbcheck ]]; then
+    cp -p /usr/local/bin/boosty-dbcheck /usr/local/bin/boosty-dbcheck.prev ||
+      { status failed 'Не удалось сохранить предыдущий boosty-dbcheck.';exit 1; }
+  fi
+  remember_previous_release
   install -m 0755 "$work/$name" "$BIN.new"
+  install -m 0755 "$work/$checker" /usr/local/bin/boosty-dbcheck.new
+  mv -f /usr/local/bin/boosty-dbcheck.new /usr/local/bin/boosty-dbcheck
   mv -f "$BIN.new" "$BIN"
   if ! systemctl restart boosty-downloader.service || ! health; then
     if restore_native;then status rolled_back 'Проверка новой версии не прошла; выполнен откат.';else status failed 'Новая версия не запустилась, автоматический откат не удался.';fi
@@ -213,6 +246,7 @@ else
   rm -rf -- "$PROJECT.prev"
   cp -a "$PROJECT" "$PROJECT.prev" || { status failed 'Не удалось сохранить предыдущие исходники Docker.';exit 1; }
   docker tag boosty-downloader:local boosty-downloader:rollback
+  remember_previous_release
   if ! rm -rf -- "$PROJECT/cmd" "$PROJECT/internal" ||
      ! cp -a "$work/source/go.mod" "$work/source/cmd" "$work/source/internal" "$PROJECT/" ||
      { [[ -f "$work/source/go.sum" ]] && ! cp "$work/source/go.sum" "$PROJECT/go.sum"; } ||
