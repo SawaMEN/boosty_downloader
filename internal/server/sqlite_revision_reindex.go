@@ -204,6 +204,13 @@ func sqliteApplyRevisionInventory(ctx context.Context, tx *sql.Tx,
 			return err
 		}
 	}
+	// JSON purge and retention pruning can remove all SQL references to a
+	// digest. Retire only those SQL catalog rows inside the same transaction.
+	// Do NOT unlink CAS files: filesystem GC owns physical reclamation.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM media_blobs
+		WHERE NOT EXISTS (SELECT 1 FROM revision_assets a WHERE a.sha256=media_blobs.sha256)`); err != nil {
+		return err
+	}
 	return nil
 }
 
