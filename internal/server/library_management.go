@@ -488,6 +488,7 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 		s.mu.Unlock()
 		return 0, err
 	}
+	s.notifySQLiteMedia()
 	s.mu.Unlock()
 	var cleanupErr error
 	for _, move := range moves {
