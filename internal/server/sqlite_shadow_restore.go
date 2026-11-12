@@ -8,13 +8,25 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // RestoreSQLiteShadowFromBackup repairs only the detached, non-authoritative
 // metadata.db. It never rewinds JSON ACLs, accounts, media, tokens or TLS.
 // The live archive directory must be stopped and identical to the verified
 // recovery point except for the SQLite file itself.
+// restoreSQLiteShadowHooks enables deterministic fault injection in tests
+// without exposing unsafe crash flags or bypasses through the production CLI.
+type restoreSQLiteShadowHooks struct {
+	copyData   func(io.Writer, io.Reader) (int64, error)
+	checkpoint func(string) error
+}
+
 func RestoreSQLiteShadowFromBackup(root, backup string) error {
+	return restoreSQLiteShadowWithHooks(root, backup, nil)
+}
+
+func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShadowHooks) error {
 	if root == "" || backup == "" {
 		return errors.New("data directory and verified metadata backup are required")
 	}
@@ -27,6 +39,24 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 		return err
 	}
 	defer lock.Close()
+	// A backup physically inside the live data directory could be rewritten
+	// by the application or mistakenly included in archive maintenance. Do
+	// not permit recovery from an in-place or symlink-aliased source.
+	livePhysical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	backupPhysical, err := filepath.EvalSymlinks(backup)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(livePhysical, backupPhysical)
+	if err != nil {
+		return err
+	}
+	if relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))) {
+		return errors.New("SQLite recovery snapshot must be outside the live data directory")
+	}
 
 	if err := sqliteReindexNoWAL(root); err != nil {
 		return fmt.Errorf("restore blocked by unfinished transaction: %w", err)
@@ -82,7 +112,11 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 		staged.Close()
 		return err
 	}
-	copyErr := sqliteRestoreCopyVerified(backup, staged)
+	copyData := io.Copy
+	if hooks != nil && hooks.copyData != nil {
+		copyData = hooks.copyData
+	}
+	copyErr := sqliteRestoreCopyVerified(backup, staged, copyData)
 	if err := staged.Close(); copyErr == nil {
 		copyErr = err
 	}
@@ -91,6 +125,11 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 	}
 	if err := sqliteBackupJSONMatches(root, backup); err != nil {
 		return fmt.Errorf("JSON changed while staging SQLite recovery: %w", err)
+	}
+	if hooks != nil && hooks.checkpoint != nil {
+		if err := hooks.checkpoint("staged"); err != nil {
+			return err
+		}
 	}
 
 	// Retain the original inode via a private same-filesystem hardlink until
@@ -125,6 +164,9 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 		return err
 	}
 	verify := syncMetadataDirectory(root)
+	if verify == nil && hooks != nil && hooks.checkpoint != nil {
+		verify = hooks.checkpoint("promoted")
+	}
 	if verify == nil {
 		verify = verifySQLiteExport(root)
 	}
@@ -156,7 +198,42 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 			return fmt.Errorf("SQLite restored, but cleanup directory sync failed: %w", err)
 		}
 	}
+	// A process killed between fsync and rename can leave a private staged
+	// file. A SIGKILL after rename can leave the old SQL hardlink. Only a
+	// newly verified and successful restore may retire those stale files.
+	if err := sqliteRestoreCleanupOrphans(root); err != nil {
+		return fmt.Errorf("SQLite restored, but stale recovery file cleanup failed: %w", err)
+	}
 	return nil
+}
+
+// Remove only the private temporary names owned by this recovery mechanism.
+// Never follow a symlink or delete an unknown/special entry. A failed restore
+// leaves old recovery inodes available for manual inspection.
+func sqliteRestoreCleanupOrphans(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".sqlite-shadow-restoring-") &&
+			!strings.HasPrefix(name, ".sqlite-shadow-previous-") {
+			continue
+		}
+		path := filepath.Join(root, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsafe stale SQLite recovery file: %s", name)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return syncMetadataDirectory(root)
 }
 
 func sqliteRestoreAuditMedia(root, backup string) error {
@@ -179,7 +256,7 @@ func sqliteRestoreAuditMedia(root, backup string) error {
 
 // The private backup was checked before copying; compare the streamed bytes
 // with the current backup digest again in case an external tool changed it.
-func sqliteRestoreCopyVerified(backup string, target *os.File) error {
+func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.Writer, io.Reader) (int64, error)) error {
 	original := filepath.Join(backup, "metadata.db")
 	beforeHash, beforeSize, err := backupFileDigest(backup, "metadata.db")
 	if err != nil {
@@ -190,7 +267,7 @@ func sqliteRestoreCopyVerified(backup string, target *os.File) error {
 		return err
 	}
 	hash := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(target, hash), source)
+	size, copyErr := copyData(io.MultiWriter(target, hash), source)
 	if err := source.Close(); copyErr == nil {
 		copyErr = err
 	}
