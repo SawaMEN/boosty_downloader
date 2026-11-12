@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -234,5 +235,22 @@ func TestSQLiteOfflineReindexPreservesEmptyOwnerArchiveSet(t *testing.T) {
 	}
 	if err := sqliteAuditDatabaseIntegrity(db); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLiteOfflineReindexCancellableDuringMediaHashing(t *testing.T) {
+	root, _, _, _, _ := sqliteReindexFixture(t)
+	jobs, err := sqliteShadowReadJobs(filepath.Join(root, "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sqliteReindexDiskContext(ctx, root, jobs); err != context.Canceled {
+		t.Fatalf("canceled media scan unexpectedly proceeded: %v", err)
+	}
+	file := filepath.Join(root, "library", "first", "creator", "post-1", "media", "clip.mp4")
+	if _, _, err := sqliteReindexHashFileContext(ctx, file); err != context.Canceled {
+		t.Fatalf("canceled SHA-256 reader unexpectedly proceeded: %v", err)
 	}
 }
