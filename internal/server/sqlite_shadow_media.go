@@ -51,7 +51,7 @@ func (s *Storage) syncSQLiteMedia(ctx context.Context, jobs map[string]Job, impo
 	}
 	// Indexing involves SHA-256 of on-disk bytes. It is opt-in, not scheduled
 	// for every JSON progress save, and no files are ever modified or removed.
-	revisions, err := sqliteReindexDisk(s.root, jobs)
+	revisions, err := sqliteReindexDiskContext(ctx, s.root, jobs)
 	if err != nil {
 		return true, err
 	}
