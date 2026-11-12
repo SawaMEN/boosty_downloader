@@ -58,6 +58,35 @@ jobs:
         run: go test -race ./...
       - name: Docker image build
         run: docker build -f deploy/docker/Dockerfile -t boosty-downloader:test .
+  sqlite-disk-full:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build an offline SQLite failure-test binary outside tmpfs
+        run: go test -c -o "$RUNNER_TEMP/boosty-sqlite-enospc.test" ./internal/server
+      - name: Exhaust only an isolated 32 MiB tmpfs; verify restore and retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d "$RUNNER_TEMP/boosty-enospc.XXXXXX")"
+          cleanup() {
+            if mountpoint -q "$scratch"; then
+              sudo umount "$scratch"
+            fi
+            rmdir "$scratch"
+          }
+          trap cleanup EXIT
+          sudo mount -t tmpfs -o "size=32m,mode=0700,uid=$(id -u),gid=$(id -g),nosuid,nodev,noexec" tmpfs "$scratch"
+          TMPDIR="$scratch" BD_TEST_SQLITE_TMPFS="$scratch" \
+            "$RUNNER_TEMP/boosty-sqlite-enospc.test" -test.v -test.timeout=2m \
+            -test.run '^TestSQLiteShadowRestorePhysicalENOSPC$'
+
   binaries:
     needs: tests
     runs-on: ubuntu-latest
