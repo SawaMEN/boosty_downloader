@@ -46,12 +46,8 @@ func (s *Storage) revisionsDir(job Job) string {
 // Signed private API responses never get exposed through the revision HTTP
 // route; only local, regular files are hard-linked into the private snapshot.
 func archiveFiles(base string) ([]string, ArchiveManifest, error) {
-	var man ArchiveManifest
-	b, err := os.ReadFile(filepath.Join(base, "manifest.json"))
+	_, man, err := readArchiveManifestNoFollow(base)
 	if err != nil {
-		return nil, man, err
-	}
-	if err := json.Unmarshal(b, &man); err != nil {
 		return nil, man, err
 	}
 	if len(man.Assets) > 5000 {
