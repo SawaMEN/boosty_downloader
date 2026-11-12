@@ -534,7 +534,7 @@ func sqliteReindexHashFile(path string) (string, int64, error) {
 }
 
 type sqliteContextReader struct {
-	ctx context.Context
+	ctx  context.Context
 	file io.Reader
 }
 
