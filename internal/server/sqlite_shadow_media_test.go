@@ -217,3 +217,35 @@ func TestSQLiteMediaShadowDoesNotSilentlyDropMissingCurrentArchive(t *testing.T)
 		t.Fatal("SQL media state was marked consistent after missing live data")
 	}
 }
+
+func TestSQLiteMediaShadowRestartReindexesCommittedOnDiskHistory(t *testing.T) {
+	root, _, oldID, media := sqliteSnapshotAuditFixture(t)
+	t.Setenv("BD_SQLITE_VERIFY", "")
+	t.Setenv("BD_SQLITE_SHADOW", "1")
+	t.Setenv("BD_SQLITE_MEDIA_SHADOW", "1")
+	cfg := Config{DataDir: root, SecretKey: testKey(t),
+		AdminUser: "admin", AdminPassword: "strong-password-123"}
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.syncSQLiteShadow(context.Background()); err != nil {
+		app.Close()
+		t.Fatal(err)
+	}
+	app.Close()
+	// A completed revision may be left on disk while the service is stopped,
+	// for example after recovery of an interrupted media index transaction.
+	sqliteReindexCopyHistory(t, root, oldID, strings.Repeat("f", 24), media)
+	restored, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err := restored.store.syncSQLiteShadow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count := sqliteMediaRevisionCount(t, restored); count != 3 {
+		t.Fatalf("restart did not index an existing historical snapshot: %d", count)
+	}
+}
