@@ -511,6 +511,10 @@ native_install() {
   fi
   if [[ -n "$previous" ]]; then cp -p "$previous" "$BIN.prev"; fi
   if [[ -s "$WORK/boosty-dbcheck" ]]; then
+    # Keep the helper at the same release as the server across rollback.
+    if [[ -s /usr/local/bin/boosty-dbcheck ]]; then
+      cp -p /usr/local/bin/boosty-dbcheck /usr/local/bin/boosty-dbcheck.prev
+    fi
     install -m 0755 "$WORK/boosty-dbcheck" /usr/local/bin/boosty-dbcheck
   fi
 }
@@ -591,6 +595,15 @@ install -m 0755 "$ROOT/deploy/boosty-downloader-manager" /usr/local/bin/bdy
 if [[ "$MODE" == native ]]; then native_install; else docker_install; fi
 printf '%s\n' "$VIDEO_ACCEL" > "$ETC/video-mode"
 printf '%s\n' "$MODE" > "$ETC/mode"
+if [[ -s "$ETC/installed-release" ]]; then
+  # The previous version has already been saved as a rollback binary/image.
+  # Record its identity before overwriting the current release marker.
+  old_release="$(cat "$ETC/installed-release")"
+  if [[ "$old_release" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?|edge-[a-f0-9]{12})$ ]]; then
+    printf '%s\n' "$old_release" > "$ETC/installed-release.prev"
+    chmod 0640 "$ETC/installed-release.prev"
+  fi
+fi
 if [[ "$MODE" == native && -n "$RELEASE_ID" ]]; then
   printf '%s\n' "$RELEASE_ID" > "$ETC/installed-release"
   chmod 0640 "$ETC/installed-release"
