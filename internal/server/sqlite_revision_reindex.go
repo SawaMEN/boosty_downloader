@@ -334,10 +334,28 @@ func sqliteReindexWriteRevision(ctx context.Context, tx *sql.Tx, revision sqlite
 }
 
 func sqliteReindexSameBackup(root, backup string) error {
-	// The metadata rollback snapshot also contains optional account and
-	// author state. A newly created, deleted or changed file invalidates
-	// that recovery point just as surely as a changed archive ACL.
-	for _, name := range []string{"jobs.json", "imports.json", "metadata.db", "accounts.json", "authors.json"} {
+	if err := sqliteBackupJSONMatches(root, backup); err != nil {
+		return err
+	}
+	want, _, err := backupFileDigest(backup, "metadata.db")
+	if err != nil {
+		return err
+	}
+	have, _, err := backupFileDigest(root, "metadata.db")
+	if err != nil {
+		return err
+	}
+	if want != have {
+		return errors.New("backup is stale: metadata.db changed after snapshot")
+	}
+	return nil
+}
+
+// Only JSON equality is required to restore a non-authoritative, possibly
+// corrupted SQLite shadow from a trusted recovery point.
+func sqliteBackupJSONMatches(root, backup string) error {
+	// Account state and authors must match too, including optional presence.
+	for _, name := range []string{"jobs.json", "imports.json", "accounts.json", "authors.json"} {
 		want, _, backupErr := backupFileDigest(backup, name)
 		have, _, liveErr := backupFileDigest(root, name)
 		optional := name == "accounts.json" || name == "authors.json"
