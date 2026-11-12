@@ -13,8 +13,9 @@ STATUS="$DATA/update-status.json"
 [[ -d "$DATA" && -f "$ETC/mode" && -f "$ETC/environment" ]] || { echo 'Boosty Downloader is not installed.' >&2; exit 1; }
 command -v flock >/dev/null || { echo 'flock is required.' >&2; exit 1; }
 command -v python3 >/dev/null || { echo 'python3 is required.' >&2; exit 1; }
-exec 9>"$ETC/update.lock"
-flock -n 9 || exit 0
+mkdir -p /run/lock
+exec 9>/run/lock/boosty-downloader-maintenance.lock
+flock -n 9 || { echo 'Установка или обновление уже выполняется.' >&2; exit 1; }
 
 force=0
 apply_override=0
