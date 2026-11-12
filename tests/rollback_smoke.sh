@@ -52,6 +52,13 @@ key_before="$(sha256sum "$etc/tls/privkey.pem" | cut -d' ' -f1)"
 case "$mode" in
   native)
     [[ -s "$bin" ]] || { echo "Server binary missing." >&2; exit 1; }
+    checker=/usr/local/bin/boosty-dbcheck
+    [[ -s "$checker" ]] || { echo "Database verifier is missing." >&2; exit 1; }
+    checksum_before="$(sha256sum "$checker" | cut -d' ' -f1)"
+    cp -p "$checker" "$checker.prev"
+    printf '#!/bin/sh\nexit 82\n' > "$checker.injected"
+    chmod 0755 "$checker.injected"
+    mv -f "$checker.injected" "$checker"
     cp -p "$bin" "$bin.prev"
     printf '#!/bin/sh\nexit 81\n' > "$bin.injected"
     chmod 0755 "$bin.injected"
@@ -84,6 +91,10 @@ fi
 # restore the previous binary/image/project without touching user metadata.
 timeout 130s /usr/local/bin/bdy rollback
 health || { echo "Service is still unhealthy after rollback." >&2; exit 1; }
+if [[ "$mode" == native ]]; then
+  [[ "$(sha256sum "$checker" | cut -d' ' -f1)" == "$checksum_before" ]] ||
+    { echo "Database verifier was not restored to the matching version." >&2; exit 1; }
+fi
 
 [[ "$(sha256sum "$sentinel" | cut -d' ' -f1)" == "$before" ]] ||
   { echo "Archived user bytes changed during rollback." >&2; exit 1; }
