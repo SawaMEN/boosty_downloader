@@ -31,14 +31,21 @@ func RestoreSQLiteShadowFromBackup(root, backup string) error {
 	if err := sqliteReindexNoWAL(root); err != nil {
 		return fmt.Errorf("restore blocked by unfinished transaction: %w", err)
 	}
-	// Never replace a SQLite database while rollback journals or shared
-	// memory sidecars can refer to the previous database inode.
-	for _, name := range []string{"metadata.db-shm", "metadata.db-journal"} {
-		if _, err := os.Lstat(filepath.Join(root, name)); err == nil {
-			return fmt.Errorf("restore requires a closed SQLite database: %s exists", name)
-		} else if !os.IsNotExist(err) {
-			return err
+	// A checkpointed SQLite database may retain a regular -shm sidecar
+	// after a clean close. It contains no committed pages without the WAL;
+	// do not reject a verified empty/absent WAL solely because -shm exists.
+	// Reject special/symlink sidecars and any rollback journal instead.
+	if info, err := os.Lstat(filepath.Join(root, "metadata.db-shm")); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("unsafe SQLite shared-memory sidecar")
 		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(root, "metadata.db-journal")); err == nil {
+		return errors.New("restore requires a closed SQLite database without a rollback journal")
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	if err := VerifySQLiteMetadataBackup(backup); err != nil {
 		return fmt.Errorf("unusable metadata backup: %w", err)
