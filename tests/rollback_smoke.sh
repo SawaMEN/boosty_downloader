@@ -24,6 +24,21 @@ port="$(sed -nE 's/^BD_PORT="?([0-9]+)"?$/\1/p' "$etc/environment" | head -1)"
 health() { curl -kfSs --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/healthz" >/dev/null; }
 health || { echo "Initial installed service is not healthy." >&2; exit 1; }
 
+# A running installer holds this same lock. Updates and password rotations
+# must fail without touching the live deployment.
+exec 8>/run/lock/boosty-downloader-maintenance.lock
+flock -n 8 || { echo "CI maintenance lock unexpectedly unavailable." >&2; exit 1; }
+if /usr/local/bin/bdy update --force >/dev/null 2>&1; then
+  echo "Updater ignored another process's maintenance lock." >&2
+  exit 1
+fi
+if /usr/local/bin/bdy reset-password >/dev/null 2>&1; then
+  echo "Password reset ignored another process's maintenance lock." >&2
+  exit 1
+fi
+flock -u 8
+exec 8>&-
+
 # Run as service user; a durable user-owned file must survive broken releases.
 sentinel="$data/.ci-rollback-sentinel"
 printf 'CI archival bytes must survive a failed deployment\n' > "$sentinel"
