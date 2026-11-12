@@ -80,11 +80,25 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 	if err := VerifySQLiteMetadataBackup(backup); err != nil {
 		return fmt.Errorf("unusable metadata backup: %w", err)
 	}
+	// Pin the recovery file identity before the potentially long media audit.
+	// A second hash of a swapped source must never become the new baseline.
+	expectedSQLHash, expectedSQLSize, err := backupFileDigest(backup, "metadata.db")
+	if err != nil {
+		return fmt.Errorf("cannot pin verified SQLite backup: %w", err)
+	}
 	if err := sqliteBackupJSONMatches(root, backup); err != nil {
 		return fmt.Errorf("cannot restore SQL over changed authoritative JSON: %w", err)
 	}
 	if err := sqliteRestoreAuditMedia(root, backup); err != nil {
 		return fmt.Errorf("recovery point does not match on-disk archives: %w", err)
+	}
+	if hooks != nil && hooks.checkpoint != nil {
+		if err := hooks.checkpoint("audited"); err != nil {
+			return err
+		}
+	}
+	if err := sqliteRestoreBackupUnchanged(backup, expectedSQLHash, expectedSQLSize); err != nil {
+		return err
 	}
 	// Third-party writers do not honor flock: recheck all source JSON after
 	// the potentially long SHA-256 inventory and again before promotion.
@@ -116,7 +130,7 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 	if hooks != nil && hooks.copyData != nil {
 		copyData = hooks.copyData
 	}
-	copyErr := sqliteRestoreCopyVerified(backup, staged, copyData)
+	copyErr := sqliteRestoreCopyVerified(backup, staged, copyData, expectedSQLHash, expectedSQLSize)
 	if err := staged.Close(); copyErr == nil {
 		copyErr = err
 	}
@@ -130,6 +144,9 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 		if err := hooks.checkpoint("staged"); err != nil {
 			return err
 		}
+	}
+	if err := sqliteRestoreBackupUnchanged(backup, expectedSQLHash, expectedSQLSize); err != nil {
+		return err
 	}
 
 	// Retain the original inode via a private same-filesystem hardlink until
@@ -256,10 +273,10 @@ func sqliteRestoreAuditMedia(root, backup string) error {
 
 // The private backup was checked before copying; compare the streamed bytes
 // with the current backup digest again in case an external tool changed it.
-func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.Writer, io.Reader) (int64, error)) error {
+// The expected digest is pinned from a previously verified recovery point.
+func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.Writer, io.Reader) (int64, error), expectedHash string, expectedSize int64) error {
 	original := filepath.Join(backup, "metadata.db")
-	beforeHash, beforeSize, err := backupFileDigest(backup, "metadata.db")
-	if err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, expectedHash, expectedSize); err != nil {
 		return err
 	}
 	source, err := os.Open(original)
@@ -274,15 +291,24 @@ func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.
 	if copyErr != nil {
 		return copyErr
 	}
-	if size != beforeSize || hex.EncodeToString(hash.Sum(nil)) != beforeHash {
-		return errors.New("backup SQLite changed while being copied")
+	if size != expectedSize || hex.EncodeToString(hash.Sum(nil)) != expectedHash {
+		return errors.New("verified backup SQLite changed while being copied")
 	}
-	afterHash, afterSize, err := backupFileDigest(backup, "metadata.db")
-	if err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, expectedHash, expectedSize); err != nil {
 		return err
 	}
-	if afterHash != beforeHash || afterSize != beforeSize {
-		return errors.New("backup SQLite changed after being copied")
-	}
 	return target.Sync()
+}
+
+// Verify against the digest pinned before file/media auditing. Rehashing the
+// source without comparing to that original digest could bless a changed file.
+func sqliteRestoreBackupUnchanged(backup, expectedHash string, expectedSize int64) error {
+	hash, size, err := backupFileDigest(backup, "metadata.db")
+	if err != nil {
+		return fmt.Errorf("verified backup SQLite became inaccessible: %w", err)
+	}
+	if hash != expectedHash || size != expectedSize {
+		return errors.New("verified backup SQLite changed during restore")
+	}
+	return nil
 }
