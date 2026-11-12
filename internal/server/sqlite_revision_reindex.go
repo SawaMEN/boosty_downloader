@@ -93,6 +93,38 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := sqliteApplyRevisionInventory(ctx, tx, revisions, jobs, imports); err != nil {
+		return err
+	}
+	// The authoritative JSON inputs must not change while the expensive media
+	// inventory is rebuilt. Do not trust an index made from moving source data.
+	for _, name := range []string{"jobs.json", "imports.json"} {
+		original, err := backupReadPrivateFile(backup, name)
+		if err != nil {
+			return err
+		}
+		now, err := backupReadPrivateFile(root, name)
+		if err != nil || !bytes.Equal(now, original) {
+			return fmt.Errorf("metadata source changed during reindex: %s", name)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// The running service must remain stopped. Checkpoint the offline WAL so
+	// immutable read-only audits cannot accidentally ignore committed pages.
+	if _, err := meta.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("reindex committed but SQLite checkpoint failed: %w", err)
+	}
+	return VerifySQLiteSnapshotInventory(root)
+}
+
+// sqliteApplyRevisionInventory performs exactly one SQL transaction's revision
+// and media changes. The caller owns BeginTx, rollback, commit and all source
+// stability checks. This is shared by explicit offline reindex and optional
+// non-authoritative media shadow; it does not change files or access rights.
+func sqliteApplyRevisionInventory(ctx context.Context, tx *sql.Tx,
+	revisions []sqliteDiskRevision, jobs map[string]Job, imports map[string]AuthorImport) error {
 	storedJobs, err := sqliteShadowSQLJobs(ctx, tx)
 	if err != nil {
 		return err
@@ -162,27 +194,7 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 			return err
 		}
 	}
-	// The authoritative JSON inputs must not change while the expensive media
-	// inventory is rebuilt. Do not trust an index made from moving source data.
-	for _, name := range []string{"jobs.json", "imports.json"} {
-		original, err := backupReadPrivateFile(backup, name)
-		if err != nil {
-			return err
-		}
-		now, err := backupReadPrivateFile(root, name)
-		if err != nil || !bytes.Equal(now, original) {
-			return fmt.Errorf("metadata source changed during reindex: %s", name)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	// The running service must remain stopped. Checkpoint the offline WAL so
-	// immutable read-only audits cannot accidentally ignore committed pages.
-	if _, err := meta.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		return fmt.Errorf("reindex committed but SQLite checkpoint failed: %w", err)
-	}
-	return VerifySQLiteSnapshotInventory(root)
+	return nil
 }
 
 type sqliteIndexedRevision struct {
