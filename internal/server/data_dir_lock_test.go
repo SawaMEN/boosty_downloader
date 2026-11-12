@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,7 +98,23 @@ func TestRunningAppBlocksSecondServerAndOfflineSQLiteOperations(t *testing.T) {
 			}
 		})
 	}
+	// The Python exporter must use the same inode lock, not a separate
+	// Python-only sentinel. A blocked export must not publish a partial DB.
+	export := filepath.Join(t.TempDir(), "offline-export.db")
+	cmd := exec.Command("python3", "../../tools/sqlite_migrate.py",
+		"--data-dir", root, "--output", export)
+	result, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(result), "locked") {
+		t.Fatalf("Python exporter ignored live Go server lock: %v: %s", err, result)
+	}
+	if _, err := os.Stat(export); !os.IsNotExist(err) {
+		t.Fatalf("blocked exporter published an output file: %v", err)
+	}
 	app.Close()
+	if result, err := exec.Command("python3", "../../tools/sqlite_migrate.py",
+		"--data-dir", root, "--output", export).CombinedOutput(); err != nil {
+		t.Fatalf("Python exporter did not resume after shutdown: %v: %s", err, result)
+	}
 	if err := VerifySQLiteExport(root); err != nil {
 		t.Fatalf("offline SQLite export check did not resume after shutdown: %v", err)
 	}

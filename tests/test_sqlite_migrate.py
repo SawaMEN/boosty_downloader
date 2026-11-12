@@ -1,4 +1,5 @@
 """Offline SQLite migration tests: owners, ACL, CAS, corruption, and paths."""
+import fcntl
 import hashlib
 import json
 import os
@@ -131,6 +132,21 @@ class SQLiteMigrationTests(unittest.TestCase):
         media.symlink_to("/etc/passwd")
         with self.assertRaisesRegex(MigrationError, "Not a regular file"):
             migrate(self.data, SCHEMA, self.database)
+
+    def test_busy_data_directory_rejects_export_and_check_only(self):
+        self.fixture()
+        descriptor = os.open(self.data, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for output in (None, self.database):
+                with self.assertRaisesRegex(MigrationError, "locked"):
+                    migrate(self.data, SCHEMA, output)
+                self.assertFalse(self.database.exists())
+        finally:
+            os.close(descriptor)
+        result = migrate(self.data, SCHEMA, self.database)
+        self.assertEqual(result["archives"], 2)
+        self.assertTrue(self.database.exists())
 
     def test_no_cas_and_check_only(self):
         _, body, digest = self.fixture()

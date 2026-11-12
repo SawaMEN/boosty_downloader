@@ -4,6 +4,8 @@
 Go continues using JSON. Stop all writers before using this export.
 """
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -48,6 +50,38 @@ def directory(path):
         raise MigrationError(f"Cannot inspect {path}: {exc}") from exc
     if not stat.S_ISDIR(info.st_mode):
         raise MigrationError(f"Not a real directory: {path}")
+
+
+@contextmanager
+def exclusive_data_lock(root):
+    """Share the Go server's advisory directory-inode flock.
+
+    This protects against other cooperating Boosty processes without writing
+    a lockfile in the source tree. It cannot stop unrelated direct file edits.
+    """
+    directory(root)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        fd = os.open(root, flags)
+    except OSError as exc:
+        raise MigrationError(f"Cannot open real data directory: {exc}") from exc
+    try:
+        opened = os.fstat(fd)
+        current = root.lstat()
+        if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+            current.st_dev, current.st_ino
+        ):
+            raise MigrationError("Data directory changed during lock acquisition")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise MigrationError("Data directory is locked by another Boosty process") from exc
+        current = root.lstat()
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise MigrationError("Data directory changed after locking")
+        yield
+    finally:
+        os.close(fd)
 
 
 def safe_file(root, rel):
@@ -230,6 +264,11 @@ def import_jobs(db, root, stats):
 
 
 def migrate(root, schema, output=None):
+    with exclusive_data_lock(root):
+        return _migrate_locked(root, schema, output)
+
+
+def _migrate_locked(root, schema, output=None):
     directory(root)
     regular(schema)
     schema_sql = schema.read_text(encoding="utf-8")
