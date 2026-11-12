@@ -226,3 +226,57 @@ func TestMetadataJournalRejectsDamagedChecksumWithoutWriting(t *testing.T) {
 		t.Fatal("damaged journal caused data changes")
 	}
 }
+
+func TestMetadataRecoveryRejectsStaleJournalWithoutOverwritingNewerOwnerACL(t *testing.T) {
+	for _, phase := range []string{"prepared", "committed"} {
+		t.Run(phase, func(t *testing.T) {
+			root, key, jobID, _ := metadataTxnFixture(t)
+			_, oldImports, _, _ := makePendingMetadataTxn(t, root, phase)
+			// Simulate another writer advancing an unrelated owner after the
+			// journal was prepared. Neither file may be replayed or clobbered.
+			jobsPath := filepath.Join(root, "jobs.json")
+			raw, err := os.ReadFile(jobsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var records map[string]Job
+			if err := json.Unmarshal(raw, &records); err != nil {
+				t.Fatal(err)
+			}
+			job := records[jobID]
+			job.SharedWith = []string{"third"}
+			job.SharedForAll = true
+			records[jobID] = job
+			newer, err := json.MarshalIndent(records, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(jobsPath, newer); err != nil {
+				t.Fatal(err)
+			}
+			if err := recoverMetadataPair(root); err == nil {
+				t.Fatal("stale journal silently overwrote newer owner ACL")
+			}
+			after, err := os.ReadFile(jobsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, newer) {
+				t.Fatal("stale journal changed newer owner ACL")
+			}
+			imports, err := os.ReadFile(filepath.Join(root, "imports.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(imports, oldImports) {
+				t.Fatal("partial replay changed imports before noticing diverged jobs")
+			}
+			if _, err := os.Lstat(filepath.Join(root, metadataJournalName)); err != nil {
+				t.Fatal("unsafe journal was discarded after recovery conflict")
+			}
+			if _, err := newStorage(root, key); err == nil {
+				t.Fatal("server started with unresolved metadata recovery conflict")
+			}
+		})
+	}
+}
