@@ -195,3 +195,25 @@ func TestSQLiteMediaShadowOffByDefault(t *testing.T) {
 		t.Fatal("media indexing unexpectedly enabled by default")
 	}
 }
+
+func TestSQLiteMediaShadowDoesNotSilentlyDropMissingCurrentArchive(t *testing.T) {
+	app, root, _, _, _ := sqliteMediaShadowApp(t)
+	ctx := context.Background()
+	if err := app.store.syncSQLiteShadow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(root, "library", "first", "creator", "post-1", "manifest.json")
+	if err := os.Remove(live); err != nil {
+		t.Fatal(err)
+	}
+	app.store.notifySQLiteMedia()
+	if err := app.store.syncSQLiteShadow(ctx); err == nil {
+		t.Fatal("existing SQL current revision was deleted after a missing manifest")
+	}
+	if count := sqliteMediaRevisionCount(t, app); count != 2 {
+		t.Fatalf("missing manifest changed SQL revision inventory: %d", count)
+	}
+	if !app.store.sqliteShadowStatus().MediaPending {
+		t.Fatal("SQL media state was marked consistent after missing live data")
+	}
+}
