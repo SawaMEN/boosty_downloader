@@ -166,9 +166,12 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 				s.shadow.mediaError = mediaErr.Error()
 			}
 			s.shadow.mu.Unlock()
+			if mediaErr != nil {
+				err = fmt.Errorf("SQLite media shadow: %w", mediaErr)
+			}
 		}
 		// A failed or busy media mirror never undoes authoritative JSON.
-		// Surface its own error separately from metadata replication.
+		// Its error is reported to the admin and background logs for repair.
 	}
 	s.shadow.mu.Lock()
 	s.shadow.lastAttempt = time.Now().UTC()
