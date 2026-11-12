@@ -268,6 +268,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	restored := *j
 	_ = os.RemoveAll(backup)
 	_ = s.pruneArchiveRevisions(restored)
+	s.notifySQLiteMedia()
 	return restored, nil
 }
 
