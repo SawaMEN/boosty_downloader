@@ -40,7 +40,7 @@ jobs:
           fi
       - name: Check shell syntax and installer help
         run: |
-          bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update
+          bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update tests/rollback_smoke.sh
           bash install.sh --help >/dev/null
           if bash install.sh --mode invalid >/dev/null 2>&1; then
             echo "invalid installation mode was accepted"; exit 1
@@ -122,4 +122,8 @@ jobs:
             command -v boosty-dbcheck
             boosty-dbcheck --help >/dev/null 2>&1
           fi
+          # Break the running binary/container, recover with root-owned rollback,
+          # and verify that user bytes, service secrets and TLS did not change.
+          sudo env GITHUB_ACTIONS=true BD_ROLLBACK_SMOKE=yes \
+            bash "$GITHUB_WORKSPACE/tests/rollback_smoke.sh" "$MODE"
           sudo bdy uninstall
