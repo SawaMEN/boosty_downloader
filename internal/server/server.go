@@ -487,24 +487,24 @@ func (a *App) libraryFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	base := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	file := r.PathValue("file")
 	if file == "" {
 		file = "index.html"
 	}
 	if file != "index.html" {
-		if !strings.HasPrefix(file, "media/") || strings.Contains(file, "/") && strings.Count(file, "/") != 1 {
+		if !strings.HasPrefix(file, "media/") || strings.Count(file, "/") != 1 {
 			http.NotFound(w, r)
 			return
 		}
-		var man ArchiveManifest
-		b, e := os.ReadFile(filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), "manifest.json"))
-		if e != nil || json.Unmarshal(b, &man) != nil {
+		_, manifest, err := readArchiveManifestNoFollow(base)
+		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		allowed := false
-		for _, asset := range man.Assets {
-			if "media/"+asset.Filename == file {
+		for _, asset := range manifest.Assets {
+			if safeArchivePart(asset.Filename) && "media/"+asset.Filename == file {
 				allowed = true
 				break
 			}
@@ -514,15 +514,9 @@ func (a *App) libraryFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	path := filepath.Join(a.store.archiveDir(j.OwnerID, j.Author, j.PostID), file)
-	if info, e := os.Lstat(path); e != nil || !info.Mode().IsRegular() {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, no-store")
-	http.ServeFile(w, r, path)
+	// Serve the already opened regular inode; never follow a newly inserted
+	// symlink between metadata validation and file streaming.
+	serveArchiveRegular(w, r, base, file)
 }
 func (a *App) preview(w http.ResponseWriter, r *http.Request) { a.postDetails(w, r) }
 func (a *App) stream(w http.ResponseWriter, r *http.Request) {
