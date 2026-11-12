@@ -101,7 +101,7 @@ func TestArchiveHTTPNoFollowAndOwnerIsolation(t *testing.T) {
 		manifest := ArchiveManifest{
 			Author: job.Author, PostID: job.PostID, Title: job.Title,
 			CapturedAt: job.CreatedAt,
-			Assets: []ArchiveAsset{{Filename: "clip.mp4", Type: "video", Size: 8}},
+			Assets:     []ArchiveAsset{{Filename: "clip.mp4", Type: "video", Size: 8}},
 		}
 		if err := writeJSON(filepath.Join(dir, "manifest.json"), manifest); err != nil {
 			t.Fatal(err)
