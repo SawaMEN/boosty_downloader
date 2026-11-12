@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -27,6 +28,11 @@ type sqliteShadow struct {
 	lastError   string
 	changed     uint64
 	mirrored    uint64
+	mediaEnabled bool
+	mediaChanged uint64
+	mediaMirrored uint64
+	mediaError string
+	mediaLastSuccess time.Time
 }
 
 type sqliteShadowStatus struct {
@@ -34,6 +40,10 @@ type sqliteShadowStatus struct {
 	LastSuccess time.Time
 	LastError   string
 	Pending     bool
+	MediaEnabled bool
+	MediaPending bool
+	MediaError string
+	MediaLastSuccess time.Time
 }
 
 func (s *Storage) notifySQLiteShadowLocked() {
@@ -60,6 +70,10 @@ func (s *Storage) sqliteShadowStatus() sqliteShadowStatus {
 		LastSuccess: s.shadow.lastSuccess,
 		LastError:   s.shadow.lastError,
 		Pending:     s.shadow.changed != s.shadow.mirrored,
+		MediaEnabled: s.shadow.mediaEnabled,
+		MediaPending: s.shadow.mediaEnabled && s.shadow.mediaChanged != s.shadow.mediaMirrored,
+		MediaError: s.shadow.mediaError,
+		MediaLastSuccess: s.shadow.mediaLastSuccess,
 	}
 }
 
@@ -141,6 +155,21 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 	if err == nil {
 		err = s.shadow.meta.reconcile(ctx, jobs, imports)
 	}
+	if err == nil {
+		attempted, mediaErr := s.syncSQLiteMedia(ctx, jobs, imports)
+		if attempted {
+			s.shadow.mu.Lock()
+			if mediaErr == nil {
+				s.shadow.mediaError = ""
+				s.shadow.mediaLastSuccess = time.Now().UTC()
+			} else {
+				s.shadow.mediaError = mediaErr.Error()
+			}
+			s.shadow.mu.Unlock()
+		}
+		// A failed or busy media mirror never undoes authoritative JSON.
+		// Surface its own error separately from metadata replication.
+	}
 	s.shadow.mu.Lock()
 	s.shadow.lastAttempt = time.Now().UTC()
 	if err == nil {
@@ -198,6 +227,18 @@ func (s *Storage) enableSQLiteShadow(ctx context.Context) error {
 		s.shadow = nil
 		meta.close()
 		return fmt.Errorf("SQLite shadow initial reconciliation failed: %w", err)
+	}
+	// Do not block HTTP startup by hashing all media. The first media pass is
+	// triggered after workers are launched and only when explicitly requested.
+	if os.Getenv("BD_SQLITE_MEDIA_SHADOW") == "1" {
+		s.shadow.mu.Lock()
+		s.shadow.mediaEnabled = true
+		s.shadow.mediaChanged = 1
+		s.shadow.mu.Unlock()
+		select {
+		case s.shadow.wake <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -432,14 +473,16 @@ func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
 	}
 	state := a.store.sqliteShadowStatus()
 	status := "healthy"
-	if state.LastError != "" || state.LastSuccess.IsZero() {
+	if state.LastError != "" || state.LastSuccess.IsZero() || state.MediaError != "" {
 		status = "degraded"
-	} else if state.Pending {
+	} else if state.Pending || state.MediaPending {
 		status = "pending"
 	}
 	reply(w, http.StatusOK, map[string]any{
 		"enabled": true, "authoritative": "json", "status": status,
 		"lastAttempt": state.LastAttempt, "lastSuccess": state.LastSuccess,
 		"lastError": state.LastError, "pending": state.Pending,
+		"mediaEnabled": state.MediaEnabled, "mediaPending": state.MediaPending,
+		"mediaError": state.MediaError, "mediaLastSuccess": state.MediaLastSuccess,
 	})
 }
