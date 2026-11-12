@@ -157,6 +157,28 @@ func TestSQLiteShadowRestoreRejectsBusyOrUnsafeDatabase(t *testing.T) {
 			t.Fatal("restore ignored incomplete JSON transaction")
 		}
 	})
+	t.Run("unsafe shared-memory sidecar", func(t *testing.T) {
+		root, backup, _, _, _ := sqliteReindexFixture(t)
+		shm := filepath.Join(root, "metadata.db-shm")
+		if err := os.Remove(shm); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("jobs.json", shm); err != nil {
+			t.Fatal(err)
+		}
+		if err := RestoreSQLiteShadowFromBackup(root, backup); err == nil {
+			t.Fatal("restore accepted symlinked SQLite shared-memory sidecar")
+		}
+	})
+	t.Run("rollback journal", func(t *testing.T) {
+		root, backup, _, _, _ := sqliteReindexFixture(t)
+		if err := os.WriteFile(filepath.Join(root, "metadata.db-journal"), []byte("pending"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RestoreSQLiteShadowFromBackup(root, backup); err == nil {
+			t.Fatal("restore accepted leftover SQLite rollback journal")
+		}
+	})
 	t.Run("symlink", func(t *testing.T) {
 		root, backup, _, _, _ := sqliteReindexFixture(t)
 		db := filepath.Join(root, "metadata.db")
