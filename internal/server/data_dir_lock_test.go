@@ -77,7 +77,7 @@ func TestRunningAppBlocksSecondServerAndOfflineSQLiteOperations(t *testing.T) {
 	}
 	checks := []struct {
 		name string
-		run func() error
+		run  func() error
 	}{
 		{"backup", func() error {
 			return PrepareSQLiteBackup(root, filepath.Join(t.TempDir(), "backup"))
