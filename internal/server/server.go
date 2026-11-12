@@ -61,6 +61,9 @@ func New(cfg Config) (*App, error) {
 	if os.Getenv("BD_SQLITE_SHADOW") == "1" && os.Getenv("BD_SQLITE_VERIFY") == "1" {
 		return nil, errors.New("BD_SQLITE_SHADOW и BD_SQLITE_VERIFY не должны использоваться одновременно")
 	}
+	if os.Getenv("BD_SQLITE_MEDIA_SHADOW") == "1" && os.Getenv("BD_SQLITE_SHADOW") != "1" {
+		return nil, errors.New("BD_SQLITE_MEDIA_SHADOW требует BD_SQLITE_SHADOW=1")
+	}
 	// A crash may have interrupted the JSON two-file transaction. Resolve the
 	// journal before comparing either JSON file with an offline SQLite export.
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
