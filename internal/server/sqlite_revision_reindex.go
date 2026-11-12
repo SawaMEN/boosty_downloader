@@ -158,7 +158,9 @@ func sqliteApplyRevisionInventory(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return err
 	}
+	seenRevisions := make(map[string]bool, len(revisions))
 	for _, snapshot := range revisions {
+		seenRevisions[snapshot.id] = true
 		if old, ok := oldIndex[snapshot.id]; ok && !snapshot.current {
 			equal, err := sqliteReindexUnchanged(ctx, tx, old, snapshot, oldAssets[snapshot.id])
 			if err != nil {
@@ -167,6 +169,14 @@ func sqliteApplyRevisionInventory(ctx context.Context, tx *sql.Tx,
 			if !equal {
 				return fmt.Errorf("immutable historical SQLite revision changed: %s", snapshot.id)
 			}
+		}
+	}
+	for revisionID := range oldIndex {
+		// A completed current snapshot may be replaced, but it cannot simply
+		// disappear while the owning archive still exists. Historical snapshots
+		// can legitimately disappear after retention pruning.
+		if strings.HasPrefix(revisionID, "current:") && !seenRevisions[revisionID] {
+			return fmt.Errorf("indexed current archive disappeared from filesystem: %s", revisionID)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM archive_revisions"); err != nil {
