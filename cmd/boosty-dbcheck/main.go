@@ -16,12 +16,23 @@ func main() {
 	auditMedia := flag.Bool("audit-media", false, "read-only audit of SQL snapshot index against revision directories and SHA-256 media bytes")
 	verifyBackup := flag.String("verify-backup-dir", "", "read-only verify a metadata recovery backup and its JSON/SQL parity")
 	reindexMedia := flag.Bool("reindex-media", false, "offline transactional rebuild of the SQLite media/revision index")
-	recoveryDir := flag.String("recovery-dir", "", "required VERIFIED metadata backup used by --reindex-media")
+	recoveryDir := flag.String("recovery-dir", "", "required VERIFIED metadata backup used by --reindex-media or --cutover-preflight")
+	cutoverPreflight := flag.Bool("cutover-preflight", false, "read-only preflight of JSON ACLs, SQL media index and an identical recovery backup")
 	flag.Parse()
-	if flag.NArg() != 0 || (*verifyBackup != "" && (*root != "" || *backup != "" || *auditMedia || *reindexMedia || *recoveryDir != "")) ||
-		(*verifyBackup == "" && (*root == "" || (*backup != "" && (*auditMedia || *reindexMedia)) ||
-			(*auditMedia && *reindexMedia) || (*reindexMedia != (*recoveryDir != "")) || (*backup != "" && *recoveryDir != ""))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR")
+	// Exactly one operation per invocation, with an explicit verified backup
+	// for any operation that claims a fixed recovery point.
+	modes := 0
+	for _, enabled := range []bool{*backup != "", *auditMedia, *reindexMedia, *cutoverPreflight} {
+		if enabled {
+			modes++
+		}
+	}
+	needsRecovery := *reindexMedia || *cutoverPreflight
+	if flag.NArg() != 0 || (*verifyBackup != "" &&
+		(*root != "" || modes != 0 || *recoveryDir != "")) ||
+		(*verifyBackup == "" && (*root == "" || modes > 1 ||
+			(needsRecovery != (*recoveryDir != "")))) {
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR")
 		os.Exit(2)
 	}
 	if *verifyBackup != "" {
@@ -30,6 +41,15 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Metadata recovery backup OK: SHA-256 manifest, JSON, SQLite schema and owner ACLs match")
+		return
+	}
+	if *cutoverPreflight {
+		if err := server.VerifySQLiteCutoverPreflight(*root, *recoveryDir); err != nil {
+			fmt.Fprintln(os.Stderr, "SQLite cutover preflight failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("SQLite preflight OK: JSON ACLs, SQL revision/media index and private recovery metadata are consistent.")
+		fmt.Println("This is NOT a production backend switch; a complete filesystem/VPS backup and tested rollback remain mandatory.")
 		return
 	}
 	if *reindexMedia {
