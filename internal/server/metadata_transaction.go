@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -122,6 +123,34 @@ func replayMetadataImage(root, name string, img metadataImage, commit bool) erro
 	return writeSyncedMetadata(root, name, data)
 }
 
+// validateMetadataRecoveryTarget refuses to replay an old journal over an
+// unrelated, newer metadata file. Atomic filesystem renames mean a legitimate
+// crash can leave each target only at the journal's Before or After image.
+func validateMetadataRecoveryTarget(root, name string, img metadataImage) error {
+	path := filepath.Join(root, name)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if img.Existed {
+			return fmt.Errorf("metadata recovery target vanished unexpectedly: %s", name)
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("unsafe metadata recovery target: %s", name)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(raw, img.Before) && !bytes.Equal(raw, img.After) {
+		return fmt.Errorf("metadata target diverged from transaction journal: %s", name)
+	}
+	return nil
+}
+
 // recoverMetadataPair runs before any Storage load or worker start. A corrupt
 // or symlink journal is a hard startup error rather than a guess about ACLs.
 func recoverMetadataPair(root string) error {
@@ -152,6 +181,14 @@ func recoverMetadataPair(root string) error {
 		return err
 	}
 	if err := validateMetadataImage(txn.Imports); err != nil {
+		return err
+	}
+	// Validate BOTH targets before changing either; never overwrite unrelated
+	// newer ACL or import state from an accidentally retained old journal.
+	if err := validateMetadataRecoveryTarget(root, "jobs.json", txn.Jobs); err != nil {
+		return err
+	}
+	if err := validateMetadataRecoveryTarget(root, "imports.json", txn.Imports); err != nil {
 		return err
 	}
 	commit := txn.Phase == "committed"
