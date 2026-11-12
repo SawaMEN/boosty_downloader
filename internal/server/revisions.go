@@ -314,14 +314,14 @@ func (a *App) revisionFile(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		_, man, err := archiveFiles(base)
+		_, manifest, err := readArchiveManifestNoFollow(base)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		allowed := false
-		for _, asset := range man.Assets {
-			if file == "media/"+asset.Filename {
+		for _, asset := range manifest.Assets {
+			if safeArchivePart(asset.Filename) && file == "media/"+asset.Filename {
 				allowed = true
 				break
 			}
@@ -331,14 +331,5 @@ func (a *App) revisionFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	path := filepath.Join(base, file)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, no-store")
-	http.ServeFile(w, r, path)
+	serveArchiveRegular(w, r, base, file)
 }
