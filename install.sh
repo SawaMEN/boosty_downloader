@@ -59,8 +59,8 @@ command -v systemctl >/dev/null || die 'Требуется Linux с systemd'
 [[ -d /run/systemd/system ]] || die 'Система не запущена с systemd'
 command -v flock >/dev/null || die 'Требуется flock (util-linux)'
 mkdir -p /run/lock
-exec 9>/run/lock/boosty-downloader-install.lock
-flock -n 9 || die 'Установка уже запущена в другом процессе'
+exec 9>/run/lock/boosty-downloader-maintenance.lock
+flock -n 9 || die 'Другой процесс установки или обновления уже выполняется'
 WORK="$(mktemp -d)"
 # When invoked via curl | sudo bash, BASH_SOURCE[0] is unset under set -u.
 # In that case there is no adjacent checkout; clone public sources below.
