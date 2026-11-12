@@ -600,6 +600,7 @@ func (a *App) processVideoTask(task VideoTask) {
 		}
 		// The original remains accessible even if rebuilding the presentation fails.
 		_ = rebuildVideoArchiveHTML(folder, updated)
+		a.store.notifySQLiteMedia()
 		a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "done", Backend: backend, Message: "Сохранена дополнительная версия; исходник не изменён"})
 	}
 }
