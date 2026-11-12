@@ -22,13 +22,27 @@ func TestSQLiteShadowRestoreCrashHelper(t *testing.T) {
 	err := restoreSQLiteShadowWithHooks(
 		os.Getenv("BD_TEST_SHADOW_RESTORE_ROOT"),
 		os.Getenv("BD_TEST_SHADOW_RESTORE_BACKUP"),
-		&restoreSQLiteShadowHooks{checkpoint: func(at string) error {
-			if at == phase {
+		&restoreSQLiteShadowHooks{
+			copyData: func(dst io.Writer, src io.Reader) (int64, error) {
+				if phase != "copying" {
+					return io.Copy(dst, src)
+				}
+				n, err := io.CopyN(dst, src, 256)
+				if err != nil {
+					return n, err
+				}
 				_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 				os.Exit(111)
-			}
-			return nil
-		}},
+				return n, errors.New("SIGKILL unexpectedly returned")
+			},
+			checkpoint: func(at string) error {
+				if at == phase {
+					_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+					os.Exit(111)
+				}
+				return nil
+			},
+		},
 	)
 	t.Fatalf("restore helper returned without being killed at %s: %v", phase, err)
 }
@@ -126,7 +140,7 @@ func TestSQLiteShadowRestoreENOSPCAfterRenameRollsBack(t *testing.T) {
 }
 
 func TestSQLiteShadowRestoreSIGKILLIsCrashConsistent(t *testing.T) {
-	for _, phase := range []string{"staged", "promoted"} {
+	for _, phase := range []string{"copying", "staged", "promoted"} {
 		t.Run(phase, func(t *testing.T) {
 			root, backup, _, _, _ := sqliteReindexFixture(t)
 			dbPath := filepath.Join(root, "metadata.db")
@@ -155,8 +169,18 @@ func TestSQLiteShadowRestoreSIGKILLIsCrashConsistent(t *testing.T) {
 			}
 			sqliteRestoreCheckUnchangedJSON(t, root, before)
 			got := sqliteRestoreReadTestFile(t, dbPath)
-			if phase == "staged" && !bytes.Equal(got, corruptSQL) {
-				t.Fatal("SIGKILL during staging published an incomplete SQLite file")
+			if phase != "promoted" && !bytes.Equal(got, corruptSQL) {
+				t.Fatal("SIGKILL during SQLite copy/staging published a partial SQLite file")
+			}
+			if phase == "copying" {
+				partial, err := filepath.Glob(filepath.Join(root, ".sqlite-shadow-restoring-*"))
+				if err != nil || len(partial) != 1 {
+					t.Fatalf("expected one interrupted staging file: %v (%v)", partial, err)
+				}
+				info, err := os.Stat(partial[0])
+				if err != nil || info.Size() != 256 {
+					t.Fatalf("SIGKILL did not interrupt real temp write at 256 bytes: %v", err)
+				}
 			}
 			if phase == "promoted" {
 				if !bytes.Equal(got, backupSQL) {
