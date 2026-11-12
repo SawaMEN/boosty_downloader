@@ -100,6 +100,11 @@ func PrepareSQLiteBackup(root, output string) (err error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("metadata source root must be an existing real directory")
 	}
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if output == "" {
 		return errors.New("backup destination must be supplied")
 	}

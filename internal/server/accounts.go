@@ -270,6 +270,11 @@ func setSessionCookie(w http.ResponseWriter, token string, maxAge int) {
 // ResetAdminPassword is a maintenance operation. Stop the running service
 // before executing it so no concurrent process can overwrite accounts.json.
 func ResetAdminPassword(root, adminName, seedPassword, newPassword string) error {
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	a, err := newAccounts(root, adminName, seedPassword)
 	if err != nil {
 		return err

@@ -255,4 +255,11 @@ func sqliteSameJSON(a, b []byte) bool {
 
 // VerifySQLiteExport provides a one-shot preflight for the administrator CLI.
 // It does not mutate SQLite or switch the application's JSON data backend.
-func VerifySQLiteExport(root string) error { return verifySQLiteExport(root) }
+func VerifySQLiteExport(root string) error {
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return verifySQLiteExport(root)
+}

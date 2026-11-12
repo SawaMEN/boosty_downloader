@@ -33,6 +33,7 @@ type Config struct {
 }
 type App struct {
 	cfg                Config
+	dataDirLock        *os.File
 	store              *Storage
 	accounts           *Accounts
 	clients            map[string]*boosty.Client
@@ -64,6 +65,21 @@ func New(cfg Config) (*App, error) {
 	if os.Getenv("BD_SQLITE_MEDIA_SHADOW") == "1" && os.Getenv("BD_SQLITE_SHADOW") != "1" {
 		return nil, errors.New("BD_SQLITE_MEDIA_SHADOW требует BD_SQLITE_SHADOW=1")
 	}
+	// A directory-scoped OS lock prevents two server processes, or an offline
+	// SQLite administration command, from trusting a moving data set.
+	if err := os.MkdirAll(cfg.DataDir, 0700); err != nil {
+		return nil, err
+	}
+	dataDirLock, err := lockDataDirectory(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("каталог данных уже используется или небезопасен: %w", err)
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = dataDirLock.Close()
+		}
+	}()
 	// A crash may have interrupted the JSON two-file transaction. Resolve the
 	// journal before comparing either JSON file with an offline SQLite export.
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
@@ -103,7 +119,7 @@ func New(cfg Config) (*App, error) {
 			return nil, fmt.Errorf("режим SQLite shadow не включён; JSON остаётся основным: %w", err)
 		}
 	}
-	a := &App{cfg: cfg, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	a.wg.Add(6)
 	if s.shadow != nil {
 		a.wg.Add(1)
@@ -121,6 +137,7 @@ func New(cfg Config) (*App, error) {
 	for _, id := range s.queuedImports() {
 		a.importQueue <- id
 	}
+	initialized = true
 	return a, nil
 }
 func (a *App) client(owner string) (*boosty.Client, error) {
@@ -145,6 +162,9 @@ func (a *App) Close() {
 	a.wg.Wait()
 	if a.store.shadow != nil {
 		_ = a.store.shadow.meta.close()
+	}
+	if a.dataDirLock != nil {
+		_ = a.dataDirLock.Close()
 	}
 }
 func (a *App) queueJob(id string) bool {

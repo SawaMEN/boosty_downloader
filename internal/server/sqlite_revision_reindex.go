@@ -54,6 +54,11 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 	if err != nil {
 		return err
 	}
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if err := VerifySQLiteMetadataBackup(backup); err != nil {
 		return fmt.Errorf("recovery snapshot verification failed: %w", err)
 	}
@@ -116,7 +121,7 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 	if _, err := meta.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return fmt.Errorf("reindex committed but SQLite checkpoint failed: %w", err)
 	}
-	return VerifySQLiteSnapshotInventory(root)
+	return verifySQLiteSnapshotInventory(root)
 }
 
 // sqliteApplyRevisionInventory performs exactly one SQL transaction's revision

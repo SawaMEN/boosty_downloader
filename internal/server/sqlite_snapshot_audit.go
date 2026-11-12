@@ -20,6 +20,15 @@ import (
 // from SQL and SQL entries without files. It does not repair SQL or unlink
 // anything. Run with archive writers stopped, not in the shadow worker loop.
 func VerifySQLiteSnapshotInventory(root string) error {
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return verifySQLiteSnapshotInventory(root)
+}
+
+func verifySQLiteSnapshotInventory(root string) error {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return err

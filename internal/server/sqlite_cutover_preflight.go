@@ -23,6 +23,11 @@ func VerifySQLiteCutoverPreflight(root, backup string) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("SQLite preflight needs a real, stopped data directory")
 	}
+	lock, err := lockDataDirectory(absolute)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if err := sqliteReindexNoWAL(absolute); err != nil {
 		return err
 	}
@@ -32,10 +37,10 @@ func VerifySQLiteCutoverPreflight(root, backup string) error {
 	if err := sqliteReindexSameBackup(absolute, backup); err != nil {
 		return fmt.Errorf("metadata backup is not the same recovery point as live data: %w", err)
 	}
-	if err := VerifySQLiteExport(absolute); err != nil {
+	if err := verifySQLiteExport(absolute); err != nil {
 		return fmt.Errorf("SQL is not an exact owner-qualified JSON projection: %w", err)
 	}
-	if err := VerifySQLiteSnapshotInventory(absolute); err != nil {
+	if err := verifySQLiteSnapshotInventory(absolute); err != nil {
 		return fmt.Errorf("SQL revision index, CAS and archived bytes differ from disk: %w", err)
 	}
 	return nil
