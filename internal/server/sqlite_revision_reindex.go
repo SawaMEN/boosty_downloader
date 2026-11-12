@@ -329,14 +329,21 @@ func sqliteReindexWriteRevision(ctx context.Context, tx *sql.Tx, revision sqlite
 }
 
 func sqliteReindexSameBackup(root, backup string) error {
-	for _, name := range []string{"jobs.json", "imports.json", "metadata.db"} {
-		want, _, err := backupFileDigest(backup, name)
-		if err != nil {
-			return err
+	// The metadata rollback snapshot also contains optional account and
+	// author state. A newly created, deleted or changed file invalidates
+	// that recovery point just as surely as a changed archive ACL.
+	for _, name := range []string{"jobs.json", "imports.json", "metadata.db", "accounts.json", "authors.json"} {
+		want, _, backupErr := backupFileDigest(backup, name)
+		have, _, liveErr := backupFileDigest(root, name)
+		optional := name == "accounts.json" || name == "authors.json"
+		if optional && os.IsNotExist(backupErr) && os.IsNotExist(liveErr) {
+			continue
 		}
-		have, _, err := backupFileDigest(root, name)
-		if err != nil {
-			return err
+		if backupErr != nil {
+			return fmt.Errorf("invalid recovery snapshot %s: %w", name, backupErr)
+		}
+		if liveErr != nil {
+			return fmt.Errorf("invalid live metadata %s: %w", name, liveErr)
 		}
 		if want != have {
 			return fmt.Errorf("backup is stale: %s changed after snapshot", name)

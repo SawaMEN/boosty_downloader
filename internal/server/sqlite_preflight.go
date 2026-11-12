@@ -238,6 +238,12 @@ func sqliteSourceJSON(path string) (string, []byte, error) {
 }
 
 func sqliteSameJSON(a, b []byte) bool {
+	// json.Decoder.Decode accepts the first value even if junk or a second
+	// JSON document follows it. Never equate such a payload with a valid
+	// authoritative snapshot during migration or recovery verification.
+	if !json.Valid(a) || !json.Valid(b) {
+		return false
+	}
 	var left, right any
 	da := json.NewDecoder(bytes.NewReader(a))
 	db := json.NewDecoder(bytes.NewReader(b))

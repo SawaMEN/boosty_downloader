@@ -159,3 +159,20 @@ func TestSQLitePreflightRejectsCrossOwnerRevisionPath(t *testing.T) {
 		t.Fatal("cross-owner revision path accepted in SQLite")
 	}
 }
+
+func TestSQLiteSameJSONRejectsTrailingDocumentsAndJunk(t *testing.T) {
+	original := []byte(`{"count":9007199254740993,"value":"ok"}`)
+	if !sqliteSameJSON(original, append([]byte(" \n"), original...)) {
+		t.Fatal("equivalent JSON formatting was rejected")
+	}
+	for _, candidate := range []string{
+		string(original) + " {}",
+		string(original) + " garbage",
+		string(original) + " null",
+		"{" + string(original),
+	} {
+		if sqliteSameJSON(original, []byte(candidate)) {
+			t.Fatalf("invalid trailing or prefixed JSON was accepted: %q", candidate)
+		}
+	}
+}
