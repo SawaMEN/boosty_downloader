@@ -83,6 +83,8 @@ jobs:
           }
           trap cleanup EXIT
           sudo mount -t tmpfs -o "size=32m,mode=0700,uid=$(id -u),gid=$(id -g),nosuid,nodev,noexec" tmpfs "$scratch"
+          # Fixture resolves ../../tools/sqlite_migrate.py from internal/server.
+          cd internal/server
           TMPDIR="$scratch" BD_TEST_SQLITE_TMPFS="$scratch" \
             "$RUNNER_TEMP/boosty-sqlite-enospc.test" -test.v -test.timeout=2m \
             -test.run '^TestSQLiteShadowRestorePhysicalENOSPC$'
