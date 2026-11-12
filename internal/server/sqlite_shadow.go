@@ -19,30 +19,30 @@ import (
 // A failed projection never rolls back a successfully persisted JSON change.
 // It is repaired on the next wake-up or restart; never treat it as a backup.
 type sqliteShadow struct {
-	meta        *sqliteMetadata
-	wake        chan struct{}
-	syncMu      sync.Mutex // serializes snapshots and SQL commits to prevent stale overwrites
-	mu          sync.Mutex
-	lastAttempt time.Time
-	lastSuccess time.Time
-	lastError   string
-	changed     uint64
-	mirrored    uint64
-	mediaEnabled bool
-	mediaChanged uint64
-	mediaMirrored uint64
-	mediaError string
+	meta             *sqliteMetadata
+	wake             chan struct{}
+	syncMu           sync.Mutex // serializes snapshots and SQL commits to prevent stale overwrites
+	mu               sync.Mutex
+	lastAttempt      time.Time
+	lastSuccess      time.Time
+	lastError        string
+	changed          uint64
+	mirrored         uint64
+	mediaEnabled     bool
+	mediaChanged     uint64
+	mediaMirrored    uint64
+	mediaError       string
 	mediaLastSuccess time.Time
 }
 
 type sqliteShadowStatus struct {
-	LastAttempt time.Time
-	LastSuccess time.Time
-	LastError   string
-	Pending     bool
-	MediaEnabled bool
-	MediaPending bool
-	MediaError string
+	LastAttempt      time.Time
+	LastSuccess      time.Time
+	LastError        string
+	Pending          bool
+	MediaEnabled     bool
+	MediaPending     bool
+	MediaError       string
 	MediaLastSuccess time.Time
 }
 
@@ -66,13 +66,13 @@ func (s *Storage) sqliteShadowStatus() sqliteShadowStatus {
 	s.shadow.mu.Lock()
 	defer s.shadow.mu.Unlock()
 	return sqliteShadowStatus{
-		LastAttempt: s.shadow.lastAttempt,
-		LastSuccess: s.shadow.lastSuccess,
-		LastError:   s.shadow.lastError,
-		Pending:     s.shadow.changed != s.shadow.mirrored,
-		MediaEnabled: s.shadow.mediaEnabled,
-		MediaPending: s.shadow.mediaEnabled && s.shadow.mediaChanged != s.shadow.mediaMirrored,
-		MediaError: s.shadow.mediaError,
+		LastAttempt:      s.shadow.lastAttempt,
+		LastSuccess:      s.shadow.lastSuccess,
+		LastError:        s.shadow.lastError,
+		Pending:          s.shadow.changed != s.shadow.mirrored,
+		MediaEnabled:     s.shadow.mediaEnabled,
+		MediaPending:     s.shadow.mediaEnabled && s.shadow.mediaChanged != s.shadow.mediaMirrored,
+		MediaError:       s.shadow.mediaError,
 		MediaLastSuccess: s.shadow.mediaLastSuccess,
 	}
 }
