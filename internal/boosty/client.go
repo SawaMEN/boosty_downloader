@@ -211,12 +211,13 @@ type Comment struct {
 	} `json:"author"`
 	CreatedAt int64 `json:"createdAt"`
 }
+
 // The undocumented comments endpoint may report pagination hints without
 // serving a working offset. A page that explicitly reports more results
 // must never be labelled complete just because it contains fewer than limit.
 type commentPageExtra struct {
-	IsLast *bool   `json:"isLast"`
-	Offset string  `json:"offset"`
+	IsLast *bool  `json:"isLast"`
+	Offset string `json:"offset"`
 }
 
 type CommentResult struct {

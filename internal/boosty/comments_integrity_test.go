@@ -76,9 +76,9 @@ func TestCommentsDeletionStubsDoNotCountAsLive(t *testing.T) {
 
 func TestCommentsDetectServerCursorAndMissingReplies(t *testing.T) {
 	testCases := []struct {
-		name string
-		page any
-		wantPartial bool
+		name         string
+		page         any
+		wantPartial  bool
 		wantReceived int
 	}{
 		{
