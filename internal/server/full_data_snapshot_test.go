@@ -16,15 +16,15 @@ func fullSnapshotTestFixture(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"jobs.json":                     "{}",
-		"imports.json":                  "{}",
-		"accounts.json":                 "{\"accounts\":{}}",
-		"authors.json":                  "{}",
-		"settings/token.key":            "confidential-token",
-		"library/user/author/post/index.html": "<h1>snapshot</h1>",
+		"jobs.json":                                "{}",
+		"imports.json":                             "{}",
+		"accounts.json":                            "{\"accounts\":{}}",
+		"authors.json":                             "{}",
+		"settings/token.key":                       "confidential-token",
+		"library/user/author/post/index.html":      "<h1>snapshot</h1>",
 		"library/user/author/post/media/audio.bin": "original-media-contents",
 		"revisions/user/author/post/version-1/manifest.json": "{\"version\":1}",
-		"blobs/sha256/ab/abc":           "content-addressed-bytes",
+		"blobs/sha256/ab/abc":                                "content-addressed-bytes",
 	}
 	for rel, content := range files {
 		path := filepath.Join(root, rel)

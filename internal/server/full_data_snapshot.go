@@ -21,10 +21,10 @@ const fullSnapshotManifestMaxBytes = 64 << 20
 // The snapshot deliberately excludes host configuration under /etc, service
 // binaries and TLS material stored outside the data directory.
 type fullDataSnapshotManifest struct {
-	Version      int                     `json:"version"`
-	CapturedAt   time.Time               `json:"capturedAt"`
-	RootMode     uint32                  `json:"rootMode"`
-	Entries      []fullDataSnapshotEntry `json:"entries"`
+	Version    int                     `json:"version"`
+	CapturedAt time.Time               `json:"capturedAt"`
+	RootMode   uint32                  `json:"rootMode"`
+	Entries    []fullDataSnapshotEntry `json:"entries"`
 }
 
 type fullDataSnapshotEntry struct {
