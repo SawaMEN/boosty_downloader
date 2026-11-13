@@ -98,6 +98,14 @@ func extractText(raw json.RawMessage) string {
 	}
 	return flattenText(val)
 }
+func isDraftStyleName(style string) bool {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case "bold", "italic", "unstyled", "link", "underline", "strikethrough", "code":
+		return true
+	}
+	return false
+}
+
 func flattenText(x any) string {
 	switch v := x.(type) {
 	case string:
@@ -105,12 +113,27 @@ func flattenText(x any) string {
 	case []any:
 		if len(v) >= 2 {
 			if first, ok := v[0].(string); ok {
-				if mark, ok := v[1].(string); ok {
-					switch mark {
-					case "bold", "italic", "unstyled", "link", "underline", "strikethrough", "code":
-						// Draft.js run tuple: [literal text, style, metadata].
-						// Metadata may contain URLs, not user-visible prose.
+				switch mark := v[1].(type) {
+				case string:
+					if isDraftStyleName(mark) {
 						return first
+					}
+				case []any:
+					// Some Draft.js runs carry multiple style names in an
+					// array: [literal text, ["bold", "italic"], metadata].
+					// The style array is not part of the visible post.
+					if len(v) >= 3 && len(mark) <= 8 {
+						supported := true
+						for _, item := range mark {
+							name, ok := item.(string)
+							if !ok || !isDraftStyleName(name) {
+								supported = false
+								break
+							}
+						}
+						if supported {
+							return first
+						}
 					}
 				}
 			}
