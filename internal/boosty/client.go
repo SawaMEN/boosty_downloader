@@ -359,23 +359,24 @@ func commentPageHasMore(extra commentPageExtra) bool {
 }
 
 func countComments(arr []Comment) (n int, truncated bool) {
-	for _, x := range arr {
+	// Use the same traversal limits as the offline and live renderers.
+	// Counting nodes that cannot be displayed would falsely report a fully
+	// preserved discussion. Deleted stubs still preserve their reply trees.
+	limited := WalkCommentTree(arr, func(x *Comment, _ int) {
 		if !x.IsDeleted {
 			n++ // Boosty does not include deleted stubs in published counts.
 		}
-		nested, incomplete := countComments(x.Replies.Data)
-		n += nested
 		directLive := 0
 		for _, reply := range x.Replies.Data {
 			if !reply.IsDeleted {
 				directLive++
 			}
 		}
-		if incomplete || x.ReplyCount > directLive || commentPageHasMore(x.Replies.Extra) {
+		if x.ReplyCount > directLive || commentPageHasMore(x.Replies.Extra) {
 			truncated = true
 		}
-	}
-	return
+	})
+	return n, truncated || limited
 }
 
 func (c *Client) Comments(ctx context.Context, author, id string, expected int) (CommentResult, error) {

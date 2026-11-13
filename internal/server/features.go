@@ -86,10 +86,7 @@ func (a *App) postComments(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, err.Error())
 		return
 	}
-	comments := make([]commentDTO, 0, len(result.Comments))
-	for _, c := range result.Comments {
-		comments = append(comments, viewComment(c, 0))
-	}
+	comments := viewComments(result.Comments)
 	reply(w, 200, map[string]any{"comments": comments, "received": result.Received, "expected": result.Expected, "partial": result.Partial, "reason": result.Reason})
 }
 
@@ -101,18 +98,26 @@ type commentDTO struct {
 	Replies   []commentDTO `json:"replies"`
 }
 
-func viewComment(c boosty.Comment, depth int) commentDTO {
-	name := c.Author.Name
-	if name == "" {
-		name = "Пользователь"
-	}
-	out := commentDTO{ID: c.ID, Author: name, Text: commentText(c), CreatedAt: c.CreatedAt, Replies: []commentDTO{}}
-	if depth >= 15 {
-		return out
-	}
-	for _, child := range c.Replies.Data {
-		out.Replies = append(out.Replies, viewComment(child, depth+1))
-	}
+func viewComments(comments []boosty.Comment) []commentDTO {
+	out := make([]commentDTO, 0, len(comments))
+	parents := make([]*commentDTO, boosty.MaxCommentTreeDepth)
+	boosty.WalkCommentTree(comments, func(c *boosty.Comment, depth int) {
+		name := c.Author.Name
+		if name == "" {
+			name = "Пользователь"
+		}
+		body := commentText(*c)
+		if c.IsDeleted {
+			body = "Комментарий удалён"
+		}
+		dto := commentDTO{ID: c.ID, Author: name, Text: body, CreatedAt: c.CreatedAt, Replies: []commentDTO{}}
+		dest := &out
+		if depth > 0 {
+			dest = &parents[depth-1].Replies
+		}
+		*dest = append(*dest, dto)
+		parents[depth] = &(*dest)[len(*dest)-1]
+	})
 	return out
 }
 

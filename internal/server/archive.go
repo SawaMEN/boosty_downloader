@@ -63,6 +63,7 @@ const postHTML = `<!doctype html>
 {{else if eq .Type "list"}}<ul class="body-block"><li>{{template "inline" .}}</li></ul>
 {{else if eq .Type "text"}}<p class="body-block">{{template "inline" .}}</p>
 {{else if eq .Type "link"}}<p class="body-block">{{template "inline" .}}</p>
+{{else if eq .Type "unsupported"}}<p class="dim unavailable body-block">Неподдерживаемый блок публикации: исходные данные сохранены, но не отображены в этой копии.</p>
 {{else if .Asset}}<div class="body-block"><p>{{.Asset.Title}}</p>
 {{if eq .Type "ok_video"}}<video controls playsinline preload="metadata" src="media/{{.Asset.Filename}}"></video>
 {{else if eq .Type "audio_file"}}<audio controls preload="none" src="media/{{.Asset.Filename}}"></audio>
@@ -212,6 +213,21 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		appendComments(out, c.Replies.Data, depth+1)
 	}
 }
+// Unsupported Boosty blocks are preserved verbatim in post.json, but cannot
+// be represented as complete content. Mark the archive partial rather than
+// silently reporting success or dropping the old revision of changed data.
+func recordUnsupportedPostBlocks(man *ArchiveManifest, blocks []archiveBlock) {
+	missing := 0
+	for _, block := range blocks {
+		if block.Type == "unsupported" {
+			missing++
+		}
+	}
+	if missing > 0 {
+		man.Failures = append(man.Failures, fmt.Sprintf("Не отображено неподдерживаемых блоков публикации: %d; исходные данные сохранены в post.json", missing))
+	}
+}
+
 func redactNetError(err error) string {
 	var u *url.Error
 	if errors.As(err, &u) {
@@ -443,6 +459,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	// the task's UpdatedAt (which changes on shares, retries and progress).
 	man.CapturedAt = time.Now().UTC()
 	blocks := archiveContentBlocks(p, man.Assets)
+	recordUnsupportedPostBlocks(&man, blocks)
 	man.ContentSHA256, e = archiveContentFingerprint(man, blocks, cv)
 	if e != nil {
 		return e

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 
@@ -10,10 +12,19 @@ import (
 // sourceBlock is the shared ordered representation for the live page and offline HTML.
 // Media indices match boosty.ExtractMedia, not Post.Data (which also contains text).
 type sourceBlock struct {
-	Type  string      `json:"type"`
-	Text  string      `json:"text,omitempty"`
-	Runs  []inlineRun `json:"runs,omitempty"`
-	Index int         `json:"index,omitempty"`
+	Type   string      `json:"type"`
+	Text   string      `json:"text,omitempty"`
+	Runs   []inlineRun `json:"runs,omitempty"`
+	Index  int         `json:"index,omitempty"`
+	Digest string      `json:"-"`
+}
+
+// The archive fingerprint must change when previously unsupported content
+// changes, or its old revision could be discarded. Never put unknown payloads
+// (including signed CDN metadata) into the offline or live HTML.
+func unsupportedSourceBlock(raw json.RawMessage) sourceBlock {
+	digest := sha256.Sum256(raw)
+	return sourceBlock{Type: "unsupported", Digest: hex.EncodeToString(digest[:])}
 }
 
 func postContentBlocks(post *boosty.Post) []sourceBlock {
@@ -35,6 +46,7 @@ func postContentBlocks(post *boosty.Post) []sourceBlock {
 		}
 		if json.Unmarshal(raw, &header) != nil {
 			flushParagraph()
+			out = append(out, unsupportedSourceBlock(raw))
 			continue
 		}
 		switch header.Type {
@@ -61,6 +73,7 @@ func postContentBlocks(post *boosty.Post) []sourceBlock {
 			mediaIndex++
 		default:
 			flushParagraph()
+			out = append(out, unsupportedSourceBlock(raw))
 		}
 	}
 	flushParagraph()
@@ -71,6 +84,7 @@ type archiveBlock struct {
 	Type    string
 	Text    string
 	Runs    []inlineRun
+	Digest  string
 	Asset   *ArchiveAsset
 	Missing bool
 }
@@ -89,7 +103,7 @@ func archiveContentBlocks(post *boosty.Post, captured []ArchiveAsset) []archiveB
 	media := boosty.ExtractMedia(post)
 	out := make([]archiveBlock, 0, len(post.Data))
 	for _, b := range postContentBlocks(post) {
-		block := archiveBlock{Type: b.Type, Text: b.Text, Runs: b.Runs}
+		block := archiveBlock{Type: b.Type, Text: b.Text, Runs: b.Runs, Digest: b.Digest}
 		switch b.Type {
 		case "ok_video", "audio_file", "image", "file":
 			if b.Index >= len(media) {

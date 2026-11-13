@@ -33,4 +33,7 @@ admin = (UI/'admin.js').read_text()
 assert 'renderAdminHardware(data.hardware)' in admin, 'admin hardware summary not connected'
 assert 'adminVideoEnabled' in admin and 'adminSavePolicy' in admin, 'explicit admin confirmation missing'
 assert {'adminHardwareReport', 'adminVideoProbe', 'adminVideoBackend'}.issubset(html.ids)
+app = (UI/'app.js').read_text()
+assert "block.type==='unsupported'" in app, 'unknown Boosty blocks are silently discarded from live post UI'
+assert 'Неподдерживаемый блок Boosty' in app, 'unknown post block explanation missing'
 print('UI wiring: pass')
