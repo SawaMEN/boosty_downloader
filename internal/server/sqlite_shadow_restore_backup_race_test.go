@@ -2,6 +2,9 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +73,89 @@ func TestSQLiteShadowRestoreRejectsBackupChangedDuringOperation(t *testing.T) {
 			}
 			if err := VerifySQLiteCutoverPreflight(root, backup); err != nil {
 				t.Fatalf("retry did not recover SQL, JSON ACLs and real media: %v", err)
+			}
+		})
+	}
+}
+
+// A writer can race the narrow gap between successful backup verification
+// and the first SQL hash. Never accept its replacement as the new reference.
+func TestSQLiteShadowRestoreRejectsMutationAfterVerification(t *testing.T) {
+	for _, mutation := range []string{"sqlite", "manifest", "matching-sqlite-and-manifest"} {
+		t.Run(mutation, func(t *testing.T) {
+			root, backup, _, _, _ := sqliteReindexFixture(t)
+			dbPath := filepath.Join(root, "metadata.db")
+			backupSQLPath := filepath.Join(backup, "metadata.db")
+			manifestPath := filepath.Join(backup, "backup-manifest.json")
+			damagedLive := []byte("original damaged SQL must stay in place")
+			if err := os.WriteFile(dbPath, damagedLive, 0600); err != nil {
+				t.Fatal(err)
+			}
+			backupSQL := sqliteRestoreReadTestFile(t, backupSQLPath)
+			originalManifest := sqliteRestoreReadTestFile(t, manifestPath)
+			before := map[string][]byte{
+				"jobs.json":    sqliteRestoreReadTestFile(t, filepath.Join(root, "jobs.json")),
+				"imports.json": sqliteRestoreReadTestFile(t, filepath.Join(root, "imports.json")),
+			}
+			seen := false
+			err := restoreSQLiteShadowWithHooks(root, backup, &restoreSQLiteShadowHooks{
+				checkpoint: func(phase string) error {
+					if phase != "verified" {
+						return nil
+					}
+					seen = true
+					if mutation != "manifest" {
+						if err := os.WriteFile(backupSQLPath, append(backupSQL, 0), 0600); err != nil {
+							return err
+						}
+					}
+					if mutation == "manifest" {
+						return os.WriteFile(manifestPath, append(originalManifest, '\n'), 0600)
+					}
+					if mutation != "matching-sqlite-and-manifest" {
+						return nil
+					}
+					var manifest metadataBackupManifest
+					if err := json.Unmarshal(originalManifest, &manifest); err != nil {
+						return err
+					}
+					digest := sha256.Sum256(append(backupSQL, 0))
+					for i := range manifest.Files {
+						if manifest.Files[i].Name == "metadata.db" {
+							manifest.Files[i].Size++
+							manifest.Files[i].SHA256 = hex.EncodeToString(digest[:])
+						}
+					}
+					newManifest, err := json.Marshal(manifest)
+					if err != nil {
+						return err
+					}
+					return os.WriteFile(manifestPath, newManifest, 0600)
+				},
+			})
+			if !seen {
+				t.Fatal("mutation checkpoint was not reached")
+			}
+			if err == nil || !strings.Contains(err.Error(), "verified backup") {
+				t.Fatalf("accepted a mutated snapshot after successful verification: %v", err)
+			}
+			if got := sqliteRestoreReadTestFile(t, dbPath); !bytes.Equal(got, damagedLive) {
+				t.Fatal("rejected snapshot mutation replaced the live SQLite file")
+			}
+			sqliteRestoreCheckUnchangedJSON(t, root, before)
+			sqliteRestoreCheckNoCurrentTemps(t, root)
+
+			if err := os.WriteFile(backupSQLPath, backupSQL, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(manifestPath, originalManifest, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := RestoreSQLiteShadowFromBackup(root, backup); err != nil {
+				t.Fatalf("recovery was not retryable after restoring original backup: %v", err)
+			}
+			if err := VerifySQLiteCutoverPreflight(root, backup); err != nil {
+				t.Fatalf("consistent recovery point failed after retry: %v", err)
 			}
 		})
 	}

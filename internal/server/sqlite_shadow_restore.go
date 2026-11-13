@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,14 @@ import (
 type restoreSQLiteShadowHooks struct {
 	copyData   func(io.Writer, io.Reader) (int64, error)
 	checkpoint func(string) error
+}
+
+// Pin recovery identity from the manifest BEFORE verifying SQLite.
+// A replacement after verification must never become the new baseline.
+type sqliteRestoreSource struct {
+	hash         string
+	size         int64
+	manifestHash [32]byte
 }
 
 func RestoreSQLiteShadowFromBackup(root, backup string) error {
@@ -77,14 +86,20 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	source, err := sqliteRestorePinManifest(backup)
+	if err != nil {
+		return fmt.Errorf("cannot pin recovery manifest: %w", err)
+	}
 	if err := VerifySQLiteMetadataBackup(backup); err != nil {
 		return fmt.Errorf("unusable metadata backup: %w", err)
 	}
-	// Pin the recovery file identity before the potentially long media audit.
-	// A second hash of a swapped source must never become the new baseline.
-	expectedSQLHash, expectedSQLSize, err := backupFileDigest(backup, "metadata.db")
-	if err != nil {
-		return fmt.Errorf("cannot pin verified SQLite backup: %w", err)
+	if hooks != nil && hooks.checkpoint != nil {
+		if err := hooks.checkpoint("verified"); err != nil {
+			return err
+		}
+	}
+	if err := sqliteRestoreBackupUnchanged(backup, source); err != nil {
+		return err
 	}
 	if err := sqliteBackupJSONMatches(root, backup); err != nil {
 		return fmt.Errorf("cannot restore SQL over changed authoritative JSON: %w", err)
@@ -97,7 +112,7 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 			return err
 		}
 	}
-	if err := sqliteRestoreBackupUnchanged(backup, expectedSQLHash, expectedSQLSize); err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, source); err != nil {
 		return err
 	}
 	// Third-party writers do not honor flock: recheck all source JSON after
@@ -130,7 +145,7 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 	if hooks != nil && hooks.copyData != nil {
 		copyData = hooks.copyData
 	}
-	copyErr := sqliteRestoreCopyVerified(backup, staged, copyData, expectedSQLHash, expectedSQLSize)
+	copyErr := sqliteRestoreCopyVerified(backup, staged, copyData, source)
 	if err := staged.Close(); copyErr == nil {
 		copyErr = err
 	}
@@ -145,7 +160,7 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 			return err
 		}
 	}
-	if err := sqliteRestoreBackupUnchanged(backup, expectedSQLHash, expectedSQLSize); err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, source); err != nil {
 		return err
 	}
 
@@ -271,12 +286,32 @@ func sqliteRestoreAuditMedia(root, backup string) error {
 	return sqliteAuditCAS(root, db)
 }
 
-// The private backup was checked before copying; compare the streamed bytes
-// with the current backup digest again in case an external tool changed it.
-// The expected digest is pinned from a previously verified recovery point.
-func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.Writer, io.Reader) (int64, error), expectedHash string, expectedSize int64) error {
+// Read manifest bytes before verification so later hashing cannot silently
+// reset the recovery point. VerifySQLiteMetadataBackup validates the entire
+// manifest, every checksum, and JSON/SQLite metadata parity.
+func sqliteRestorePinManifest(backup string) (sqliteRestoreSource, error) {
+	raw, err := backupReadPrivateFile(backup, "backup-manifest.json")
+	if err != nil {
+		return sqliteRestoreSource{}, err
+	}
+	var manifest metadataBackupManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return sqliteRestoreSource{}, err
+	}
+	for _, file := range manifest.Files {
+		if file.Name == "metadata.db" {
+			return sqliteRestoreSource{
+				hash: file.SHA256, size: file.Size, manifestHash: sha256.Sum256(raw),
+			}, nil
+		}
+	}
+	return sqliteRestoreSource{}, errors.New("recovery manifest is missing SQLite database")
+}
+
+// Compare streamed bytes with the digest captured BEFORE recovery verification.
+func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.Writer, io.Reader) (int64, error), pinned sqliteRestoreSource) error {
 	original := filepath.Join(backup, "metadata.db")
-	if err := sqliteRestoreBackupUnchanged(backup, expectedHash, expectedSize); err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, pinned); err != nil {
 		return err
 	}
 	source, err := os.Open(original)
@@ -291,23 +326,30 @@ func sqliteRestoreCopyVerified(backup string, target *os.File, copyData func(io.
 	if copyErr != nil {
 		return copyErr
 	}
-	if size != expectedSize || hex.EncodeToString(hash.Sum(nil)) != expectedHash {
+	if size != pinned.size || hex.EncodeToString(hash.Sum(nil)) != pinned.hash {
 		return errors.New("verified backup SQLite changed while being copied")
 	}
-	if err := sqliteRestoreBackupUnchanged(backup, expectedHash, expectedSize); err != nil {
+	if err := sqliteRestoreBackupUnchanged(backup, pinned); err != nil {
 		return err
 	}
 	return target.Sync()
 }
 
-// Verify against the digest pinned before file/media auditing. Rehashing the
-// source without comparing to that original digest could bless a changed file.
-func sqliteRestoreBackupUnchanged(backup, expectedHash string, expectedSize int64) error {
+// A verified recovery point includes the manifest as well as metadata.db.
+// Reject a replaced manifest even if it supplies matching new SQL checksums.
+func sqliteRestoreBackupUnchanged(backup string, pinned sqliteRestoreSource) error {
+	raw, err := backupReadPrivateFile(backup, "backup-manifest.json")
+	if err != nil {
+		return fmt.Errorf("verified backup manifest became inaccessible: %w", err)
+	}
+	if sha256.Sum256(raw) != pinned.manifestHash {
+		return errors.New("verified backup manifest changed during restore")
+	}
 	hash, size, err := backupFileDigest(backup, "metadata.db")
 	if err != nil {
 		return fmt.Errorf("verified backup SQLite became inaccessible: %w", err)
 	}
-	if hash != expectedHash || size != expectedSize {
+	if hash != pinned.hash || size != pinned.size {
 		return errors.New("verified backup SQLite changed during restore")
 	}
 	return nil
