@@ -18,27 +18,27 @@ func TestDASHFiniteNegativeTimelineRepeat(t *testing.T) {
 	const base = "https://cdn.example/video/main.mpd?token=private"
 	cases := []struct {
 		name, duration, start, timescale, timeline string
-		want                                     []string
+		want                                       []string
 	}{
 		{
 			name: "repeat to period end", duration: "PT5S", start: "1", timescale: "1000",
 			timeline: `<S t="0" d="2000" r="-1"/>`,
-			want: []string{"clip-1-0.m4s", "clip-2-2000.m4s", "clip-3-4000.m4s"},
+			want:     []string{"clip-1-0.m4s", "clip-2-2000.m4s", "clip-3-4000.m4s"},
 		},
 		{
 			name: "repeat to next explicit S time", duration: "PT5S", start: "5", timescale: "1000",
 			timeline: `<S t="0" d="1000" r="-1"/><S t="3000" d="2000"/>`,
-			want: []string{"clip-5-0.m4s", "clip-6-1000.m4s", "clip-7-2000.m4s", "clip-8-3000.m4s"},
+			want:     []string{"clip-5-0.m4s", "clip-6-1000.m4s", "clip-7-2000.m4s", "clip-8-3000.m4s"},
 		},
 		{
 			name: "fractional duration last segment", duration: "PT2.5S", start: "1", timescale: "1000",
 			timeline: `<S t="0" d="1000" r="-1"/>`,
-			want: []string{"clip-1-0.m4s", "clip-2-1000.m4s", "clip-3-2000.m4s"},
+			want:     []string{"clip-1-0.m4s", "clip-2-1000.m4s", "clip-3-2000.m4s"},
 		},
 		{
 			name: "nonzero first presentation tick", duration: "PT12S", start: "1", timescale: "1000",
 			timeline: `<S t="9000" d="1000" r="-1"/>`,
-			want: []string{"clip-1-9000.m4s", "clip-2-10000.m4s", "clip-3-11000.m4s"},
+			want:     []string{"clip-1-9000.m4s", "clip-2-10000.m4s", "clip-3-11000.m4s"},
 		},
 	}
 	for _, tc := range cases {
