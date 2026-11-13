@@ -203,17 +203,49 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 	segmentIDs := make([]segment, 0)
 	if templ.Timeline != nil && len(templ.Timeline.S) > 0 {
 		tick := uint64(0)
-		for _, item := range templ.Timeline.S {
+		for index, item := range templ.Timeline.S {
 			if item.T != nil {
+				if len(segmentIDs) != 0 && *item.T < tick {
+					return tr, errors.New("DASH: пересекающиеся или обратные интервалы SegmentTimeline")
+				}
 				tick = *item.T
 			}
-			if item.D == 0 || item.R < 0 || item.R > maxHLSSegments {
-				return tr, errors.New("DASH: некорректный SegmentTimeline (r=-1 не поддерживается)")
+			if item.D == 0 || item.R < -1 || item.R > maxHLSSegments {
+				return tr, errors.New("DASH: некорректный SegmentTimeline")
 			}
-			for k := int64(0); k <= item.R; k++ {
-				if len(segmentIDs) >= maxHLSSegments {
-					return tr, errors.New("DASH: слишком много сегментов")
+			repetitions := uint64(item.R) + 1
+			if item.R == -1 {
+				// MPEG-DASH r=-1 repeats until the next explicit S@t,
+				// or the end of a finite Period for the final S. Never
+				// extrapolate an unbounded live timeline.
+				var end uint64
+				if index+1 < len(templ.Timeline.S) {
+					next := templ.Timeline.S[index+1].T
+					if next == nil {
+						return tr, errors.New("DASH: r=-1 требует следующий S@t")
+					}
+					end = *next
+				} else {
+					endFloat := math.Ceil(duration * float64(timescale))
+					if math.IsNaN(endFloat) || math.IsInf(endFloat, 0) || endFloat >= math.Exp2(64) {
+						return tr, errors.New("DASH: переполнение конца периода")
+					}
+					end = uint64(endFloat)
 				}
+				if end <= tick {
+					return tr, errors.New("DASH: r=-1 начинается за концом интервала")
+				}
+				// ceil((end-tick)/d) using integers, without overflowing
+				// end-tick+d-1 or allocating an unbounded number of URLs.
+				repetitions = (end-tick-1)/item.D + 1
+			}
+			if repetitions > uint64(maxHLSSegments-len(segmentIDs)) {
+				return tr, errors.New("DASH: слишком много сегментов")
+			}
+			if start > ^uint64(0)-(uint64(len(segmentIDs))+repetitions-1) {
+				return tr, errors.New("DASH: переполнение номера сегмента")
+			}
+			for k := uint64(0); k < repetitions; k++ {
 				segmentIDs = append(segmentIDs, segment{number: start + uint64(len(segmentIDs)), tick: tick})
 				if tick > ^uint64(0)-item.D {
 					return tr, errors.New("DASH: переполнение времени сегмента")
@@ -228,6 +260,9 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 		countF := math.Ceil(duration*float64(timescale)/float64(templ.Duration) - 1e-8)
 		if countF < 1 || countF > maxHLSSegments {
 			return tr, errors.New("DASH: слишком много сегментов")
+		}
+		if start > ^uint64(0)-uint64(int(countF)-1) {
+			return tr, errors.New("DASH: переполнение номера сегмента")
 		}
 		for k := 0; k < int(countF); k++ {
 			if uint64(k) > ^uint64(0)/templ.Duration {

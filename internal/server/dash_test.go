@@ -29,7 +29,7 @@ func TestDASHRejectUnsupported(t *testing.T) {
 		`<MPD type="static" mediaPresentationDuration="PT2S"><Period><ContentProtection/></Period></MPD>`,
 		`<MPD type="static" mediaPresentationDuration="PT2S"><Period/><Period/></MPD>`,
 		`<MPD type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation bandwidth="200" id="v"><SegmentTemplate media="x-$Number$.m4s" initialization="i.mp4" duration="1"/><ContentProtection/></Representation></AdaptationSet></Period></MPD>`,
-		`<MPD type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation bandwidth="200" id="v"><SegmentTemplate media="x-$Number$.m4s" initialization="i.mp4"><SegmentTimeline><S d="1" r="-1"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>`,
+		`<MPD type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation bandwidth="200" id="v"><SegmentTemplate media="x-$Number$.m4s" initialization="i.mp4"><SegmentTimeline><S d="1" r="-2"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>`,
 	}
 	for _, raw := range samples {
 		_, _, err := resolveDASH(context.Background(), dashFixture(map[string][]byte{base: []byte(raw)}), base)
