@@ -15,6 +15,8 @@ func main() {
 	backup := flag.String("backup-dir", "", "create a new private metadata rollback backup directory (must not exist)")
 	fullSnapshot := flag.String("full-snapshot-dir", "", "create a new private, SHA-256 verified copy of the whole stopped data directory, including media")
 	verifyFullSnapshot := flag.String("verify-full-snapshot-dir", "", "independently verify a full data directory snapshot with no live server access")
+	restoreFullSnapshot := flag.String("restore-full-snapshot-dir", "", "verified full snapshot to recover into --restore-to (new, nonexistent directory only)")
+	restoreTo := flag.String("restore-to", "", "new detached destination for --restore-full-snapshot-dir; no existing installation may be replaced")
 	auditMedia := flag.Bool("audit-media", false, "read-only audit of SQL snapshot index against revision directories and SHA-256 media bytes")
 	verifyBackup := flag.String("verify-backup-dir", "", "read-only verify a metadata recovery backup and its JSON/SQL parity")
 	reindexMedia := flag.Bool("reindex-media", false, "offline transactional rebuild of the SQLite media/revision index")
@@ -38,11 +40,26 @@ func main() {
 	if *verifyFullSnapshot != "" {
 		verifiers++
 	}
+	if *restoreFullSnapshot != "" {
+		verifiers++
+	}
 	if flag.NArg() != 0 || verifiers > 1 ||
+		(*restoreTo != "" && *restoreFullSnapshot == "") ||
+		(*restoreFullSnapshot != "" && *restoreTo == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
+	}
+	if *restoreFullSnapshot != "" {
+		if err := server.RestoreFullDataSnapshot(*restoreFullSnapshot, *restoreTo); err != nil {
+			fmt.Fprintln(os.Stderr, "Detached full data restore rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Full data snapshot restored to a NEW DETACHED directory:", *restoreTo)
+		fmt.Println("Source installation was not modified. Files remain private (0600), directories (0700).")
+		fmt.Println("Host /etc config, external TLS keys, ownership and binaries are NOT restored; do NOT point a live service here without a separate review.")
+		return
 	}
 	if *verifyFullSnapshot != "" {
 		if err := server.VerifyFullDataSnapshot(*verifyFullSnapshot); err != nil {
