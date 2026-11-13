@@ -33,6 +33,7 @@ type ArchiveManifest struct {
 	ContentSHA256   string                  `json:"contentSha256,omitempty"`
 	Assets          []ArchiveAsset          `json:"assets"`
 	CommentsStatus  string                  `json:"commentsStatus"`
+	CommentsNote    string                  `json:"commentsNote,omitempty"`
 	CommentCount    int                     `json:"commentCount"`
 	CommentExpected int                     `json:"commentExpected"`
 	Failures        []string                `json:"failures,omitempty"`
@@ -53,7 +54,7 @@ type commentView struct {
 
 const postHTML = `<!doctype html>
 <html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
-<title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}ul{padding-left:20px}.body-block{margin:16px 0}.unavailable{border:1px dashed #5e6570;padding:12px;border-radius:8px}</style></head>
+<title>{{.Title}}</title><style>:root{color-scheme:dark}body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#101319;color:#e5e9f0}main{max-width:820px;margin:auto;padding:24px}h1{line-height:1.2}header,.panel,article{background:#1c222c;border:1px solid #303949;padding:20px;border-radius:14px;margin:14px 0}a{color:#92bfff;overflow-wrap:anywhere}video,audio,img{max-width:100%;border-radius:10px}img{height:auto}article{margin-left:calc(min(var(--level),6)*16px)}small,.dim{color:#aeb9ca}ul{padding-left:20px}.body-block{margin:16px 0;white-space:pre-wrap;overflow-wrap:anywhere}.comment-body{white-space:pre-wrap;overflow-wrap:anywhere}.unavailable{border:1px dashed #5e6570;padding:12px;border-radius:8px}</style></head>
 <body><main><p><a href="/">← Медиатека</a></p>
 <header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Обновление архива: {{.CapturedAt.Format "02.01.2006 15:04"}} UTC</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header>
 <section class="panel" aria-label="Содержание публикации">{{range .Blocks}}
@@ -68,7 +69,7 @@ const postHTML = `<!doctype html>
 {{else if eq .Type "file"}}<a href="media/{{.Asset.Filename}}" download>Скачать: {{.Asset.Title}}</a>{{end}}
 </div>{{else if .Missing}}<p class="dim unavailable body-block">Медиа не сохранено в этой копии{{if .Text}}: {{.Text}}{{end}}</p>{{end}}
 {{else}}<p class="dim">В исходном посте нет распознанных блоков.</p>{{end}}</section>
-<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong>{{if .Date}}<small class="dim"> · {{.Date}} UTC</small>{{end}}<p>{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>
+<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{if .CommentsNote}}<p class="dim">{{.CommentsNote}}</p>{{end}}{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong>{{if .Date}}<small class="dim"> · {{.Date}} UTC</small>{{end}}<p class="comment-body">{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>
 {{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
 </main></body></html>`
 
@@ -100,14 +101,21 @@ func flattenText(x any) string {
 	case string:
 		return v
 	case []any:
-		var items []string
-		for i, x := range v {
-			if i == 1 {
-				if name, ok := x.(string); ok && (name == "bold" || name == "italic" || name == "unstyled" || name == "link") {
-					continue
+		if len(v) >= 2 {
+			if first, ok := v[0].(string); ok {
+				if mark, ok := v[1].(string); ok {
+					switch mark {
+					case "bold", "italic", "unstyled", "link", "underline", "strikethrough", "code":
+						// Draft.js run tuple: [literal text, style, metadata].
+						// Metadata may contain URLs, not user-visible prose.
+						return first
+					}
 				}
 			}
-			if text := flattenText(x); text != "" {
+		}
+		var items []string
+		for _, item := range v {
+			if text := flattenText(item); text != "" {
 				items = append(items, text)
 			}
 		}
@@ -116,17 +124,47 @@ func flattenText(x any) string {
 		if t, ok := v["text"].(string); ok {
 			return t
 		}
-		if v, ok := v["blocks"]; ok {
-			return flattenText(v)
+		for _, key := range []string{"content", "blocks", "items", "children"} {
+			if nested, ok := v[key]; ok {
+				return flattenText(nested)
+			}
 		}
 	}
 	return ""
 }
 func commentText(c boosty.Comment) string {
 	var texts []string
+	var paragraph strings.Builder
+	flush := func() {
+		if paragraph.Len() != 0 {
+			texts = append(texts, paragraph.String())
+			paragraph.Reset()
+		}
+	}
 	for _, raw := range c.Data {
-		if t := extractText(raw); t != "" {
-			texts = append(texts, t)
+		var header struct {
+			Type        string `json:"type"`
+			Modificator string `json:"modificator"`
+		}
+		if json.Unmarshal(raw, &header) != nil {
+			flush()
+			continue
+		}
+		if header.Type != "text" && header.Type != "link" {
+			flush()
+		}
+		if txt := extractText(raw); txt != "" {
+			paragraph.WriteString(txt)
+		}
+		if header.Modificator == "BLOCK_END" || header.Type == "header" || header.Type == "list" {
+			flush()
+		}
+	}
+	flush()
+	if len(texts) == 0 && len(c.Content) > 0 {
+		var fallback any
+		if json.Unmarshal(c.Content, &fallback) == nil {
+			return flattenText(fallback)
 		}
 	}
 	return strings.Join(texts, "\n")
@@ -141,7 +179,11 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		if c.CreatedAt > 0 {
 			date = time.Unix(c.CreatedAt, 0).UTC().Format("02.01.2006 15:04")
 		}
-		*out = append(*out, commentView{Author: a, Text: commentText(c), Level: depth, Date: date})
+		content := commentText(c)
+		if c.IsDeleted {
+			content = "Комментарий удалён"
+		}
+		*out = append(*out, commentView{Author: a, Text: content, Level: depth, Date: date})
 		appendComments(out, c.Replies.Data, depth+1)
 	}
 }
@@ -276,6 +318,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			j.CommentsPartial = comments.Partial
 			if comments.Partial {
 				man.CommentsStatus = "частично"
+				man.CommentsNote = comments.Reason
 			} else {
 				man.CommentsStatus = "сохранены полностью (по данным API)"
 			}

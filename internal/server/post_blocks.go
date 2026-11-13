@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/SawaMEN/boosty_downloader/internal/boosty"
 )
@@ -17,23 +18,47 @@ type sourceBlock struct {
 func postContentBlocks(post *boosty.Post) []sourceBlock {
 	out := make([]sourceBlock, 0, len(post.Data))
 	mediaIndex := 0
+	var paragraph strings.Builder
+	flushParagraph := func() {
+		if paragraph.Len() != 0 {
+			out = append(out, sourceBlock{Type: "text", Text: paragraph.String()})
+			paragraph.Reset()
+		}
+	}
 	for _, raw := range post.Data {
 		var header struct {
-			Type string `json:"type"`
+			Type        string `json:"type"`
+			Modificator string `json:"modificator"`
 		}
 		if json.Unmarshal(raw, &header) != nil {
+			flushParagraph()
 			continue
 		}
 		switch header.Type {
-		case "text", "header", "list", "link":
+		case "text", "link":
+			// Boosty stores a visual paragraph as adjacent Draft.js runs.
+			// Never add synthetic spaces: run-boundary whitespace belongs to
+			// the author's text; BLOCK_END terminates the visual paragraph.
+			if txt := extractText(raw); txt != "" {
+				paragraph.WriteString(txt)
+			}
+			if header.Modificator == "BLOCK_END" {
+				flushParagraph()
+			}
+		case "header", "list":
+			flushParagraph()
 			if txt := extractText(raw); txt != "" {
 				out = append(out, sourceBlock{Type: header.Type, Text: txt})
 			}
 		case "ok_video", "audio_file", "image", "file":
+			flushParagraph()
 			out = append(out, sourceBlock{Type: header.Type, Index: mediaIndex})
 			mediaIndex++
+		default:
+			flushParagraph()
 		}
 	}
+	flushParagraph()
 	return out
 }
 

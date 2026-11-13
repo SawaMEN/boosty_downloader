@@ -201,14 +201,24 @@ type Comment struct {
 	Content    json.RawMessage   `json:"content"`
 	Data       []json.RawMessage `json:"data"`
 	ReplyCount int               `json:"replyCount"`
+	IsDeleted  bool              `json:"isDeleted"`
 	Replies    struct {
-		Data []Comment `json:"data"`
+		Data  []Comment        `json:"data"`
+		Extra commentPageExtra `json:"extra"`
 	} `json:"replies"`
 	Author struct {
 		Name string `json:"name"`
 	} `json:"author"`
 	CreatedAt int64 `json:"createdAt"`
 }
+// The undocumented comments endpoint may report pagination hints without
+// serving a working offset. A page that explicitly reports more results
+// must never be labelled complete just because it contains fewer than limit.
+type commentPageExtra struct {
+	IsLast *bool   `json:"isLast"`
+	Offset string  `json:"offset"`
+}
+
 type CommentResult struct {
 	Raw      json.RawMessage `json:"-"`
 	Comments []Comment       `json:"comments"`
@@ -342,22 +352,51 @@ func (c *Client) Post(ctx context.Context, author, id string) (*Post, error) {
 	}
 	return &p, nil
 }
+func commentPageHasMore(extra commentPageExtra) bool {
+	return extra.IsLast != nil && !*extra.IsLast ||
+		extra.Offset != "" && (extra.IsLast == nil || !*extra.IsLast)
+}
+
 func countComments(arr []Comment) (n int, truncated bool) {
 	for _, x := range arr {
-		n++
-		n1, t := countComments(x.Replies.Data)
-		n += n1
-		if t || x.ReplyCount > len(x.Replies.Data) {
+		if !x.IsDeleted {
+			n++ // Boosty does not include deleted stubs in published counts.
+		}
+		nested, incomplete := countComments(x.Replies.Data)
+		n += nested
+		directLive := 0
+		for _, reply := range x.Replies.Data {
+			if !reply.IsDeleted {
+				directLive++
+			}
+		}
+		if incomplete || x.ReplyCount > directLive || commentPageHasMore(x.Replies.Extra) {
 			truncated = true
 		}
 	}
 	return
 }
+
 func (c *Client) Comments(ctx context.Context, author, id string, expected int) (CommentResult, error) {
-	var v struct {
-		Data []Comment `json:"data"`
+	if !safeSegment(author) || !safeSegment(id) {
+		return CommentResult{}, errors.New("недопустимый путь")
 	}
-	route := "/v1/blog/" + url.PathEscape(author) + "/post/" + url.PathEscape(id) + "/comment/?limit=101&reply_limit=100"
+	// The Boosty comments API does not reliably honor offset pagination.
+	// Request a larger bounded single page for busy posts instead of
+	// silently claiming the first 101 comments to be the whole discussion.
+	const maxCommentPage = 300
+	limit := 101
+	if expected >= maxCommentPage {
+		limit = maxCommentPage
+	} else if expected >= limit {
+		limit = expected + 1
+	}
+	var v struct {
+		Data  []Comment        `json:"data"`
+		Extra commentPageExtra `json:"extra"`
+	}
+	route := "/v1/blog/" + url.PathEscape(author) + "/post/" + url.PathEscape(id) +
+		"/comment/?limit=" + strconv.Itoa(limit) + "&reply_limit=100"
 	var raw json.RawMessage
 	if e := c.doJSON(ctx, route, &raw); e != nil {
 		return CommentResult{}, e
@@ -365,11 +404,24 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 	if e := json.Unmarshal(raw, &v); e != nil {
 		return CommentResult{}, e
 	}
+	if v.Data == nil {
+		return CommentResult{}, errors.New("Boosty не вернул массив комментариев")
+	}
 	n, trimmed := countComments(v.Data)
-	part := trimmed || len(v.Data) >= 101 || (expected > 0 && n < expected)
+	cutoff := len(v.Data) >= limit
+	missing := expected > 0 && n < expected
+	hints := commentPageHasMore(v.Extra)
+	part := trimmed || cutoff || missing || hints
 	reason := ""
 	if part {
-		reason = "Boosty ограничил доступное количество комментариев или ответов"
+		switch {
+		case trimmed:
+			reason = "Boosty вернул не все ответы на комментарии"
+		case missing:
+			reason = "Boosty вернул меньше комментариев, чем указано в посте"
+		default:
+			reason = "Boosty не подтвердил последнюю страницу комментариев"
+		}
 	}
 	return CommentResult{Raw: raw, Comments: v.Data, Partial: part, Expected: expected, Received: n, Reason: reason}, nil
 }

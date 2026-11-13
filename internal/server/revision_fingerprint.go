@@ -35,6 +35,7 @@ func archiveContentFingerprint(man ArchiveManifest, blocks []archiveBlock, comme
 		PostID          string                `json:"postId"`
 		Source          string                `json:"source"`
 		CommentsStatus  string                `json:"commentsStatus"`
+		CommentsNote    string                `json:"commentsNote,omitempty"`
 		CommentCount    int                   `json:"commentCount"`
 		CommentExpected int                   `json:"commentExpected"`
 		Failures        []string              `json:"failures,omitempty"`
@@ -45,7 +46,7 @@ func archiveContentFingerprint(man ArchiveManifest, blocks []archiveBlock, comme
 		Subscription    *subscriptionIdentity `json:"subscription,omitempty"`
 	}{
 		Title: man.Title, Author: man.Author, PostID: man.PostID,
-		Source: man.Source, CommentsStatus: man.CommentsStatus,
+		Source: man.Source, CommentsStatus: man.CommentsStatus, CommentsNote: man.CommentsNote,
 		CommentCount: man.CommentCount, CommentExpected: man.CommentExpected,
 		Failures: man.Failures, Assets: man.Assets,
 		Blocks: blocks, Comments: comments, RequiredTier: man.RequiredTier,
