@@ -196,7 +196,9 @@ func commentText(c boosty.Comment) string {
 	return strings.Join(texts, "\n")
 }
 func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
-	for _, c := range comments {
+	// Match the same bounded preorder used by countComments and live previews.
+	// Any omitted nodes force the result to be marked partial by countComments.
+	boosty.WalkCommentTree(comments, func(c *boosty.Comment, level int) {
 		a := c.Author.Name
 		if a == "" {
 			a = "Пользователь"
@@ -205,14 +207,14 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		if c.CreatedAt > 0 {
 			date = time.Unix(c.CreatedAt, 0).UTC().Format("02.01.2006 15:04")
 		}
-		content := commentText(c)
+		content := commentText(*c)
 		if c.IsDeleted {
 			content = "Комментарий удалён"
 		}
-		*out = append(*out, commentView{Author: a, Text: content, Runs: commentInlineRuns(c), Level: depth, Date: date})
-		appendComments(out, c.Replies.Data, depth+1)
-	}
+		*out = append(*out, commentView{Author: a, Text: content, Runs: commentInlineRuns(*c), Level: depth + level, Date: date})
+	})
 }
+
 // Unsupported Boosty blocks are preserved verbatim in post.json, but cannot
 // be represented as complete content. Mark the archive partial rather than
 // silently reporting success or dropping the old revision of changed data.
