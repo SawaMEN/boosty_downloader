@@ -27,7 +27,10 @@ health || { echo "Initial installed service is not healthy." >&2; exit 1; }
 # A running installer holds this same lock. Updates and password rotations
 # must fail without touching the live deployment.
 exec 8>/run/lock/boosty-downloader-maintenance.lock
-flock -n 8 || { echo "CI maintenance lock unexpectedly unavailable." >&2; exit 1; }
+# The newly installed auto-update timer or an installer can briefly hold
+# this lock. Wait for quiescence, then verify that a SECOND maintenance
+# process is rejected while this test deliberately holds the lock.
+flock -w 30 8 || { echo "CI maintenance lock remained busy for 30 seconds." >&2; exit 1; }
 if /usr/local/bin/bdy update --force >/dev/null 2>&1; then
   echo "Updater ignored another process's maintenance lock." >&2
   exit 1
