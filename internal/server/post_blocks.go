@@ -10,19 +10,22 @@ import (
 // sourceBlock is the shared ordered representation for the live page and offline HTML.
 // Media indices match boosty.ExtractMedia, not Post.Data (which also contains text).
 type sourceBlock struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	Index int    `json:"index,omitempty"`
+	Type  string      `json:"type"`
+	Text  string      `json:"text,omitempty"`
+	Runs  []inlineRun `json:"runs,omitempty"`
+	Index int         `json:"index,omitempty"`
 }
 
 func postContentBlocks(post *boosty.Post) []sourceBlock {
 	out := make([]sourceBlock, 0, len(post.Data))
 	mediaIndex := 0
 	var paragraph strings.Builder
+	var styled []inlineRun
 	flushParagraph := func() {
 		if paragraph.Len() != 0 {
-			out = append(out, sourceBlock{Type: "text", Text: paragraph.String()})
+			out = append(out, sourceBlock{Type: "text", Text: paragraph.String(), Runs: styled})
 			paragraph.Reset()
+			styled = nil
 		}
 	}
 	for _, raw := range post.Data {
@@ -39,16 +42,18 @@ func postContentBlocks(post *boosty.Post) []sourceBlock {
 			// Boosty stores a visual paragraph as adjacent Draft.js runs.
 			// Never add synthetic spaces: run-boundary whitespace belongs to
 			// the author's text; BLOCK_END terminates the visual paragraph.
-			if txt := extractText(raw); txt != "" {
-				paragraph.WriteString(txt)
+			run := draftInlineRun(raw)
+			if run.Text != "" {
+				paragraph.WriteString(run.Text)
+				styled = appendInlineRun(styled, run)
 			}
 			if header.Modificator == "BLOCK_END" {
 				flushParagraph()
 			}
 		case "header", "list":
 			flushParagraph()
-			if txt := extractText(raw); txt != "" {
-				out = append(out, sourceBlock{Type: header.Type, Text: txt})
+			if run := draftInlineRun(raw); run.Text != "" {
+				out = append(out, sourceBlock{Type: header.Type, Text: run.Text, Runs: []inlineRun{run}})
 			}
 		case "ok_video", "audio_file", "image", "file":
 			flushParagraph()
@@ -65,6 +70,7 @@ func postContentBlocks(post *boosty.Post) []sourceBlock {
 type archiveBlock struct {
 	Type    string
 	Text    string
+	Runs    []inlineRun
 	Asset   *ArchiveAsset
 	Missing bool
 }
@@ -83,7 +89,7 @@ func archiveContentBlocks(post *boosty.Post, captured []ArchiveAsset) []archiveB
 	media := boosty.ExtractMedia(post)
 	out := make([]archiveBlock, 0, len(post.Data))
 	for _, b := range postContentBlocks(post) {
-		block := archiveBlock{Type: b.Type, Text: b.Text}
+		block := archiveBlock{Type: b.Type, Text: b.Text, Runs: b.Runs}
 		switch b.Type {
 		case "ok_video", "audio_file", "image", "file":
 			if b.Index >= len(media) {

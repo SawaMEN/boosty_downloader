@@ -48,6 +48,7 @@ type renderData struct {
 type commentView struct {
 	Author string
 	Text   string
+	Runs   []inlineRun
 	Level  int
 	Date   string
 }
@@ -58,10 +59,10 @@ const postHTML = `<!doctype html>
 <body><main><p><a href="/">← Медиатека</a></p>
 <header><h1>{{.Title}}</h1><p class="dim">{{.Author}} · Обновление архива: {{.CapturedAt.Format "02.01.2006 15:04"}} UTC</p><p><a href="{{.Source}}" target="_blank" rel="noreferrer noopener">Оригинал Boosty</a></p></header>
 <section class="panel" aria-label="Содержание публикации">{{range .Blocks}}
-{{if eq .Type "header"}}<h2 class="body-block">{{.Text}}</h2>
-{{else if eq .Type "list"}}<ul class="body-block"><li>{{.Text}}</li></ul>
-{{else if eq .Type "text"}}<p class="body-block">{{.Text}}</p>
-{{else if eq .Type "link"}}<p class="body-block">{{.Text}}</p>
+{{if eq .Type "header"}}<h2 class="body-block">{{template "inline" .}}</h2>
+{{else if eq .Type "list"}}<ul class="body-block"><li>{{template "inline" .}}</li></ul>
+{{else if eq .Type "text"}}<p class="body-block">{{template "inline" .}}</p>
+{{else if eq .Type "link"}}<p class="body-block">{{template "inline" .}}</p>
 {{else if .Asset}}<div class="body-block"><p>{{.Asset.Title}}</p>
 {{if eq .Type "ok_video"}}<video controls playsinline preload="metadata" src="media/{{.Asset.Filename}}"></video>
 {{else if eq .Type "audio_file"}}<audio controls preload="none" src="media/{{.Asset.Filename}}"></audio>
@@ -69,9 +70,10 @@ const postHTML = `<!doctype html>
 {{else if eq .Type "file"}}<a href="media/{{.Asset.Filename}}" download>Скачать: {{.Asset.Title}}</a>{{end}}
 </div>{{else if .Missing}}<p class="dim unavailable body-block">Медиа не сохранено в этой копии{{if .Text}}: {{.Text}}{{end}}</p>{{end}}
 {{else}}<p class="dim">В исходном посте нет распознанных блоков.</p>{{end}}</section>
-<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{if .CommentsNote}}<p class="dim">{{.CommentsNote}}</p>{{end}}{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong>{{if .Date}}<small class="dim"> · {{.Date}} UTC</small>{{end}}<p class="comment-body">{{.Text}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>
+<section class="panel"><h2>Комментарии</h2><p class="dim">Статус: {{.CommentsStatus}} · Получено: {{.CommentCount}}{{if .CommentExpected}} · Указано в посте: {{.CommentExpected}}{{end}}</p>{{if .CommentsNote}}<p class="dim">{{.CommentsNote}}</p>{{end}}{{range .Comments}}<article style="--level:{{.Level}}"><strong>{{.Author}}</strong>{{if .Date}}<small class="dim"> · {{.Date}} UTC</small>{{end}}<p class="comment-body">{{template "inline" .}}</p></article>{{else}}<p class="dim">Комментарии не включены или отсутствуют.</p>{{end}}</section>
 {{if .Failures}}<section class="panel"><h2>Не удалось сохранить</h2><ul>{{range .Failures}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
-</main></body></html>`
+</main></body></html>
+{{define "inline"}}{{if .Runs}}{{range .Runs}}{{if .Bold}}{{if .Italic}}<strong><em>{{.Text}}</em></strong>{{else}}<strong>{{.Text}}</strong>{{end}}{{else if .Italic}}<em>{{.Text}}</em>{{else}}{{.Text}}{{end}}{{end}}{{else}}{{.Text}}{{end}}{{end}}`
 
 var pageTemplate = template.Must(template.New("post").Parse(postHTML))
 
@@ -183,7 +185,7 @@ func appendComments(out *[]commentView, comments []boosty.Comment, depth int) {
 		if c.IsDeleted {
 			content = "Комментарий удалён"
 		}
-		*out = append(*out, commentView{Author: a, Text: content, Level: depth, Date: date})
+		*out = append(*out, commentView{Author: a, Text: content, Runs: commentInlineRuns(c), Level: depth, Date: date})
 		appendComments(out, c.Replies.Data, depth+1)
 	}
 }
