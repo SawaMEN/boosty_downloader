@@ -13,6 +13,8 @@ import (
 func main() {
 	root := flag.String("data-dir", "", "the stopped server's data directory")
 	backup := flag.String("backup-dir", "", "create a new private metadata rollback backup directory (must not exist)")
+	fullSnapshot := flag.String("full-snapshot-dir", "", "create a new private, SHA-256 verified copy of the whole stopped data directory, including media")
+	verifyFullSnapshot := flag.String("verify-full-snapshot-dir", "", "independently verify a full data directory snapshot with no live server access")
 	auditMedia := flag.Bool("audit-media", false, "read-only audit of SQL snapshot index against revision directories and SHA-256 media bytes")
 	verifyBackup := flag.String("verify-backup-dir", "", "read-only verify a metadata recovery backup and its JSON/SQL parity")
 	reindexMedia := flag.Bool("reindex-media", false, "offline transactional rebuild of the SQLite media/revision index")
@@ -23,18 +25,33 @@ func main() {
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow} {
+	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow} {
 		if enabled {
 			modes++
 		}
 	}
 	needsRecovery := *reindexMedia || *cutoverPreflight || *restoreShadow
-	if flag.NArg() != 0 || (*verifyBackup != "" &&
-		(*root != "" || modes != 0 || *recoveryDir != "")) ||
-		(*verifyBackup == "" && (*root == "" || modes > 1 ||
-			(needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR")
+	verifiers := 0
+	if *verifyBackup != "" {
+		verifiers++
+	}
+	if *verifyFullSnapshot != "" {
+		verifiers++
+	}
+	if flag.NArg() != 0 || verifiers > 1 ||
+		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
+		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR")
 		os.Exit(2)
+	}
+	if *verifyFullSnapshot != "" {
+		if err := server.VerifyFullDataSnapshot(*verifyFullSnapshot); err != nil {
+			fmt.Fprintln(os.Stderr, "Full data snapshot verification failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Full data snapshot OK: private file inventory and all SHA-256 hashes match.")
+		fmt.Println("Host /etc config, external TLS keys and executable binaries are NOT included.")
+		return
 	}
 	if *verifyBackup != "" {
 		if err := server.VerifySQLiteMetadataBackup(*verifyBackup); err != nil {
@@ -68,6 +85,15 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("SQLite revision/media index updated transactionally and verified; JSON remains authoritative.")
+		return
+	}
+	if *fullSnapshot != "" {
+		if err := server.PrepareFullDataSnapshot(*root, *fullSnapshot); err != nil {
+			fmt.Fprintln(os.Stderr, "Full data snapshot failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Full application DATA DIRECTORY snapshot created and independently verified:", *fullSnapshot)
+		fmt.Println("Host /etc config, external TLS keys and binaries are NOT included. This does NOT activate SQL-primary or restore data.")
 		return
 	}
 	if *backup != "" {
