@@ -174,7 +174,9 @@ func TestFullDataRestoreRejectsSnapshotModifiedDuringCopy(t *testing.T) {
 				return nil
 			}
 			changed = true
-			file := filepath.Join(snapshot, "data", "jobs.json")
+			// accounts.json is the first copied root file; change it only
+			// AFTER it was staged to exercise final source revalidation.
+			file := filepath.Join(snapshot, "data", "accounts.json")
 			return os.WriteFile(file, []byte("changed after copy"), 0600)
 		},
 	})
