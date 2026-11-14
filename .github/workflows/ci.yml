@@ -61,6 +61,30 @@ jobs:
         run: go test -race ./...
       - name: Docker image build
         run: docker build -f deploy/docker/Dockerfile -t boosty-downloader:test .
+  browser-e2e:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Playwright and Chromium for real-browser tests
+        run: |
+          python -m pip install --disable-pip-version-check playwright==1.57.0
+          python -m playwright install --with-deps chromium
+      - name: Build isolated HTTPS test server
+        run: go build -trimpath -o "$RUNNER_TEMP/boosty-browser-e2e" ./cmd/boosty-downloader
+      - name: Login, session, post, comment, catalog and mobile-browser E2E
+        env:
+          BOOSTY_E2E_BIN: ${{ runner.temp }}/boosty-browser-e2e
+        run: python tests/browser_e2e.py
+
   sqlite-disk-full:
     needs: tests
     runs-on: ubuntu-latest
