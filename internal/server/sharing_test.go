@@ -55,7 +55,7 @@ func TestSharedEveryoneSearchRevocationAndArchiveDate(t *testing.T) {
 	bob := testMember(t, app, "memberbob")
 
 	captured := time.Date(2026, 11, 10, 10, 15, 0, 0, time.UTC)
-	job := Job{ID: "1af051d760ef831bc993a119", OwnerID: "admin", Title: "First video post", Author: "creator_name", PostID: "post-1", State: "done", URL: "https://boosty.to/creator_name/posts/post-1", CreatedAt: captured.Add(-time.Hour), ArchiveUpdatedAt: captured}
+	job := Job{ID: "1af051d760ef831bc993a119", OwnerID: "admin", Title: "First video post", Author: "creator_name", PostID: "post-1", State: "done", Error: "PRIVATE_OWNER_ERROR", URL: "https://boosty.to/creator_name/posts/post-1", CreatedAt: captured.Add(-time.Hour), ArchiveUpdatedAt: captured}
 	if err = app.store.upsert(job); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,9 @@ func TestSharedEveryoneSearchRevocationAndArchiveDate(t *testing.T) {
 	}
 	testArchiveResponse(t, app, alice, "PUT", id+"/visibility", `{"everyone":true}`, 404)
 	testArchiveResponse(t, app, owner, "PUT", id+"/visibility", `{"everyone":true}`, 200)
-	visible := testArchiveResponse(t, app, alice, "GET", "/api/shared?author=CREATOR", "", 200)
+	testArchiveResponse(t, app, owner, "POST", id+"/shares", `{"username":"memberalice"}`, 200)
+	// Bob can view a public copy, but must not learn Alice's direct grant.
+	visible := testArchiveResponse(t, app, bob, "GET", "/api/shared?author=CREATOR", "", 200)
 	var entries []struct {
 		Job
 		OwnerName string `json:"ownerName"`
@@ -99,6 +101,9 @@ func TestSharedEveryoneSearchRevocationAndArchiveDate(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].ArchiveUpdatedAt != captured || entries[0].OwnerName != "admin" || !entries[0].SharedForAll {
 		t.Fatalf("incorrect search result: %+v", entries)
+	}
+	if entries[0].OwnerID != "" || len(entries[0].SharedWith) != 0 || entries[0].Error != "" || bytes.Contains(visible, []byte("PRIVATE_OWNER_ERROR")) {
+		t.Fatalf("shared list leaked owner-only metadata: %s", visible)
 	}
 	for _, path := range []string{"/api/shared?author=unrelated", "/api/shared?q=unrelated", "/api/shared?q=unrelated&author=creator"} {
 		b := testArchiveResponse(t, app, alice, "GET", path, "", 200)

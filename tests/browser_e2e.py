@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import zipfile
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -25,6 +26,69 @@ from playwright.sync_api import expect, sync_playwright
 
 ADMIN_USER = "e2e-admin"
 ADMIN_PASSWORD = "test-browser-password-123"
+
+ARCHIVE_JOB_ID = "d1d2d3d4d5d6d7d8d9dadbdc"
+ARCHIVE_REVISION_ID = "a1a2a3a4a5a6a7a8a9aaabac"
+ARCHIVE_MEMBER = "browser-member"
+ARCHIVE_MEMBER_PASSWORD = "browser-member-password-123"
+
+
+def seed_browser_archive(state):
+    """Seed a finished, private archive and an older revision before startup.
+
+    These files are local test data, not mocked responses from the archive API.
+    The browser exercises real permissions, storage, ZIP generation and restore.
+    """
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def write(path, content):
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+        path.chmod(0o600)
+
+    created = "2026-11-13T10:00:00Z"
+    updated = "2026-11-14T10:00:00Z"
+    job = {
+        "id": ARCHIVE_JOB_ID, "ownerId": "admin",
+        "author": "browserfixture", "postId": "archive-test",
+        "url": "https://boosty.to/browserfixture/posts/archive-test",
+        "title": "Latest browser fixture", "state": "done",
+        "createdAt": created, "updatedAt": updated,
+        "archiveUpdatedAt": updated, "doneFiles": 1, "totalFiles": 1,
+    }
+    write(state / "jobs.json", json.dumps({ARCHIVE_JOB_ID: job}).encode())
+    base = state / "library" / "admin" / "browserfixture" / "archive-test"
+    older = state / "revisions" / "admin" / "browserfixture" / "archive-test" / ARCHIVE_REVISION_ID
+
+    def create_copy(path, title, marker, captured):
+        media = ("MEDIA_" + marker).encode()
+        manifest = {
+            "title": title, "author": "browserfixture", "postId": "archive-test",
+            "source": job["url"], "capturedAt": captured,
+            "assets": [{
+                "filename": "attachment.txt", "type": "file",
+                "title": "Attachment", "size": len(media),
+            }],
+            "contentSha256": "PRIVATE_BROWSER_FINGERPRINT",
+            "subscription": {
+                "level": "PRIVATE_BROWSER_TIER", "paid": True,
+                "observedAt": captured, "source": "boosty_subscriptions",
+            },
+            "commentsStatus": "не запрашивались",
+        }
+        write(path / "manifest.json", json.dumps(manifest).encode())
+        write(path / "index.html", (
+            '<!doctype html><html><body><h1>' + marker +
+            '</h1><a href="media/attachment.txt">Attachment</a></body></html>'
+        ))
+        write(path / "media" / "attachment.txt", media)
+
+    create_copy(base, "Latest browser fixture", "LATEST_BROWSER_ARCHIVE", updated)
+    create_copy(older, "Older browser fixture", "OLDER_BROWSER_ARCHIVE", created)
+    # Raw API payloads and incomplete media must never enter downloadable ZIPs.
+    write(base / "post.json", '{"private":"RAW_BROWSER_CDN_SECRET"}')
+    write(base / "media" / "unfinished.part", "PARTIAL_BROWSER_FILE")
+
 
 
 def free_port():
@@ -41,6 +105,7 @@ class BrowserE2E(unittest.TestCase):
             raise RuntimeError("BOOSTY_E2E_BIN must point to a built boosty-downloader")
         cls.tmp = tempfile.TemporaryDirectory(prefix="boosty-browser-e2e-")
         root = Path(cls.tmp.name)
+        seed_browser_archive(root / "state")
         cls.browser = None
         cls.server = None
         try:
@@ -229,6 +294,144 @@ class BrowserE2E(unittest.TestCase):
         page.locator('#navigation [data-page="authors"]').click()
         expect(page.locator("#page-authors")).to_be_visible()
         expect(page.locator("#sidebar")).not_to_have_class(re.compile(r"(^| )open( |$)"))
+
+
+    def test_z_archive_download_sharing_revision_and_trash(self):
+        """Real browser + HTTPS server, using only local filesystem fixtures."""
+        archive = "/api/jobs/" + ARCHIVE_JOB_ID
+        self.assertEqual(self.context.request.get(self.url + archive + "/zip").status, 401)
+        self.login()
+        page = self.page
+        page.locator('#navigation [data-page="library"]').click()
+        owner_card = page.locator("#libraryJobs .job-item").filter(has_text="Latest browser fixture")
+        expect(owner_card).to_have_count(1)
+
+        with page.expect_download() as owner_download:
+            owner_card.get_by_role("link", name="Скачать ZIP").click()
+        owner_zip = Path(self.tmp.name) / "owner-archive.zip"
+        owner_download.value.save_as(str(owner_zip))
+        with zipfile.ZipFile(owner_zip) as zf:
+            self.assertEqual(set(zf.namelist()), {
+                "index.html", "manifest.json", "media/attachment.txt",
+            })
+            self.assertIn(b"LATEST_BROWSER_ARCHIVE", zf.read("index.html"))
+            self.assertEqual(zf.read("media/attachment.txt"), b"MEDIA_LATEST_BROWSER_ARCHIVE")
+            self.assertIn("PRIVATE_BROWSER_TIER", zf.read("manifest.json").decode())
+            self.assertNotIn(b"RAW_BROWSER_CDN_SECRET", owner_zip.read_bytes())
+            self.assertNotIn(b"PARTIAL_BROWSER_FILE", owner_zip.read_bytes())
+
+        member_context = self.browser.new_context(
+            ignore_https_errors=True, accept_downloads=True,
+        )
+        try:
+            # Enable registration through the authenticated admin API.
+            enabled = self.context.request.post(
+                self.url + "/api/admin/registration",
+                headers={"Content-Type": "application/json", "X-BD-Request": "1"},
+                data=json.dumps({"registrationOpen": True}),
+            )
+            self.assertEqual(enabled.status, 200, enabled.text())
+            member_page = member_context.new_page()
+            member_page.set_default_timeout(12000)
+            member_page.goto(self.url)
+            expect(member_page.locator("#switchAuth")).to_be_visible()
+            member_page.locator("#switchAuth").click()
+            member_page.locator("#loginUser").fill(ARCHIVE_MEMBER)
+            member_page.locator("#loginPass").fill(ARCHIVE_MEMBER_PASSWORD)
+            member_page.locator("#loginForm button[type=submit]").click()
+            expect(member_page.locator("#appScreen")).to_be_visible()
+
+            # No implicit access to other users' manifests, files, ZIP or revisions.
+            for suffix in ("/manifest", "/zip", "/revisions"):
+                self.assertEqual(member_context.request.get(self.url + archive + suffix).status, 404)
+            self.assertEqual(member_context.request.get(
+                self.url + "/library/" + ARCHIVE_JOB_ID + "/index.html"
+            ).status, 404)
+
+            owner_card.get_by_role("button", name="Поделиться").click()
+            expect(page.locator("#shareDialog")).to_be_visible()
+            page.locator("#shareUsername").fill(ARCHIVE_MEMBER)
+            page.locator('#shareForm button[type=submit]').click()
+            expect(page.locator("#shareParticipants")).to_contain_text(ARCHIVE_MEMBER)
+
+            member_page.locator('#navigation [data-page="shared"]').click()
+            shared_card = member_page.locator("#sharedJobs .job-item").filter(
+                has_text="Latest browser fixture"
+            )
+            expect(shared_card).to_have_count(1)
+            expect(shared_card).to_contain_text(ADMIN_USER)
+            self.assertEqual(member_context.request.get(
+                self.url + "/library/" + ARCHIVE_JOB_ID + "/index.html"
+            ).status, 200)
+            manifest_response = member_context.request.get(self.url + archive + "/manifest")
+            self.assertEqual(manifest_response.status, 200)
+            self.assertNotIn("PRIVATE_BROWSER_TIER", manifest_response.text())
+            self.assertNotIn("PRIVATE_BROWSER_FINGERPRINT", manifest_response.text())
+            self.assertEqual(member_context.request.get(
+                self.url + archive + "/revisions"
+            ).status, 404)
+
+            with member_page.expect_download() as member_download:
+                shared_card.get_by_role("link", name="Скачать ZIP").click()
+            shared_zip = Path(self.tmp.name) / "shared-archive.zip"
+            member_download.value.save_as(str(shared_zip))
+            with zipfile.ZipFile(shared_zip) as zf:
+                self.assertEqual(set(zf.namelist()), {
+                    "index.html", "manifest.json", "media/attachment.txt",
+                })
+                private_data = zf.read("manifest.json").decode()
+                self.assertNotIn("PRIVATE_BROWSER_TIER", private_data)
+                self.assertNotIn("PRIVATE_BROWSER_FINGERPRINT", private_data)
+                self.assertIn(b"LATEST_BROWSER_ARCHIVE", zf.read("index.html"))
+
+            # Revocation applies immediately to catalog, files and downloads.
+            page.once("dialog", lambda dialog: dialog.accept())
+            page.locator("#shareParticipants").get_by_role(
+                "button", name="Отозвать"
+            ).click()
+            expect(page.locator("#shareParticipants")).not_to_contain_text(ARCHIVE_MEMBER)
+            member_page.locator('#navigation [data-page="shared"]').click()
+            expect(member_page.locator("#sharedJobs")).not_to_contain_text(
+                "Latest browser fixture"
+            )
+            for suffix in ("/manifest", "/zip"):
+                self.assertEqual(member_context.request.get(self.url + archive + suffix).status, 404)
+
+            # Restoring a historical version updates real bytes and catalog data.
+            page.locator("#closeShare").click()
+            owner_card.get_by_role("button", name="История версий").click()
+            old_revision = page.locator("#revisionsList .participant-row").filter(
+                has_text="Older browser fixture"
+            )
+            expect(old_revision).to_have_count(1)
+            page.once("dialog", lambda dialog: dialog.accept())
+            old_revision.get_by_role("button", name="Восстановить").click()
+            expect(page.locator("#revisionsList")).to_contain_text("Latest browser fixture")
+            page.locator("#closeRevisions").click()
+            restored_card = page.locator("#libraryJobs .job-item").filter(
+                has_text="Older browser fixture"
+            )
+            expect(restored_card).to_have_count(1)
+            self.assertIn("OLDER_BROWSER_ARCHIVE", self.context.request.get(
+                self.url + "/library/" + ARCHIVE_JOB_ID + "/index.html"
+            ).text())
+            self.assertEqual(member_context.request.get(
+                self.url + archive + "/manifest"
+            ).status, 404)
+
+            # Trash/restore does not recreate previously revoked grants.
+            page.once("dialog", lambda dialog: dialog.accept())
+            restored_card.get_by_role("button", name="Удалить", exact=True).click()
+            expect(page.locator("#trashJobs")).to_contain_text("Older browser fixture")
+            self.assertEqual(self.context.request.get(self.url + archive + "/zip").status, 404)
+            page.locator("#trashJobs .job-item").filter(
+                has_text="Older browser fixture"
+            ).get_by_role("button", name="Восстановить").click()
+            expect(page.locator("#libraryJobs")).to_contain_text("Older browser fixture")
+            self.assertEqual(self.context.request.get(self.url + archive + "/zip").status, 200)
+            self.assertEqual(member_context.request.get(self.url + archive + "/zip").status, 404)
+        finally:
+            member_context.close()
 
 
 if __name__ == "__main__":
