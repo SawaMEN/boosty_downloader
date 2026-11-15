@@ -3,7 +3,7 @@
 # Does not test systemd or the installer; no real VPS or Boosty credentials.
 set -euo pipefail
 
-release="${1:?usage: debian_runtime_smoke.sh {bookworm|trixie} SERVER_BINARY DBCHECK_BINARY}"
+release="${1:-}"
 server_binary="${2:?missing server binary}"
 dbcheck_binary="${3:?missing dbcheck binary}"
 case "$release" in bookworm|trixie) ;; *) echo "unsupported Debian release: $release" >&2; exit 2 ;; esac
