@@ -78,7 +78,12 @@ func (a *App) sharedJobs(w http.ResponseWriter, r *http.Request) {
 			!strings.Contains(strings.ToLower(ownerName), query) {
 			continue
 		}
+		// Keep the legacy shared list consistent with the permission-aware
+		// catalog: a share grant does not reveal other recipients or internal IDs.
 		j.Subscription = nil
+		j.SharedWith = nil
+		j.OwnerID = ""
+		j.Error = ""
 		results = append(results, sharedEntry{Job: j, OwnerName: ownerName})
 	}
 	sort.Slice(results, func(i, j int) bool {
