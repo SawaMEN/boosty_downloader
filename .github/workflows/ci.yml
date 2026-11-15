@@ -40,7 +40,7 @@ jobs:
           fi
       - name: Check shell syntax and installer help
         run: |
-          bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update tests/rollback_smoke.sh
+          bash -n install.sh deploy/boosty-downloader-manager deploy/boosty-downloader-cert-renew deploy/boosty-video-deps deploy/boosty-auto-update tests/rollback_smoke.sh tests/debian_runtime_smoke.sh
           bash install.sh --help >/dev/null
           if bash install.sh --mode invalid >/dev/null 2>&1; then
             echo "invalid installation mode was accepted"; exit 1
@@ -116,6 +116,27 @@ jobs:
           TMPDIR="$scratch" BD_TEST_SQLITE_TMPFS="$scratch" \
             "$RUNNER_TEMP/boosty-sqlite-enospc.test" -test.v -test.timeout=2m \
             -test.run '^TestSQLiteShadowRestorePhysicalENOSPC$'
+
+  debian-runtime-smoke:
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        release: [bookworm, trixie]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build fully static release-shaped Linux binaries
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/boosty-downloader" ./cmd/boosty-downloader
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/boosty-dbcheck" ./cmd/boosty-dbcheck
+      - name: Boot HTTPS and verify auth and persistence inside Debian ${{ matrix.release }}
+        run: bash tests/debian_runtime_smoke.sh '${{ matrix.release }}' "$RUNNER_TEMP/boosty-downloader" "$RUNNER_TEMP/boosty-dbcheck"
 
   binaries:
     needs: tests
