@@ -147,7 +147,7 @@ func TestArchiveHTTPNoFollowAndOwnerIsolation(t *testing.T) {
 	testArchiveResponse(t, app, owner, "GET", revURL, "", 404)
 	testArchiveResponse(t, app, member, "GET", revURL, "", 404)
 	response := testArchiveResponse(t, app, member, "GET",
-		"/api/jobs/"+job.ID+"/zip", "", 500)
+		"/api/jobs/"+job.ID+"/zip", "", http.StatusConflict)
 	if strings.Contains(string(response), "NEVER_EXPOSE_THIS_TOKEN") {
 		t.Fatal("private file content leaked in ZIP error")
 	}
