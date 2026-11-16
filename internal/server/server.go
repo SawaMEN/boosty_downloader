@@ -334,7 +334,8 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("DELETE /api/trash/{id}", a.require("deleteArchives", a.purgeTrash))
 	private.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		owner := principal(r).ID
-		jobs := a.store.all()
+		// Optional SQL owner index is safe only after full JSON parity checks.
+		jobs, _ := a.store.catalogJobs(r.Context(), owner, "mine", a.catalogSQLReads)
 		selected := make([]Job, 0)
 		for _, j := range jobs {
 			if j.OwnerID == owner {
