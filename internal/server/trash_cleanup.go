@@ -189,7 +189,7 @@ func (a *App) runTrashSweep(trigger string) {
 		if trigger == "automatic" && !a.accounts.policy().Trash.AutoPurge {
 			break
 		}
-		n, err := a.store.purgeOwnedBefore(job.owner, job.id, "", cutoff)
+		n, err := a.purgeTrashedJob(job.owner, job.id, cutoff)
 		// The owner may have restored or already emptied this record.
 		if n == 0 && err != nil && err.Error() == "архив не найден" {
 			continue
