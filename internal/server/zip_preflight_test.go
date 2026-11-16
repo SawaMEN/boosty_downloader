@@ -80,6 +80,12 @@ func TestZIPManifestAllowlistPreflightAndRecovery(t *testing.T) {
 		found := map[string]bool{}
 		for _, z := range zr.File {
 			found[z.Name] = true
+			if strings.HasPrefix(z.Name, "media/") && z.Method != zip.Store {
+				t.Fatalf("media %s was recompressed in ZIP: method %d", z.Name, z.Method)
+			}
+			if z.Name == "index.html" && z.Method != zip.Deflate {
+				t.Fatalf("portable HTML unexpectedly lost deflate compression")
+			}
 			f, err := z.Open()
 			if err != nil {
 				t.Fatal(err)
@@ -104,6 +110,21 @@ func TestZIPManifestAllowlistPreflightAndRecovery(t *testing.T) {
 		if len(found) != 3 || len(zr.File) != 3 {
 			t.Fatalf("ZIP included files outside manifest: %+v", found)
 		}
+	}
+	verifyZIP()
+
+	// A shortened file still opens successfully, but is incomplete and must
+	// be rejected with HTTP 409 BEFORE ZIP headers are written.
+	if err := os.WriteFile(clip, []byte("hell"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, reqAs("GET", path, "", owner))
+	if rec.Code != http.StatusConflict || rec.Header().Get("Content-Type") == "application/zip" {
+		t.Fatalf("truncated media was downloaded: status %d, content type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if err := os.WriteFile(clip, []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	verifyZIP()
 
@@ -133,6 +154,21 @@ func TestZIPManifestAllowlistPreflightAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyZIP()
+
+	// A filename reused with different claimed sizes is ambiguous; fail
+	// closed rather than packaging whichever file happens to exist.
+	manifest.Assets = append(manifest.Assets, ArchiveAsset{Filename: "clip.txt", Size: 6})
+	if err := writeJSON(filepath.Join(base, "manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	testArchiveResponse(t, app, owner, "GET", path, "", http.StatusConflict)
+	manifest.Assets = manifest.Assets[:1]
+	manifest.Assets[0].Size = -1
+	if err := writeJSON(filepath.Join(base, "manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	testArchiveResponse(t, app, owner, "GET", path, "", http.StatusConflict)
+	manifest.Assets[0].Size = 5
 
 	// Unsafe names and oversized lists fail closed, not silently skipped.
 	manifest.Assets[0].Filename = "../private-secret"
