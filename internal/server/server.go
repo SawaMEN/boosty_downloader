@@ -35,6 +35,7 @@ type App struct {
 	cfg                Config
 	dataDirLock        *os.File
 	store              *Storage
+	archiveGates       archiveGates
 	accounts           *Accounts
 	clients            map[string]*boosty.Client
 	clientsMu          sync.Mutex
