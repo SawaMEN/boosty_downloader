@@ -356,6 +356,42 @@ func (s *Storage) trashed(owner string) []Job {
 	return out
 }
 
+// trashedJob returns an immutable snapshot for choosing the same physical
+// archive gate used by ZIP, media, revision restores and background refreshes.
+// The purge itself must revalidate DeletedAt and retention under Storage.mu:
+// an owner may restore and re-trash the entry after this lookup.
+func (s *Storage) trashedJob(owner, id string) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[id]
+	if job == nil || job.OwnerID != owner || job.DeletedAt == nil {
+		return Job{}, false
+	}
+	return *job, true
+}
+
+// purgeTrashedJob is the sole production entry to permanent deletion. Never
+// acquire an archive gate while Storage.mu is held: a concurrent ZIP reader
+// holds the gate before re-reading the job from Storage.mu. TryLock also makes
+// a busy export fail promptly instead of hanging an HTTP or cleanup worker.
+func (a *App) purgeTrashedJob(owner, id string, cutoff time.Time) (int, error) {
+	job, ok := a.store.trashedJob(owner, id)
+	if !ok {
+		return 0, errors.New("архив не найден")
+	}
+	if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
+		return 0, errors.New("неверные параметры пути архива")
+	}
+	unlock, ready := a.archiveGates.tryWrite(job)
+	if !ready {
+		return 0, errors.New("архив используется: завершите скачивание или восстановление")
+	}
+	defer unlock()
+	// purgeOwnedBefore checks the current trash state, owner, retention cutoff
+	// and aliasing with other jobs again while holding Storage.mu.
+	return a.store.purgeOwnedBefore(owner, id, "", cutoff)
+}
+
 func (s *Storage) restoreOwned(owner, id string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -527,7 +563,7 @@ func (a *App) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusServiceUnavailable, "журнал очистки недоступен: удаление отменено")
 		return
 	}
-	n, err := a.store.purgeOwned(principal(r).ID, r.PathValue("id"), "")
+	n, err := a.purgeTrashedJob(principal(r).ID, r.PathValue("id"), time.Time{})
 	if err != nil {
 		_ = a.store.appendTrashAudit(TrashAuditEntry{At: time.Now().UTC(), Trigger: "owner_failed", OwnerID: principal(r).ID, JobID: r.PathValue("id"), Error: err.Error()})
 		fail(w, 409, err.Error())
