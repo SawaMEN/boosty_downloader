@@ -370,25 +370,9 @@ func (s *Storage) trashedJob(owner, id string) (Job, bool) {
 	return *job, true
 }
 
-// purgeTrashedJob is the sole production entry to permanent deletion. Never
-// acquire an archive gate while Storage.mu is held: a concurrent ZIP reader
-// holds the gate before re-reading the job from Storage.mu. TryLock also makes
-// a busy export fail promptly instead of hanging an HTTP or cleanup worker.
+// HTTP/manual and scheduled sweeps share the same storage-level purge gate.
+// Direct Storage.purgeOwned(Before) calls must be equally safe.
 func (a *App) purgeTrashedJob(owner, id string, cutoff time.Time) (int, error) {
-	job, ok := a.store.trashedJob(owner, id)
-	if !ok {
-		return 0, errors.New("архив не найден")
-	}
-	if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
-		return 0, errors.New("неверные параметры пути архива")
-	}
-	unlock, ready := a.archiveGates.tryWrite(job)
-	if !ready {
-		return 0, errors.New("архив используется: завершите скачивание или восстановление")
-	}
-	defer unlock()
-	// purgeOwnedBefore checks the current trash state, owner, retention cutoff
-	// and aliasing with other jobs again while holding Storage.mu.
 	return a.store.purgeOwnedBefore(owner, id, "", cutoff)
 }
 
@@ -424,10 +408,39 @@ func (s *Storage) purgeOwned(owner, id, author string) (int, error) {
 	return s.purgeOwnedBefore(owner, id, author, time.Time{})
 }
 
-// Compare retention within the same lock as the folder move and metadata delete.
-// A restore followed by another deletion resets DeletedAt and cannot be purged
-// by a stale cleanup scan.
+// Every permanent delete, including callers that bypass HTTP, obtains an
+// archive writer gate BEFORE Storage.mu. Readers acquire the two locks in the
+// reverse nesting order (gate, then mu), so taking mu while waiting for a gate
+// would deadlock. Exact-ID purges lock the physical post; bulk author/owner
+// purges lock all 128 stripes to cover a changing candidate set atomically.
 func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (int, error) {
+	var lockedJob Job
+	var unlock func()
+	var ok bool
+	if id != "" {
+		job, found := s.trashedJob(owner, id)
+		if !found {
+			return 0, errors.New("архив не найден")
+		}
+		if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
+			return 0, errors.New("неверные параметры пути архива")
+		}
+		lockedJob = job
+		unlock, ok = s.gates.tryWrite(job)
+	} else {
+		unlock, ok = s.gates.tryWriteAll()
+	}
+	if !ok {
+		return 0, errors.New("архив используется: завершите скачивание или восстановление")
+	}
+	defer unlock()
+	return s.purgeOwnedBeforeUnderGate(owner, id, author, cutoff, lockedJob)
+}
+
+// Compare retention within the same lock as the folder move and metadata
+// delete. Restore/re-trash resets DeletedAt, which is rechecked after the
+// physical archive gate was acquired. Call only from purgeOwnedBefore.
+func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff time.Time, lockedJob Job) (int, error) {
 	s.mu.Lock()
 	if author != "" {
 		for _, v := range s.imports {
@@ -452,6 +465,10 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 		if !safeArchivePart(j.OwnerID) || !safeArchivePart(j.Author) || !safeArchivePart(j.PostID) {
 			s.mu.Unlock()
 			return 0, errors.New("неверные параметры пути архива")
+		}
+		if id != "" && (j.OwnerID != lockedJob.OwnerID || j.Author != lockedJob.Author || j.PostID != lockedJob.PostID) {
+			s.mu.Unlock()
+			return 0, errors.New("путь архива изменился во время удаления")
 		}
 		ids = append(ids, key)
 		folders[s.archiveDir(j.OwnerID, j.Author, j.PostID)] = true
