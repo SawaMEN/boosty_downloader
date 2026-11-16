@@ -3,6 +3,8 @@ package server
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -192,6 +194,7 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 	// remains available through the archive verification API. Legacy assets
 	// without a usable positive size remain supported.
 	declaredSizes := make(map[string]int64, len(manifest.Assets))
+	declaredHashes := make(map[string]string, len(manifest.Assets))
 	for _, asset := range manifest.Assets {
 		if asset.Size < 0 {
 			fail(w, 409, "манифест содержит отрицательный размер файла")
@@ -204,6 +207,22 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			declaredSizes[name] = asset.Size
+		}
+		if asset.SHA256 != "" {
+			if len(asset.SHA256) != 64 {
+				fail(w, 409, "манифест содержит неправильную контрольную сумму")
+				return
+			}
+			if _, err := hex.DecodeString(asset.SHA256); err != nil {
+				fail(w, 409, "манифест содержит неправильную контрольную сумму")
+				return
+			}
+			name := "media/" + asset.Filename
+			if oldHash, exists := declaredHashes[name]; exists && !strings.EqualFold(oldHash, asset.SHA256) {
+				fail(w, 409, "манифест содержит противоречивые контрольные суммы")
+				return
+			}
+			declaredHashes[name] = asset.SHA256
 		}
 	}
 	// Preflight the exact list before creating a streaming ZIP. Opening and
@@ -264,12 +283,34 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 				sanitized.Subscription = nil
 				sanitized.ContentSHA256 = ""
 				err = json.NewEncoder(entry).Encode(sanitized)
+			} else if expectedHash, known := declaredHashes[name]; known {
+				// Hash exactly the bytes copied into the ZIP, without a second
+				// disk read. If a concurrent in-place write changes the file
+				// without changing its size, refuse to finalize this ZIP.
+				digest := sha256.New()
+				var copied int64
+				copied, err = io.Copy(entry, io.TeeReader(file, digest))
+				if err == nil {
+					if expectedSize, known := declaredSizes[name]; known && copied != expectedSize {
+						err = errors.New("archive media size changed during ZIP streaming")
+					} else if !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), expectedHash) {
+						err = errors.New("archive media checksum changed during ZIP streaming")
+					}
+				}
 			} else {
-				_, err = io.Copy(entry, file)
+				var copied int64
+				copied, err = io.Copy(entry, file)
+				if err == nil {
+					if expectedSize, known := declaredSizes[name]; known && copied != expectedSize {
+						err = errors.New("archive media size changed during ZIP streaming")
+					}
+				}
 			}
 		}
 		_ = file.Close()
 		if err != nil {
+			// Do not publish the central ZIP directory after a failed copy:
+			// the client must not see a valid archive with damaged bytes.
 			return
 		}
 	}
