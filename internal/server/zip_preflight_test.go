@@ -43,7 +43,7 @@ func TestZIPManifestAllowlistPreflightAndRecovery(t *testing.T) {
 	manifest := ArchiveManifest{
 		Title: j.Title, Author: j.Author, PostID: j.PostID,
 		CapturedAt: time.Now().UTC(),
-		Assets: []ArchiveAsset{{Filename: "clip.txt", Type: "file", Size: 5}},
+		Assets:     []ArchiveAsset{{Filename: "clip.txt", Type: "file", Size: 5}},
 	}
 	if err := writeJSON(filepath.Join(base, "manifest.json"), manifest); err != nil {
 		t.Fatal(err)
