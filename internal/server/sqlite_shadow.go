@@ -485,7 +485,7 @@ func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, map[string]any{
 		"enabled": true, "authoritative": "json", "status": status,
 		"catalogReadsEnabled": a.catalogSQLReads,
-		"lastAttempt": state.LastAttempt, "lastSuccess": state.LastSuccess,
+		"lastAttempt":         state.LastAttempt, "lastSuccess": state.LastSuccess,
 		"lastError": state.LastError, "pending": state.Pending,
 		"mediaEnabled": state.MediaEnabled, "mediaPending": state.MediaPending,
 		"mediaError": state.MediaError, "mediaLastSuccess": state.MediaLastSuccess,
