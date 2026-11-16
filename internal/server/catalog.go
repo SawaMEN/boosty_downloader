@@ -92,8 +92,11 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SQLite is only an optional candidate index. Every returned job still
+	// comes from authoritative JSON and passes the existing ACL/filter logic.
+	jobs, _ := a.store.catalogJobs(r.Context(), viewer.ID, scope, a.catalogSQLReads)
 	items := make([]catalogItem, 0)
-	for _, job := range a.store.all() {
+	for _, job := range jobs {
 		if scope == "mine" {
 			if job.OwnerID != viewer.ID {
 				continue
