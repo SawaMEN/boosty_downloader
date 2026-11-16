@@ -510,6 +510,17 @@ func (a *App) libraryFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	unlock, ready := a.archiveGates.tryRead(j)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	j, ok = a.readableJob(r)
+	if !ok || (j.State != "done" && j.State != "partial") {
+		http.NotFound(w, r)
+		return
+	}
 	base := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	file := r.PathValue("file")
 	if file == "" {
