@@ -187,6 +187,25 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, err.Error())
 		return
 	}
+	// Archive metadata has the size from the completed capture. Check it
+	// without hashing every large video again; explicit SHA-256 verification
+	// remains available through the archive verification API. Legacy assets
+	// without a usable positive size remain supported.
+	declaredSizes := make(map[string]int64, len(manifest.Assets))
+	for _, asset := range manifest.Assets {
+		if asset.Size < 0 {
+			fail(w, 409, "манифест содержит отрицательный размер файла")
+			return
+		}
+		if asset.Size > 0 {
+			name := "media/" + asset.Filename
+			if oldSize, exists := declaredSizes[name]; exists && oldSize != asset.Size {
+				fail(w, 409, "манифест содержит противоречивые размеры файла")
+				return
+			}
+			declaredSizes[name] = asset.Size
+		}
+	}
 	// Preflight the exact list before creating a streaming ZIP. Opening and
 	// closing each descriptor avoids exhausting fd limits for large archives.
 	for _, name := range files {
@@ -198,8 +217,14 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 			fail(w, 409, "архив неполный или повреждён; проверьте файлы")
 			return
 		}
-		if err := file.Close(); err != nil {
+		stat, statErr := file.Stat()
+		closeErr := file.Close()
+		if statErr != nil || closeErr != nil {
 			fail(w, 409, "не удалось проверить файл архива")
+			return
+		}
+		if expected, known := declaredSizes[name]; known && stat.Size() != expected {
+			fail(w, 409, "размер медиа не совпадает с манифестом")
 			return
 		}
 	}
@@ -214,11 +239,25 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		}
 		file, err := openArchiveRegular(base, name)
 		if err != nil {
-			// The archive changed after preflight. Returning early ensures the
-			// response cannot pretend to contain all the declared assets.
+			// The archive changed after preflight. The writer must not emit
+			// the ZIP central directory for a partial transfer.
 			return
 		}
-		entry, err := writer.Create(name)
+		if expected, known := declaredSizes[name]; known {
+			info, statErr := file.Stat()
+			if statErr != nil || info.Size() != expected {
+				_ = file.Close()
+				return
+			}
+		}
+		method := uint16(zip.Deflate)
+		if strings.HasPrefix(name, "media/") {
+			// Videos, images and audio are typically already compressed.
+			// Storing media verbatim avoids expensive CPU-heavy recompression
+			// for multi-gigabyte archives and preserves ZIP streaming.
+			method = zip.Store
+		}
+		entry, err := writer.CreateHeader(&zip.FileHeader{Name: name, Method: method})
 		if err == nil {
 			if name == "manifest.json" && j.OwnerID != principal(r).ID {
 				sanitized := manifest
