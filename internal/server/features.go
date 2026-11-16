@@ -177,6 +177,19 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "архив не готов")
 		return
 	}
+	unlock, ready := a.archiveGates.tryRead(j)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	// A restore or share revocation may have happened between the initial
+	// lookup and acquiring the gate. Recheck visibility under the read lease.
+	j, ok = a.readableJob(r)
+	if !ok || (j.State != "done" && j.State != "partial") {
+		fail(w, 404, "архив не готов")
+		return
+	}
 	base := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	// Never package raw Boosty responses containing signed CDN URLs.
 	_, manifest, err := readArchiveManifestNoFollow(base)
@@ -321,6 +334,17 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
 	j, ok := a.readableJob(r)
+	if !ok {
+		fail(w, 404, "задача не найдена")
+		return
+	}
+	unlock, ready := a.archiveGates.tryRead(j)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	j, ok = a.readableJob(r)
 	if !ok {
 		fail(w, 404, "задача не найдена")
 		return
