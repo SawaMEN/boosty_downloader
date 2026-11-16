@@ -471,6 +471,7 @@ func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
 	if a.store.shadow == nil {
 		reply(w, http.StatusOK, map[string]any{
 			"enabled": false, "authoritative": "json", "status": "disabled",
+			"catalogReadsEnabled": false,
 		})
 		return
 	}
@@ -483,6 +484,7 @@ func (a *App) adminSQLiteShadow(w http.ResponseWriter, r *http.Request) {
 	}
 	reply(w, http.StatusOK, map[string]any{
 		"enabled": true, "authoritative": "json", "status": status,
+		"catalogReadsEnabled": a.catalogSQLReads,
 		"lastAttempt": state.LastAttempt, "lastSuccess": state.LastSuccess,
 		"lastError": state.LastError, "pending": state.Pending,
 		"mediaEnabled": state.MediaEnabled, "mediaPending": state.MediaPending,
