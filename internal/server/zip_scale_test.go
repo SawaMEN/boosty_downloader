@@ -79,7 +79,7 @@ func TestZIPThousandMediaEntries(t *testing.T) {
 	manifest := ArchiveManifest{
 		Title: j.Title, Author: j.Author, PostID: j.PostID,
 		CapturedAt: time.Now().UTC(),
-		Assets: make([]ArchiveAsset, n),
+		Assets:     make([]ArchiveAsset, n),
 	}
 	for i := 0; i < n; i++ {
 		name := fmt.Sprintf("chunk-%04d.bin", i)
