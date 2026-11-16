@@ -53,6 +53,18 @@ func TestPurgeTrashedArchiveWaitsForActiveZIP(t *testing.T) {
 		<-finished
 		t.Fatalf("purge while ZIP is active returned %d, expected 409", denied.Code)
 	}
+	// Internal Storage consumers must be unable to bypass the same gate,
+	// even if they do not go through the App's HTTP/manual purge wrapper.
+	if app.archiveGates != app.store.gates {
+		close(paused.release)
+		<-finished
+		t.Fatal("HTTP and Storage are using different archive gates")
+	}
+	if n, err := app.store.purgeOwned(job.OwnerID, id, ""); n != 0 || err == nil {
+		close(paused.release)
+		<-finished
+		t.Fatalf("direct Storage purge ignored active ZIP: %d %v", n, err)
+	}
 	if _, err := os.Stat(clip); err != nil {
 		close(paused.release)
 		<-finished
