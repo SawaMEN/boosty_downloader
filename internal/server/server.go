@@ -35,7 +35,7 @@ type App struct {
 	cfg                Config
 	dataDirLock        *os.File
 	store              *Storage
-	archiveGates       archiveGates
+	archiveGates       *archiveGates
 	accounts           *Accounts
 	clients            map[string]*boosty.Client
 	clientsMu          sync.Mutex
@@ -120,7 +120,7 @@ func New(cfg Config) (*App, error) {
 			return nil, fmt.Errorf("режим SQLite shadow не включён; JSON остаётся основным: %w", err)
 		}
 	}
-	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, archiveGates: s.gates, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	a.wg.Add(6)
 	if s.shadow != nil {
 		a.wg.Add(1)
