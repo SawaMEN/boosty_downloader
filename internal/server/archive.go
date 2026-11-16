@@ -249,6 +249,10 @@ func (a *App) runJob(id string) {
 	if !ok {
 		return
 	}
+	// Hold the write gate through durable completion metadata. A ZIP, HTML
+	// or Range reader must never observe a partially refreshed live archive.
+	unlock := a.archiveGates.write(job)
+	defer unlock()
 	// A permission can be revoked while a job is waiting in the queue.
 	for _, feature := range []struct {
 		requested bool
