@@ -36,6 +36,7 @@ type App struct {
 	dataDirLock        *os.File
 	store              *Storage
 	archiveGates       *archiveGates
+	catalogSQLReads    bool
 	accounts           *Accounts
 	clients            map[string]*boosty.Client
 	clientsMu          sync.Mutex
@@ -65,6 +66,9 @@ func New(cfg Config) (*App, error) {
 	}
 	if os.Getenv("BD_SQLITE_MEDIA_SHADOW") == "1" && os.Getenv("BD_SQLITE_SHADOW") != "1" {
 		return nil, errors.New("BD_SQLITE_MEDIA_SHADOW требует BD_SQLITE_SHADOW=1")
+	}
+	if os.Getenv("BD_SQLITE_CATALOG_READS") == "1" && os.Getenv("BD_SQLITE_SHADOW") != "1" {
+		return nil, errors.New("BD_SQLITE_CATALOG_READS требует BD_SQLITE_SHADOW=1")
 	}
 	// A directory-scoped OS lock prevents two server processes, or an offline
 	// SQLite administration command, from trusting a moving data set.
@@ -120,7 +124,7 @@ func New(cfg Config) (*App, error) {
 			return nil, fmt.Errorf("режим SQLite shadow не включён; JSON остаётся основным: %w", err)
 		}
 	}
-	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, archiveGates: s.gates, accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, archiveGates: s.gates, catalogSQLReads: os.Getenv("BD_SQLITE_CATALOG_READS") == "1", accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	a.wg.Add(6)
 	if s.shadow != nil {
 		a.wg.Add(1)
