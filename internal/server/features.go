@@ -208,7 +208,6 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", j.Author+"-"+j.PostID+".zip"))
 	w.Header().Set("Cache-Control", "no-store")
 	writer := zip.NewWriter(w)
-	defer writer.Close()
 	for _, name := range files {
 		if r.Context().Err() != nil {
 			return
@@ -235,6 +234,9 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Do not write the ZIP central directory after a mid-stream error: an
+	// incomplete download must not appear to be a valid portable archive.
+	_ = writer.Close()
 }
 
 func (a *App) jobManifest(w http.ResponseWriter, r *http.Request) {
