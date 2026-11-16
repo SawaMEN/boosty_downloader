@@ -106,6 +106,17 @@ func (a *App) verifyJob(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "архив не найден")
 		return
 	}
+	unlock, ready := a.archiveGates.tryRead(j)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	j, ok = a.ownedJob(r)
+	if !ok || (j.State != "done" && j.State != "partial") {
+		fail(w, 404, "архив не найден")
+		return
+	}
 	result, err := verifyArchive(a.store.archiveDir(j.OwnerID, j.Author, j.PostID))
 	if err != nil {
 		fail(w, 500, "не удалось проверить целостность архива")
