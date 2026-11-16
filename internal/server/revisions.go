@@ -278,6 +278,17 @@ func (a *App) listJobRevisions(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "архив не найден")
 		return
 	}
+	unlock, ready := a.archiveGates.tryRead(job)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	job, ok = a.ownedJob(r)
+	if !ok {
+		fail(w, 404, "архив не найден")
+		return
+	}
 	items, err := a.store.listArchiveRevisions(job)
 	if err != nil {
 		fail(w, 500, "не удалось прочитать версии")
@@ -287,6 +298,17 @@ func (a *App) listJobRevisions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) restoreJobRevision(w http.ResponseWriter, r *http.Request) {
+	current, ok := a.ownedJob(r)
+	if !ok {
+		fail(w, 409, "архив не найден")
+		return
+	}
+	unlock, ready := a.archiveGates.tryWrite(current)
+	if !ready {
+		fail(w, http.StatusConflict, "архив используется: завершите скачивание или обновление")
+		return
+	}
+	defer unlock()
 	job, err := a.store.restoreArchiveRevision(principal(r).ID, r.PathValue("id"), r.PathValue("rev"))
 	if err != nil {
 		fail(w, 409, err.Error())
@@ -298,6 +320,17 @@ func (a *App) restoreJobRevision(w http.ResponseWriter, r *http.Request) {
 func (a *App) revisionFile(w http.ResponseWriter, r *http.Request) {
 	job, ok := a.ownedJob(r)
 	if !ok || (job.State != "done" && job.State != "partial") || !validRevisionID(r.PathValue("rev")) {
+		http.NotFound(w, r)
+		return
+	}
+	unlock, ready := a.archiveGates.tryRead(job)
+	if !ready {
+		fail(w, http.StatusConflict, "архив обновляется или восстанавливается")
+		return
+	}
+	defer unlock()
+	job, ok = a.ownedJob(r)
+	if !ok || (job.State != "done" && job.State != "partial") {
 		http.NotFound(w, r)
 		return
 	}
