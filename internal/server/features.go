@@ -10,8 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,8 +138,37 @@ func (a *App) retryJob(w http.ResponseWriter, r *http.Request) {
 	reply(w, 202, job)
 }
 
-// Stream a portable ZIP. All paths come from our controlled archive directory.
-// No secrets, settings, or server-side auth files are included.
+// portableZipFiles builds a strict, bounded allowlist from the manifest rather
+// than walking the entire archive directory. Raw Boosty API payloads, temporary
+// downloads, and unrelated files must never affect the portable archive.
+func portableZipFiles(manifest ArchiveManifest) ([]string, error) {
+	const maxZIPFiles = 5000
+	names := map[string]struct{}{"index.html": {}, "manifest.json": {}}
+	if len(manifest.Assets) > maxZIPFiles {
+		return nil, errors.New("слишком много файлов в манифесте")
+	}
+	for _, asset := range manifest.Assets {
+		if !safeArchivePart(asset.Filename) {
+			return nil, errors.New("небезопасное имя файла в манифесте")
+		}
+		names["media/"+asset.Filename] = struct{}{}
+		if len(names) > maxZIPFiles {
+			return nil, errors.New("слишком много файлов в архиве")
+		}
+	}
+	files := make([]string, 0, len(names))
+	for name := range names {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// Stream a portable ZIP with a manifest-based allowlist. Every included file
+// is checked via O_NOFOLLOW before sending the response headers. This catches
+// known missing, symlinked or special media without falsely returning HTTP 200.
+// Concurrent external filesystem modifications may still interrupt streaming,
+// so callers must stop other writers for guaranteed consistent snapshots.
 func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 	j, ok := a.readableJob(r)
 	if !ok || (j.State != "done" && j.State != "partial") {
@@ -149,80 +176,61 @@ func (a *App) zipJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
-	// Only portable snapshot artefacts belong in a shared ZIP. Raw Boosty
-	// payloads can contain signed CDN URLs and must never be redistributed.
+	// Never package raw Boosty responses containing signed CDN URLs.
 	_, manifest, err := readArchiveManifestNoFollow(base)
 	if err != nil {
 		fail(w, 404, "манифест архива отсутствует или повреждён")
 		return
 	}
-	allowed := map[string]bool{"index.html": true, "manifest.json": true}
-	for _, asset := range manifest.Assets {
-		if safeArchivePart(asset.Filename) {
-			allowed["media/"+asset.Filename] = true
-		}
-	}
-	files := []string{}
-	err = filepath.WalkDir(base, func(path string, item os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if item.IsDir() {
-			if item.Type()&os.ModeSymlink != 0 {
-				return errors.New("symbolic link in archive")
-			}
-			return nil
-		}
-		if !item.Type().IsRegular() {
-			return errors.New("необычный тип файла в архиве")
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return err
-		}
-		if !allowed[filepath.ToSlash(rel)] {
-			return nil
-		}
-		files = append(files, path)
-		if len(files) > 5000 {
-			return errors.New("слишком много файлов в архиве")
-		}
-		return nil
-	})
+	files, err := portableZipFiles(manifest)
 	if err != nil {
-		fail(w, 500, "ошибка чтения архива")
+		fail(w, 409, err.Error())
 		return
 	}
-	sort.Strings(files)
+	// Preflight the exact list before creating a streaming ZIP. Opening and
+	// closing each descriptor avoids exhausting fd limits for large archives.
+	for _, name := range files {
+		if r.Context().Err() != nil {
+			return
+		}
+		file, openErr := openArchiveRegular(base, name)
+		if openErr != nil {
+			fail(w, 409, "архив неполный или повреждён; проверьте файлы")
+			return
+		}
+		if err := file.Close(); err != nil {
+			fail(w, 409, "не удалось проверить файл архива")
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", j.Author+"-"+j.PostID+".zip"))
 	w.Header().Set("Cache-Control", "no-store")
 	writer := zip.NewWriter(w)
 	defer writer.Close()
-	for _, path := range files {
+	for _, name := range files {
 		if r.Context().Err() != nil {
 			return
 		}
-		rel, err := filepath.Rel(base, path)
+		file, err := openArchiveRegular(base, name)
 		if err != nil {
+			// The archive changed after preflight. Returning early ensures the
+			// response cannot pretend to contain all the declared assets.
 			return
 		}
-		f, err := openArchiveRegular(base, filepath.ToSlash(rel))
-		if err != nil {
-			return
-		}
-		entry, err := writer.Create(filepath.ToSlash(rel))
+		entry, err := writer.Create(name)
 		if err == nil {
-			if rel == "manifest.json" && j.OwnerID != principal(r).ID {
+			if name == "manifest.json" && j.OwnerID != principal(r).ID {
 				sanitized := manifest
 				sanitized.Subscription = nil
-				sanitized.ContentSHA256 = "" // Fingerprint may encode the private tier.
+				sanitized.ContentSHA256 = ""
 				err = json.NewEncoder(entry).Encode(sanitized)
 			} else {
-				_, err = io.Copy(entry, f)
+				_, err = io.Copy(entry, file)
 			}
 		}
-		f.Close()
+		_ = file.Close()
 		if err != nil {
 			return
 		}
