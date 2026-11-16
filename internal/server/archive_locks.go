@@ -51,3 +51,24 @@ func (g *archiveGates) tryWrite(job Job) (func(), bool) {
 	}
 	return lock.Unlock, true
 }
+
+// tryWriteAll is used only for bulk storage purges, which can select any
+// number of physical posts. Taking every stripe in a deterministic order
+// prevents a new matching job from appearing outside the locked set. If even
+// one archive is busy, release all acquired locks and fail without deleting
+// anything. No waiters, unbounded maps or cross-stripe deadlocks are created.
+func (g *archiveGates) tryWriteAll() (func(), bool) {
+	for i := range g.stripes {
+		if !g.stripes[i].TryLock() {
+			for j := i - 1; j >= 0; j-- {
+				g.stripes[j].Unlock()
+			}
+			return nil, false
+		}
+	}
+	return func() {
+		for i := len(g.stripes) - 1; i >= 0; i-- {
+			g.stripes[i].Unlock()
+		}
+	}, true
+}
