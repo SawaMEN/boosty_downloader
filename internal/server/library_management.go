@@ -59,7 +59,8 @@ func (a *App) sharedJobs(w http.ResponseWriter, r *http.Request) {
 		OwnerName string `json:"ownerName"`
 	}
 	results := make([]sharedEntry, 0)
-	for _, j := range a.store.all() {
+	jobs, _ := a.store.catalogJobs(r.Context(), userID, "shared", a.catalogSQLReads)
+	for _, j := range jobs {
 		if j.OwnerID == userID || (j.State != "done" && j.State != "partial") {
 			continue
 		}
