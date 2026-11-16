@@ -67,6 +67,25 @@ func TestSQLiteCatalogReadsOwnerScopeAndJSONACL(t *testing.T) {
 		p.Items[0].OwnerID != "" || p.Items[0].Subscription != nil {
 		t.Fatalf("SQL-backed HTTP catalog exposed wrong data: %+v", p)
 	}
+	getJSON := func(cookie *http.Cookie, path string, dst any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, reqAs("GET", path, "", cookie))
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), dst) != nil {
+			t.Fatalf("SQL-backed %s failed: HTTP %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	var owned []Job
+	getJSON(owner, "/api/jobs", &owned)
+	if len(owned) != 2 {
+		t.Fatalf("owner jobs list lost the SQLite-backed records: %+v", owned)
+	}
+	var sharedList []map[string]any
+	getJSON(viewer, "/api/shared", &sharedList)
+	if len(sharedList) != 1 || sharedList[0]["id"] != shared.ID ||
+		sharedList[0]["ownerId"] != "" {
+		t.Fatalf("shared list leaked private or lost shared records: %+v", sharedList)
+	}
 	p = request(owner, "/api/catalog?scope=mine&sort=title&order=asc")
 	if p.Total != 2 || p.Items[0].Title != private.Title {
 		t.Fatalf("owner catalog SQL filtering/sorting changed: %+v", p)
@@ -84,6 +103,10 @@ func TestSQLiteCatalogReadsOwnerScopeAndJSONACL(t *testing.T) {
 	p = request(viewer, "/api/catalog?scope=shared")
 	if p.Total != 1 || p.Items[0].ID != shared.ID {
 		t.Fatalf("forged SQL grant bypassed JSON ACL: %+v", p)
+	}
+	getJSON(viewer, "/api/shared", &sharedList)
+	if len(sharedList) != 1 || sharedList[0]["id"] != shared.ID {
+		t.Fatalf("forged SQL grant bypassed shared endpoint ACL: %+v", sharedList)
 	}
 	if _, err := app.store.shadow.meta.db.Exec(
 		"DELETE FROM archive_grants WHERE archive_id=? AND grantee_owner_id=?",
