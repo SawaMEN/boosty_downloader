@@ -25,6 +25,7 @@ type Storage struct {
 	authors map[string][]string
 	imports map[string]*AuthorImport
 	shadow  *sqliteShadow
+	gates   *archiveGates
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
@@ -90,7 +91,7 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = recoverMetadataPair(root); e != nil {
 		return nil, fmt.Errorf("metadata transaction recovery failed: %w", e)
 	}
-	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport)}
+	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport), gates: &archiveGates{}}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if e == nil {
 		if e = json.Unmarshal(raw, &s.jobs); e != nil {
