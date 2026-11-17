@@ -90,6 +90,13 @@ func New(cfg Config) (*App, error) {
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("восстановление метаданных не удалось: %w", err)
 	}
+	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
+	// prepared intent. Cancel it only if the pinned recovery snapshot still
+	// exactly matches JSON, SQL, ACL and media; otherwise fail closed before
+	// account migration, new HTTP access, or background workers can run.
+	if err := recoverSQLiteCutoverRehearsalLocked(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("незавершённое переключение SQLite требует ручной проверки: %w", err)
+	}
 	// Validate against the raw JSON before any legacy migration or default
 	// serialization can rewrite authoritative files. No workers run yet.
 	if os.Getenv("BD_SQLITE_VERIFY") == "1" {
