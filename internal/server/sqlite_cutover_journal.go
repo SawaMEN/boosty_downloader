@@ -179,6 +179,10 @@ func readSQLiteCutoverIntent(root string) (sqliteCutoverIntent, bool, error) {
 // changed live JSON/SQL/media snapshot leaves the intent in place and blocks
 // server startup. This is fail-closed, not destructive auto-restore.
 func recoverSQLiteCutoverRehearsalLocked(root string) error {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
 	intent, found, err := readSQLiteCutoverIntent(root)
 	if err != nil || !found {
 		return err
