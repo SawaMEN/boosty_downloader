@@ -23,16 +23,18 @@ func main() {
 	restoreShadow := flag.Bool("restore-sqlite-shadow", false, "offline atomic restoration of only the detached SQLite index from a verified backup; JSON is never overwritten")
 	recoveryDir := flag.String("recovery-dir", "", "required VERIFIED metadata backup used by --reindex-media or --cutover-preflight")
 	cutoverPreflight := flag.Bool("cutover-preflight", false, "read-only preflight of JSON ACLs, SQL media index and an identical recovery backup")
+	prepareCutover := flag.Bool("prepare-sqlite-cutover", false, "durably stage a VERIFIED offline SQL cutover rehearsal without activating SQL-primary")
+	recoverCutover := flag.Bool("recover-sqlite-cutover", false, "safely cancel a prepared offline cutover intent after validating the pinned recovery point")
 	flag.Parse()
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow} {
+	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover} {
 		if enabled {
 			modes++
 		}
 	}
-	needsRecovery := *reindexMedia || *cutoverPreflight || *restoreShadow
+	needsRecovery := *reindexMedia || *cutoverPreflight || *restoreShadow || *prepareCutover
 	verifiers := 0
 	if *verifyBackup != "" {
 		verifiers++
@@ -48,7 +50,7 @@ func main() {
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreFullSnapshot != "" {
@@ -76,6 +78,23 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Metadata recovery backup OK: SHA-256 manifest, JSON, SQLite schema and owner ACLs match")
+		return
+	}
+	if *prepareCutover {
+		if err := server.PrepareSQLiteCutoverRehearsal(*root, *recoveryDir); err != nil {
+			fmt.Fprintln(os.Stderr, "SQLite cutover rehearsal failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Prepared SQLite cutover intent is durable. SQL-primary remains DISABLED; JSON and media were not modified.")
+		fmt.Println("On the next server startup, a verified unchanged recovery point safely cancels this unfinished intent.")
+		return
+	}
+	if *recoverCutover {
+		if err := server.RecoverSQLiteCutoverRehearsal(*root); err != nil {
+			fmt.Fprintln(os.Stderr, "SQLite cutover cancellation rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("SQLite cutover rehearsal canceled or already absent. JSON remains authoritative.")
 		return
 	}
 	if *cutoverPreflight {
