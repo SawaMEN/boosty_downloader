@@ -28,6 +28,12 @@ func VerifySQLiteCutoverPreflight(root, backup string) error {
 		return err
 	}
 	defer lock.Close()
+	return verifySQLiteCutoverPreflightLocked(absolute, backup)
+}
+
+// The caller must hold the data directory OS lock. A staged cutover journal
+// can reuse this exact preflight without recursively trying to acquire flock.
+func verifySQLiteCutoverPreflightLocked(absolute, backup string) error {
 	if err := sqliteReindexNoWAL(absolute); err != nil {
 		return err
 	}
