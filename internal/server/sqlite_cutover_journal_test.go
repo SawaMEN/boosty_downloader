@@ -204,8 +204,15 @@ func TestSQLiteCutoverRehearsalRejectsActiveServer(t *testing.T) {
 		t.Fatalf("live server allowed offline cutover: %v", err)
 	}
 	app.Close()
-	if err := PrepareSQLiteCutoverRehearsal(root, backup); err != nil {
-		t.Fatalf("shutdown did not release offline cutover lock: %v", err)
+	// First startup creates accounts.json, so the original offline metadata
+	// backup intentionally becomes stale. The server lock must be released,
+	// then a FRESH verified recovery point must be prepared before cutover.
+	freshBackup := filepath.Join(t.TempDir(), "post-startup-recovery")
+	if err := PrepareSQLiteBackup(root, freshBackup); err != nil {
+		t.Fatalf("shutdown did not release the data directory lock: %v", err)
+	}
+	if err := PrepareSQLiteCutoverRehearsal(root, freshBackup); err != nil {
+		t.Fatalf("shutdown with a current rollback point still blocked cutover: %v", err)
 	}
 	if err := RecoverSQLiteCutoverRehearsal(root); err != nil {
 		t.Fatal(err)
