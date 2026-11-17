@@ -78,6 +78,10 @@
             </div>
             <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminStorageRefresh">Проверить место и квоты</button></div>
             <div id="adminStorageReport" class="video-diagnostics" role="status"></div>
+            <h3>SQLite: синхронизация метаданных</h3>
+            <p class="muted small">JSON остаётся основной базой. Кнопка проверяет и фиксирует в SQLite задачи, импорты и права доступа одной транзакцией, не затрагивая медиа и не переключая сервер на SQL-primary.</p>
+            <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminSQLiteRefresh">Проверить состояние SQLite</button><button class="btn subtle" type="button" id="adminSQLiteCommit" disabled>Зафиксировать метаданные в SQLite</button></div>
+            <div id="adminSQLiteReport" class="video-diagnostics" role="status"></div>
             <h3>Корзина и автоматическая очистка</h3>
             <p class="muted small">Удаление необратимо только после очистки. Сначала система проверяет дату удаления и права владельца, затем безопасно удаляет просроченную копию. Проверка проводится каждый час, не более 20 архивов за проход.</p>
             <div class="policy-controls">
