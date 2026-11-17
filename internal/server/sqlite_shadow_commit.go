@@ -21,7 +21,13 @@ var (
 //
 // The shadow background worker uses the same syncMu, so a manual commit cannot
 // race a slower full-media reindex or overwrite a newer SQL transaction.
-func (s *Storage) commitSQLiteMetadata(ctx context.Context) (err error) {
+func (s *Storage) commitSQLiteMetadata(ctx context.Context) error {
+	return s.commitSQLiteMetadataWithHook(ctx, nil)
+}
+
+// The hook exists only to exercise a controlled concurrent JSON commit in
+// tests. Normal HTTP callers pass nil and cannot influence the snapshot.
+func (s *Storage) commitSQLiteMetadataWithHook(ctx context.Context, afterSnapshot func()) (err error) {
 	if s.shadow == nil {
 		return errors.New("SQLite shadow is disabled")
 	}
@@ -48,6 +54,9 @@ func (s *Storage) commitSQLiteMetadata(ctx context.Context) (err error) {
 	jobs, imports, err := s.shadowJSONSnapshot()
 	if err != nil {
 		return err
+	}
+	if afterSnapshot != nil {
+		afterSnapshot()
 	}
 	if err = shadow.meta.reconcile(ctx, jobs, imports); err != nil {
 		return err
