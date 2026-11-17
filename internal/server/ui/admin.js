@@ -77,6 +77,7 @@ async function loadAdminPanel(){
     $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
     $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
     loadAdminStorage();
+    loadAdminSQLite();
     const trash=p.trash||{};
     $('adminTrashAutoPurge').checked=Boolean(trash.autoPurge);
     $('adminTrashRetentionDays').value=String(trash.retentionDays??30);
@@ -270,6 +271,39 @@ async function loadAdminStorage(){
     if(Number(data.freeBytes)<Number(data.minFreeGiB)*1024**3)target.append(text('p','Свободное место ниже заданного резерва. Новые загрузки будут приостановлены.','error'));
   }catch(e){target.replaceChildren(text('p',e.message,'error'))}
 }
+async function loadAdminSQLite(){
+  if(!state.user?.admin)return;
+  const root=$('adminSQLiteReport'),button=$('adminSQLiteCommit');
+  button.disabled=true;
+  root.replaceChildren(text('p','Проверяем SQL-индекс и отставание метаданных…','muted'));
+  try{
+    const stateSQL=await api('/api/admin/sqlite-shadow');
+    if(!stateSQL.enabled){
+      root.replaceChildren(text('strong','SQLite Shadow отключён'));
+      root.append(text('p','Все списки и права доступа работают через JSON. Для SQL-синхронизации нужен заранее подготовленный metadata.db и BD_SQLITE_SHADOW=1.','muted small'));
+      return;
+    }
+    const health={healthy:'Проекция синхронизирована',pending:'Есть необработанные изменения',degraded:'Ошибка SQL-проекции'}[stateSQL.status]||'Состояние не определено';
+    root.replaceChildren(text('strong',health));
+    root.append(text('p','Основная база: JSON · SQL-каталог: '+(stateSQL.catalogReadsEnabled?'включён':'выключен'),'muted small'));
+    if(stateSQL.lastSuccess)root.append(text('p','Последняя синхронизация: '+new Date(stateSQL.lastSuccess).toLocaleString('ru-RU'),'muted small'));
+    if(stateSQL.lastError)root.append(text('p',stateSQL.lastError,'error'));
+    if(stateSQL.mediaPending||stateSQL.mediaError){
+      root.append(text('p','Медиаиндекс: '+(stateSQL.mediaError||'ожидает обновления'),'muted small'));
+    }
+    button.disabled=false;
+  }catch(error){root.replaceChildren(text('p',error.message,'error'))}
+}
+async function commitAdminSQLite(){
+  if(!state.user?.admin)return;
+  const button=$('adminSQLiteCommit');button.disabled=true;
+  try{
+    const result=await api('/api/admin/sqlite-shadow/commit',{method:'POST'});
+    if(result.sqlitePrimary!==false)throw Error('Ответ сервера не подтвердил режим JSON');
+    toast('Метаданные SQLite проверены. Основной базой остаётся JSON.');
+  }catch(error){toast(error.message,true)}
+  finally{await loadAdminSQLite()}
+}
 async function loadAdminUpdates(){
   if(!state.user?.admin)return;
   const root=$('adminUpdateReport');root.replaceChildren(text('p','Читаем журнал службы обновлений…','muted'));
@@ -317,6 +351,8 @@ function adminEvents(){
   $('adminTrashStatusRefresh').onclick=loadAdminTrash;
   $('adminTrashCleanupNow').onclick=runAdminTrashCleanup;
   $('adminStorageRefresh').onclick=loadAdminStorage;
+  $('adminSQLiteRefresh').onclick=loadAdminSQLite;
+  $('adminSQLiteCommit').onclick=commitAdminSQLite;
   $('adminVideoProbe').onclick=()=>loadVideoReport(true);
   $('adminVideoArchive').onchange=selectAdminVideoArchive;
   $('adminVideoConvert').onclick=enqueueAdminVideo;
