@@ -160,6 +160,40 @@ func TestSQLiteCutoverRehearsalRejectsUnsafeJournalAndNestedBackup(t *testing.T)
 	}
 }
 
+func TestSQLiteCutoverRehearsalRejectsUnknownFuturePhase(t *testing.T) {
+	root, backup, before := sqliteCutoverFixture(t)
+	if err := PrepareSQLiteCutoverRehearsal(root, backup); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, sqliteCutoverIntentName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A future real SQL-primary commit marker MUST NOT be silently canceled
+	// by this rehearsal-only recovery logic. Unknown phases fail closed.
+	changed := bytes.Replace(raw, []byte(`"phase":"prepared"`), []byte(`"phase":"committed"`), 1)
+	if bytes.Equal(raw, changed) {
+		t.Fatal("test fixture did not contain the expected prepared phase")
+	}
+	if err := os.WriteFile(path, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverSQLiteCutoverRehearsal(root); err == nil {
+		t.Fatal("a committed/unknown future phase was silently canceled")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal("unknown phase was removed despite a failed recovery:", err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverSQLiteCutoverRehearsal(root); err != nil {
+		t.Fatal(err)
+	}
+	sqliteCutoverCompare(t, root, before)
+}
+
 func TestSQLiteCutoverRehearsalENOSPCAndRetry(t *testing.T) {
 	root, backup, before := sqliteCutoverFixture(t)
 	for _, phase := range []string{"validated", "prepared"} {
