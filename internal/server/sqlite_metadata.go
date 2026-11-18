@@ -74,14 +74,28 @@ func openSQLiteMetadata(path string) (*sqliteMetadata, error) {
 
 func (m *sqliteMetadata) close() error { return m.db.Close() }
 
+// job reads the owner-qualified SQL projection in one snapshot. A SQL index
+// column or grant that disagrees with its JSON payload is corruption, not a
+// reason to serve a potentially misclassified or over-shared archive.
 func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error) {
 	if !safeArchivePart(owner) || !safeArchivePart(id) {
 		return Job{}, errors.New("invalid archive identity")
 	}
-	var raw string
-	err := m.db.QueryRowContext(ctx,
-		"SELECT payload_json FROM owner_archives WHERE owner_id=? AND archive_id=? AND deleted_at IS NULL",
-		owner, id).Scan(&raw)
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Job{}, err
+	}
+	defer tx.Rollback()
+	var rowID, rowOwner, author, post, state, title, created, updated, raw string
+	var autoSync, everyone int
+	var archived, deleted sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT a.archive_id,a.owner_id,p.author_slug,p.remote_post_id,
+		a.job_state,a.title,a.created_at,a.updated_at,a.archived_at,a.auto_sync,
+		a.shared_for_all,a.deleted_at,a.payload_json
+		FROM owner_archives a JOIN source_posts p ON a.post_key=p.post_key
+		WHERE a.owner_id=? AND a.archive_id=? AND a.deleted_at IS NULL`,
+		owner, id).Scan(&rowID, &rowOwner, &author, &post, &state, &title,
+		&created, &updated, &archived, &autoSync, &everyone, &deleted, &raw)
 	if err != nil {
 		return Job{}, err
 	}
@@ -89,20 +103,69 @@ func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error)
 	if err := json.Unmarshal([]byte(raw), &j); err != nil {
 		return Job{}, err
 	}
-	if j.ID != id || j.OwnerID != owner {
-		return Job{}, errors.New("SQLite archive payload has inconsistent ownership")
+	if err := validSQLiteArchive(j); err != nil {
+		return Job{}, fmt.Errorf("invalid SQLite archive payload: %w", err)
+	}
+	if j.ID != rowID || j.OwnerID != rowOwner || j.Author != author ||
+		j.PostID != post || j.State != state || j.Title != title ||
+		!sqliteShadowDateMatches(created, j.CreatedAt) ||
+		!sqliteShadowDateMatches(updated, j.UpdatedAt) ||
+		!sqliteShadowArchivedMatches(archived, j.ArchiveUpdatedAt) ||
+		sqliteBool(j.AutoSync) != autoSync || sqliteBool(j.SharedForAll) != everyone ||
+		!sqliteShadowDeletedMatches(deleted, j.DeletedAt) || j.DeletedAt != nil {
+		return Job{}, errors.New("SQLite archive indexed fields disagree with payload")
+	}
+	rows, err := tx.QueryContext(ctx,
+		"SELECT grantee_owner_id FROM archive_grants WHERE archive_id=?", id)
+	if err != nil {
+		return Job{}, err
+	}
+	expected := make(map[string]bool, len(j.SharedWith))
+	for _, grantee := range j.SharedWith {
+		expected[grantee] = true
+	}
+	seen := make(map[string]bool, len(expected))
+	for rows.Next() {
+		var grantee string
+		if err := rows.Scan(&grantee); err != nil {
+			rows.Close()
+			return Job{}, err
+		}
+		if !expected[grantee] || seen[grantee] {
+			rows.Close()
+			return Job{}, errors.New("SQLite archive has unexpected access grants")
+		}
+		seen[grantee] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Job{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return Job{}, err
+	}
+	if len(seen) != len(expected) {
+		return Job{}, errors.New("SQLite archive has missing access grants")
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, err
 	}
 	return j, nil
 }
 
+// authorImport rejects a row when the separately indexed author, state,
+// sync flag or modification timestamp disagrees with the immutable SQL row
+// payload. This is a prerequisite for using SQL as an authoritative backend.
 func (m *sqliteMetadata) authorImport(ctx context.Context, owner, id string) (AuthorImport, error) {
 	if !safeArchivePart(owner) || !safeArchivePart(id) {
 		return AuthorImport{}, errors.New("invalid import identity")
 	}
-	var raw string
+	var rowID, rowOwner, author, state, updated, raw string
+	var autoSync int
 	err := m.db.QueryRowContext(ctx,
-		"SELECT payload_json FROM author_imports WHERE owner_id=? AND import_id=?",
-		owner, id).Scan(&raw)
+		`SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json
+		 FROM author_imports WHERE owner_id=? AND import_id=?`,
+		owner, id).Scan(&rowID, &rowOwner, &author, &state, &autoSync, &updated, &raw)
 	if err != nil {
 		return AuthorImport{}, err
 	}
@@ -110,8 +173,13 @@ func (m *sqliteMetadata) authorImport(ctx context.Context, owner, id string) (Au
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return AuthorImport{}, err
 	}
-	if v.ID != id || v.OwnerID != owner {
-		return AuthorImport{}, errors.New("SQLite import payload has inconsistent ownership")
+	if err := validSQLiteImport(v); err != nil {
+		return AuthorImport{}, fmt.Errorf("invalid SQLite import payload: %w", err)
+	}
+	if v.ID != rowID || v.OwnerID != rowOwner || v.Author != author ||
+		v.State != state || sqliteBool(v.AutoSync) != autoSync ||
+		!sqliteShadowDateMatches(updated, v.UpdatedAt) {
+		return AuthorImport{}, errors.New("SQLite import indexed fields disagree with payload")
 	}
 	return v, nil
 }
