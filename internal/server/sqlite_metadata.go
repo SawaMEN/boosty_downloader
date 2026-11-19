@@ -78,23 +78,37 @@ func (m *sqliteMetadata) close() error { return m.db.Close() }
 // column or grant that disagrees with its JSON payload is corruption, not a
 // reason to serve a potentially misclassified or over-shared archive.
 func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error) {
-	if !safeArchivePart(owner) || !safeArchivePart(id) {
-		return Job{}, errors.New("invalid archive identity")
-	}
 	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return Job{}, err
 	}
 	defer tx.Rollback()
+	job, err := sqliteReadJobTx(ctx, tx, owner, id, false)
+	if err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, err
+	}
+	return job, nil
+}
+
+// sqliteReadJobTx validates the complete SQL index and grants in the same
+// transaction as a future metadata update. Include deleted jobs only when
+// verifying a compare-and-swap write (trash/restore), never for public reads.
+func sqliteReadJobTx(ctx context.Context, tx *sql.Tx, owner, id string, includeDeleted bool) (Job, error) {
+	if !safeArchivePart(owner) || !safeArchivePart(id) {
+		return Job{}, errors.New("invalid archive identity")
+	}
 	var rowID, rowOwner, author, post, state, title, created, updated, raw string
 	var autoSync, everyone int
 	var archived, deleted sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT a.archive_id,a.owner_id,p.author_slug,p.remote_post_id,
+	err := tx.QueryRowContext(ctx, `SELECT a.archive_id,a.owner_id,p.author_slug,p.remote_post_id,
 		a.job_state,a.title,a.created_at,a.updated_at,a.archived_at,a.auto_sync,
 		a.shared_for_all,a.deleted_at,a.payload_json
 		FROM owner_archives a JOIN source_posts p ON a.post_key=p.post_key
-		WHERE a.owner_id=? AND a.archive_id=? AND a.deleted_at IS NULL`,
-		owner, id).Scan(&rowID, &rowOwner, &author, &post, &state, &title,
+		WHERE a.owner_id=? AND a.archive_id=? AND (?=1 OR a.deleted_at IS NULL)`,
+		owner, id, sqliteBool(includeDeleted)).Scan(&rowID, &rowOwner, &author, &post, &state, &title,
 		&created, &updated, &archived, &autoSync, &everyone, &deleted, &raw)
 	if err != nil {
 		return Job{}, err
@@ -112,7 +126,7 @@ func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error)
 		!sqliteShadowDateMatches(updated, j.UpdatedAt) ||
 		!sqliteShadowArchivedMatches(archived, j.ArchiveUpdatedAt) ||
 		sqliteBool(j.AutoSync) != autoSync || sqliteBool(j.SharedForAll) != everyone ||
-		!sqliteShadowDeletedMatches(deleted, j.DeletedAt) || j.DeletedAt != nil {
+		!sqliteShadowDeletedMatches(deleted, j.DeletedAt) || (!includeDeleted && j.DeletedAt != nil) {
 		return Job{}, errors.New("SQLite archive indexed fields disagree with payload")
 	}
 	rows, err := tx.QueryContext(ctx,
@@ -147,22 +161,27 @@ func (m *sqliteMetadata) job(ctx context.Context, owner, id string) (Job, error)
 	if len(seen) != len(expected) {
 		return Job{}, errors.New("SQLite archive has missing access grants")
 	}
-	if err := tx.Commit(); err != nil {
-		return Job{}, err
-	}
 	return j, nil
 }
 
 // authorImport rejects a row when the separately indexed author, state,
 // sync flag or modification timestamp disagrees with the immutable SQL row
 // payload. This is a prerequisite for using SQL as an authoritative backend.
+type sqlitePointReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func (m *sqliteMetadata) authorImport(ctx context.Context, owner, id string) (AuthorImport, error) {
+	return sqliteReadImport(ctx, m.db, owner, id)
+}
+
+func sqliteReadImport(ctx context.Context, q sqlitePointReader, owner, id string) (AuthorImport, error) {
 	if !safeArchivePart(owner) || !safeArchivePart(id) {
 		return AuthorImport{}, errors.New("invalid import identity")
 	}
 	var rowID, rowOwner, author, state, updated, raw string
 	var autoSync int
-	err := m.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json
 		 FROM author_imports WHERE owner_id=? AND import_id=?`,
 		owner, id).Scan(&rowID, &rowOwner, &author, &state, &autoSync, &updated, &raw)
@@ -315,6 +334,12 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 		return err
 	}
 	if found {
+		// Comparing payload_json alone can silently repair a forged SQL grant
+		// or index. Validate the persisted projection BEFORE changing anything.
+		current, readErr := sqliteReadJobTx(ctx, tx, j.OwnerID, j.ID, true)
+		if readErr != nil || !sqliteShadowEqual(current, *c.Before) {
+			return errSQLiteConflict
+		}
 		var owner, author, postID string
 		err = tx.QueryRowContext(ctx, `SELECT a.owner_id,p.author_slug,p.remote_post_id
 			FROM owner_archives a JOIN source_posts p ON p.post_key=a.post_key
@@ -408,6 +433,12 @@ func sqliteApplyImport(ctx context.Context, tx *sql.Tx, c sqliteImportChange) er
 	payload, err := json.Marshal(v)
 	if err != nil {
 		return err
+	}
+	if found {
+		current, readErr := sqliteReadImport(ctx, tx, v.OwnerID, v.ID)
+		if readErr != nil || !sqliteShadowEqual(current, *c.Before) {
+			return errSQLiteConflict
+		}
 	}
 	if !found {
 		_, err = tx.ExecContext(ctx, `
