@@ -239,7 +239,6 @@ func detachedSQLCompareOptional(fullData, sqlExport, name string) error {
 	return nil
 }
 
-
 // detachedSQLCheckForwardProgress refuses a detached recovery that would
 // rewind or silently drop metadata already present in the full data snapshot.
 // Only new records may be introduced. Existing IDs, owners and source
