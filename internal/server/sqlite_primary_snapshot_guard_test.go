@@ -11,8 +11,8 @@ func TestSQLiteFullSnapshotRejectsDomainInvalidRows(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
 	}{
-		{"invalid-archive-state", "UPDATE owner_archives SET job_state='unrecognized', payload_json=json_set(payload_json,'$.state','unrecognized') WHERE archive_id='" + strings.Repeat("1", 24) + "'"},
-		{"invalid-import-state", "UPDATE author_imports SET job_state='unrecognized', payload_json=json_set(payload_json,'$.state','unrecognized') WHERE import_id='" + strings.Repeat("a", 24) + "'"},
+		{"invalid-archive-created-at", "UPDATE owner_archives SET created_at='0001-01-01T00:00:00Z', payload_json=json_set(payload_json,'$.createdAt','0001-01-01T00:00:00Z') WHERE archive_id='" + strings.Repeat("1", 24) + "'"},
+		{"invalid-import-created-at", "UPDATE author_imports SET payload_json=json_set(payload_json,'$.createdAt','0001-01-01T00:00:00Z') WHERE import_id='" + strings.Repeat("a", 24) + "'"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, _ := sqliteCanaryFixture(t)
@@ -30,7 +30,7 @@ func TestSQLiteFullSnapshotRejectsDomainInvalidRows(t *testing.T) {
 			}
 			defer tx.Rollback()
 			var readErr error
-			if tc.name == "invalid-archive-state" {
+			if tc.name == "invalid-archive-created-at" {
 				_, readErr = sqliteShadowSQLJobs(context.Background(), tx)
 			} else {
 				_, readErr = sqliteShadowSQLImports(context.Background(), tx)
