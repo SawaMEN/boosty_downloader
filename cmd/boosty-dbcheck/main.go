@@ -16,7 +16,9 @@ func main() {
 	fullSnapshot := flag.String("full-snapshot-dir", "", "create a new private, SHA-256 verified copy of the whole stopped data directory, including media")
 	verifyFullSnapshot := flag.String("verify-full-snapshot-dir", "", "independently verify a full data directory snapshot with no live server access")
 	restoreFullSnapshot := flag.String("restore-full-snapshot-dir", "", "verified full snapshot to recover into --restore-to (new, nonexistent directory only)")
-	restoreTo := flag.String("restore-to", "", "new detached destination for --restore-full-snapshot-dir; no existing installation may be replaced")
+	restoreTo := flag.String("restore-to", "", "new detached destination for offline restore; no existing installation may be replaced")
+	restoreSQL := flag.String("restore-sqlite-json-dir", "", "verified newer SQL-to-JSON metadata export for a detached combined restore")
+	fromFull := flag.String("from-full-snapshot-dir", "", "verified full data snapshot to combine with --restore-sqlite-json-dir")
 	auditMedia := flag.Bool("audit-media", false, "read-only audit of SQL snapshot index against revision directories and SHA-256 media bytes")
 	verifyBackup := flag.String("verify-backup-dir", "", "read-only verify a metadata recovery backup and its JSON/SQL parity")
 	reindexMedia := flag.Bool("reindex-media", false, "offline transactional rebuild of the SQLite media/revision index")
@@ -43,15 +45,30 @@ func main() {
 	if *verifyFullSnapshot != "" {
 		verifiers++
 	}
+	if *restoreSQL != "" {
+		if err := server.RestoreDetachedSQLRecovery(*fromFull, *restoreSQL, *restoreTo); err != nil {
+			fmt.Fprintln(os.Stderr, "Detached combined SQL/JSON full recovery rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("SQL/JSON metadata and full data restored to a NEW DETACHED directory:", *restoreTo)
+		fmt.Println("Original SQL export, full snapshot and live server were not changed.")
+		fmt.Println("This is NOT an in-place SQL-primary rollback; verify host configuration, ownership and TLS before any test service startup.")
+		return
+	}
 	if *restoreFullSnapshot != "" {
 		verifiers++
 	}
+	if *restoreSQL != "" {
+		verifiers++
+	}
 	if flag.NArg() != 0 || verifiers > 1 ||
-		(*restoreTo != "" && *restoreFullSnapshot == "") ||
+		(*restoreTo != "" && *restoreFullSnapshot == "" && *restoreSQL == "") ||
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
+		(*restoreSQL != "" && (*fromFull == "" || *restoreTo == "")) ||
+		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreFullSnapshot != "" {
