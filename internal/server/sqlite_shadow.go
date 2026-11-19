@@ -361,6 +361,14 @@ func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error
 			rows.Close()
 			return nil, err
 		}
+		if err := validSQLiteArchive(job); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("invalid SQL archive %q: %w", id, err)
+		}
+		if _, exists := result[id]; exists {
+			rows.Close()
+			return nil, fmt.Errorf("duplicate SQL archive: %q", id)
+		}
 		if job.ID != id || job.OwnerID != owner || job.Author != author ||
 			job.PostID != post || job.State != state || job.Title != title ||
 			!sqliteShadowDateMatches(created, job.CreatedAt) ||
@@ -400,6 +408,14 @@ func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error
 	rows.Close()
 	if len(grants) != 0 {
 		return nil, errors.New("SQLite shadow has grants without owner archives")
+	}
+	// A JOIN may hide orphan owner_archives rows. Never certify a partial set.
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM owner_archives").Scan(&count); err != nil {
+		return nil, err
+	}
+	if count != len(result) {
+		return nil, errors.New("SQLite shadow has owner archives without source posts")
 	}
 	return result, nil
 }
@@ -445,6 +461,14 @@ func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorI
 		if err := json.Unmarshal([]byte(raw), &imp); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if err := validSQLiteImport(imp); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("invalid SQL import %q: %w", id, err)
+		}
+		if _, exists := result[id]; exists {
+			rows.Close()
+			return nil, fmt.Errorf("duplicate SQL import: %q", id)
 		}
 		if imp.ID != id || imp.OwnerID != owner || imp.Author != author ||
 			imp.State != state || sqliteBool(imp.AutoSync) != autoSync ||
