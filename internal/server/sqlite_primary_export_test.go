@@ -75,32 +75,46 @@ func TestDetachedSQLToJSONRecoveryExportsNewerSQLWrites(t *testing.T) {
 
 func TestDetachedSQLToJSONRecoveryRefusesUnsafeState(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name        string
 		breakSource func(*testing.T, string)
 	}{
 		{"forged-grant", func(t *testing.T, root string) {
 			db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			defer db.Close()
 			_, err = db.Exec("INSERT INTO archive_grants(archive_id,grantee_owner_id,created_at) VALUES(?,?,?)",
 				strings.Repeat("1", 24), "forged", "2026-11-11T12:00:00Z")
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"forged-index", func(t *testing.T, root string) {
 			db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			defer db.Close()
 			_, err = db.Exec("UPDATE owner_archives SET job_state='done' WHERE archive_id=?", strings.Repeat("1", 24))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"uncheckpointed-wal", func(t *testing.T, root string) {
-			if err := os.WriteFile(filepath.Join(root, "metadata.db-wal"), []byte("pending"), 0600); err != nil { t.Fatal(err) }
+			if err := os.WriteFile(filepath.Join(root, "metadata.db-wal"), []byte("pending"), 0600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"metadata-journal", func(t *testing.T, root string) {
-			if err := os.WriteFile(filepath.Join(root, metadataJournalName), []byte("{}"), 0600); err != nil { t.Fatal(err) }
+			if err := os.WriteFile(filepath.Join(root, metadataJournalName), []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"cutover-intent", func(t *testing.T, root string) {
-			if err := os.WriteFile(filepath.Join(root, sqliteCutoverIntentName), []byte("{}"), 0600); err != nil { t.Fatal(err) }
+			if err := os.WriteFile(filepath.Join(root, sqliteCutoverIntentName), []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
