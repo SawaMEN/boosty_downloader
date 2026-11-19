@@ -132,6 +132,9 @@ func restoreDetachedSQLRecoveryWithHooks(fullSnapshot, sqlExport, output string,
 			return fmt.Errorf("cannot reconcile %s across recovery sources: %w", name, err)
 		}
 	}
+	if err := detachedSQLCheckForwardProgress(stage, sqlAbs); err != nil {
+		return fmt.Errorf("SQL export is older than the full data snapshot: %w", err)
+	}
 	for _, name := range []string{"jobs.json", "imports.json"} {
 		raw, err := backupReadPrivateFile(sqlAbs, name)
 		if err != nil {
@@ -232,6 +235,59 @@ func detachedSQLCompareOptional(fullData, sqlExport, name string) error {
 	}
 	if !bytes.Equal(full, fromSQL) {
 		return errors.New("account/author metadata changed after the full data snapshot")
+	}
+	return nil
+}
+
+
+// detachedSQLCheckForwardProgress refuses a detached recovery that would
+// rewind or silently drop metadata already present in the full data snapshot.
+// Only new records may be introduced. Existing IDs, owners and source
+// identities are immutable; changes need strictly newer UpdatedAt values.
+func detachedSQLCheckForwardProgress(fullData, sqlExport string) error {
+	oldJobs, err := sqliteShadowReadJobs(filepath.Join(fullData, "jobs.json"))
+	if err != nil {
+		return err
+	}
+	newJobs, err := sqliteShadowReadJobs(filepath.Join(sqlExport, "jobs.json"))
+	if err != nil {
+		return err
+	}
+	for id, before := range oldJobs {
+		after, exists := newJobs[id]
+		if !exists {
+			return fmt.Errorf("SQL recovery export is missing archive %s from full snapshot", id)
+		}
+		if before.OwnerID != after.OwnerID || before.Author != after.Author ||
+			before.PostID != after.PostID || !before.CreatedAt.Equal(after.CreatedAt) {
+			return fmt.Errorf("SQL recovery changed immutable archive identity: %s", id)
+		}
+		if after.UpdatedAt.Before(before.UpdatedAt) ||
+			(after.UpdatedAt.Equal(before.UpdatedAt) && !sqliteShadowEqual(before, after)) {
+			return fmt.Errorf("SQL recovery has stale or conflicting archive state: %s", id)
+		}
+	}
+	oldImports, err := sqliteShadowReadImports(filepath.Join(fullData, "imports.json"))
+	if err != nil {
+		return err
+	}
+	newImports, err := sqliteShadowReadImports(filepath.Join(sqlExport, "imports.json"))
+	if err != nil {
+		return err
+	}
+	for id, before := range oldImports {
+		after, exists := newImports[id]
+		if !exists {
+			return fmt.Errorf("SQL recovery export is missing import %s from full snapshot", id)
+		}
+		if before.OwnerID != after.OwnerID || before.Author != after.Author ||
+			!before.CreatedAt.Equal(after.CreatedAt) {
+			return fmt.Errorf("SQL recovery changed immutable import identity: %s", id)
+		}
+		if after.UpdatedAt.Before(before.UpdatedAt) ||
+			(after.UpdatedAt.Equal(before.UpdatedAt) && !sqliteShadowEqual(before, after)) {
+			return fmt.Errorf("SQL recovery has stale or conflicting import state: %s", id)
+		}
 	}
 	return nil
 }
