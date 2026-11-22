@@ -39,7 +39,18 @@ func readSQLiteBackendSelection(root string) (string, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() == 0 || info.Size() > 256 {
 		return "", errors.New("unsafe metadata backend selector")
 	}
-	raw, err := os.ReadFile(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", fmt.Errorf("cannot safely open backend selector: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() ||
+		opened.Mode().Perm()&0077 != 0 || opened.Size() == 0 || opened.Size() > 256 {
+		return "", errors.New("backend selector was replaced or is unsafe")
+	}
+	raw, err := io.ReadAll(file)
 	if err != nil {
 		return "", err
 	}
@@ -84,11 +95,6 @@ func PinJSONBackendSelection(root string) error {
 		return errors.New("cannot replace a SQLite-active backend marker with a JSON marker")
 	}
 	path := filepath.Join(absolute, sqliteBackendSelectionName)
-	if _, err := os.Lstat(path); err == nil {
-		return nil // existing verified JSON marker is already durable
-	} else if !os.IsNotExist(err) {
-		return err
-	}
 	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, "metadata.db-journal", "metadata.db-wal"} {
 		if _, err := os.Lstat(filepath.Join(absolute, pending)); err == nil {
 			return fmt.Errorf("cannot pin backend with pending journal: %s", pending)
@@ -101,6 +107,11 @@ func PinJSONBackendSelection(root string) error {
 	}
 	if _, err := sqliteShadowReadImports(filepath.Join(absolute, "imports.json")); err != nil {
 		return fmt.Errorf("JSON backend has no complete import snapshot: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return nil // existing verified JSON marker remains untouched
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	raw, err := json.Marshal(sqliteBackendSelection{Version: 1, Active: "json"})
 	if err != nil {
