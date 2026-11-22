@@ -108,6 +108,19 @@ func PinJSONBackendSelection(root string) error {
 	if _, err := sqliteShadowReadImports(filepath.Join(absolute, "imports.json")); err != nil {
 		return fmt.Errorf("JSON backend has no complete import snapshot: %w", err)
 	}
+	// A detached or shadow SQLite index may hold SQL-only changes, including
+	// new grants. Never declare older JSON to be the selected backend until
+	// exact JSON/SQL/ACL parity has been verified, or no SQL DB exists.
+	if info, err := os.Lstat(filepath.Join(absolute, "metadata.db")); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("SQLite database is not a regular file")
+		}
+		if err := verifySQLiteExport(absolute); err != nil {
+			return fmt.Errorf("cannot pin JSON over divergent SQLite: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	if _, err := os.Lstat(path); err == nil {
 		return nil // existing verified JSON marker remains untouched
 	} else if !os.IsNotExist(err) {
