@@ -128,6 +128,9 @@ func (a *App) setJobVisibility(w http.ResponseWriter, r *http.Request) {
 func (s *Storage) setEveryone(jobID, owner string, everyone bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return false, err
+	}
 	j, ok := s.jobs[jobID]
 	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return false, errors.New("архив не найден")
@@ -198,6 +201,9 @@ func (a *App) jobShares(w http.ResponseWriter, r *http.Request) {
 func (s *Storage) changeShare(jobID, owner, target string, grant bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return false, err
+	}
 	j, ok := s.jobs[jobID]
 	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return false, errors.New("архив не найден")
@@ -238,6 +244,9 @@ func (s *Storage) changeShare(jobID, owner, target string, grant bool) (bool, er
 func (s *Storage) transitionToQueued(jobID, owner string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, err
+	}
 	j, ok := s.jobs[jobID]
 	if !ok || j.OwnerID != owner || j.DeletedAt != nil {
 		return Job{}, errors.New("архив не найден")
@@ -261,6 +270,9 @@ func (s *Storage) transitionToQueued(jobID, owner string) (Job, error) {
 func (s *Storage) claimQueued(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, false
+	}
 	j, ok := s.jobs[id]
 	if !ok || j.State != "queued" {
 		return Job{}, false
@@ -278,6 +290,9 @@ func (s *Storage) claimQueued(id string) (Job, bool) {
 func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, false, err
+	}
 	for _, old := range s.jobs {
 		if old.OwnerID == j.OwnerID && old.Author == j.Author && old.PostID == j.PostID {
 			if old.DeletedAt != nil {
@@ -300,6 +315,9 @@ func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return 0, err
+	}
 	if author != "" {
 		for _, v := range s.imports {
 			if v.OwnerID == owner && v.Author == author && (v.State == "queued" || v.State == "running") {
@@ -345,6 +363,9 @@ func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 func (s *Storage) trashed(owner string) []Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return nil
+	}
 	out := make([]Job, 0)
 	for _, j := range s.jobs {
 		if j.OwnerID == owner && j.DeletedAt != nil {
@@ -364,6 +385,9 @@ func (s *Storage) trashed(owner string) []Job {
 func (s *Storage) trashedJob(owner, id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, false
+	}
 	job := s.jobs[id]
 	if job == nil || job.OwnerID != owner || job.DeletedAt == nil {
 		return Job{}, false
@@ -380,6 +404,9 @@ func (a *App) purgeTrashedJob(owner, id string, cutoff time.Time) (int, error) {
 func (s *Storage) restoreOwned(owner, id string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, err
+	}
 	j, ok := s.jobs[id]
 	if !ok || j.OwnerID != owner || j.DeletedAt == nil {
 		return Job{}, errors.New("архив не найден в корзине")
@@ -443,6 +470,10 @@ func (s *Storage) purgeOwnedBefore(owner, id, author string, cutoff time.Time) (
 // physical archive gate was acquired. Call only from purgeOwnedBefore.
 func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff time.Time, lockedJob Job) (int, error) {
 	s.mu.Lock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
 	if author != "" {
 		for _, v := range s.imports {
 			if v.OwnerID == owner && v.Author == author && (v.State == "queued" || v.State == "running") {

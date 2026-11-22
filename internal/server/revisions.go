@@ -200,6 +200,9 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return Job{}, err
+	}
 	j := s.jobs[id]
 	if j == nil || j.OwnerID != owner || j.DeletedAt != nil {
 		return Job{}, errors.New("архив не найден")

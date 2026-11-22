@@ -266,6 +266,9 @@ func (s *Storage) queuedImports() []string {
 func (s *Storage) createImports(imports []AuthorImport) ([]AuthorImport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return nil, err
+	}
 	ongoing := map[string]bool{}
 	for _, v := range s.imports {
 		if v.State == "queued" || v.State == "running" {
@@ -296,6 +299,9 @@ func (s *Storage) createImports(imports []AuthorImport) ([]AuthorImport, error) 
 func (s *Storage) cancelImport(owner, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	v, ok := s.imports[id]
 	if !ok || v.OwnerID != owner {
 		return errors.New("импорт не найден")
@@ -354,6 +360,9 @@ func (a *App) importSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	v := s.imports[id]
 	if v == nil || v.OwnerID != owner {
 		return errors.New("импорт не найден")
@@ -395,6 +404,9 @@ func (s *Storage) scheduleDueImportsAllowed(now time.Time, interval time.Duratio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return nil, err
+	}
 	latest := map[string]*AuthorImport{}
 	busy := map[string]bool{}
 	for _, v := range s.imports {
@@ -495,6 +507,9 @@ func (a *App) cancelImport(w http.ResponseWriter, r *http.Request) {
 func (s *Storage) updateImport(v AuthorImport) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	previous, ok := s.imports[v.ID]
 	if !ok {
 		return errors.New("импорт не найден")
@@ -513,6 +528,9 @@ func (s *Storage) updateImport(v AuthorImport) error {
 func (s *Storage) claimImport(id string) (AuthorImport, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return AuthorImport{}, false
+	}
 	v, ok := s.imports[id]
 	if !ok || v.State != "queued" {
 		return AuthorImport{}, false

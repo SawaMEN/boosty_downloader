@@ -68,3 +68,22 @@ func (s *Storage) sqlitePrimaryQuarantineLocked(cause error) error {
 	}
 	return s.primaryFatal
 }
+
+// sqlitePrimaryGuardMutationLocked prevents metadata mutations, archive
+// deletion and physical revision restores from acting on stale in-memory
+// ownership or grants. Call BEFORE changing maps or touching archive files,
+// with Storage.mu held. Legacy JSON mode has no extra SQL dependency.
+//
+// This uses the full checked SQL generation until production SQL-primary has
+// an audited, constant-time generation fence; it is intentionally not a live
+// SQL-primary activation switch.
+func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
+	if s.primaryFatal != nil {
+		return s.primaryFatal
+	}
+	if s.primary == nil {
+		return nil
+	}
+	_, _, err := s.sqlitePrimaryReadSnapshotLocked()
+	return err
+}

@@ -189,6 +189,9 @@ func (s *Storage) saveJobsLocked() error {
 func (s *Storage) upsert(job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	previous, exists := s.jobs[job.ID]
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[job.ID] = &job
@@ -332,6 +335,9 @@ func (s *Storage) archiveDir(owner, author, id string) string {
 func (s *Storage) migrateLegacyJobs() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	for _, j := range s.jobs {
 		if j.OwnerID != "" {
 			continue
@@ -445,6 +451,9 @@ func (s *Storage) migrateLegacyAuth() error {
 func (s *Storage) migrateArchiveTimestamps() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
 	changed := false
 	for _, j := range s.jobs {
 		if !j.ArchiveUpdatedAt.IsZero() || (j.State != "done" && j.State != "partial") {
