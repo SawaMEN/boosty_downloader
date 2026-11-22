@@ -76,9 +76,13 @@ func TestSQLFirstMutationGuardRejectsStaleMemoryBeforeChanges(t *testing.T) {
 			s, meta, root := sqlFirstStorageFixture(t)
 			oldJobs, oldImports := sqlFirstImages(t, s)
 			jobDisk, err := os.ReadFile(filepath.Join(root, "jobs.json"))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			importDisk, err := os.ReadFile(filepath.Join(root, "imports.json"))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			sqlFirstCorruptArchiveIndex(t, meta)
 			if err := tc.call(s); err == nil {
 				t.Fatal("SQL-first operation accepted divergent SQL index")
@@ -102,14 +106,22 @@ func TestSQLFirstMutationGuardRejectsStaleMemoryBeforeChanges(t *testing.T) {
 func TestSQLFirstTrashReadsAndPermanentPurgeFailClosed(t *testing.T) {
 	s, meta, root := sqlFirstStorageFixture(t)
 	id := strings.Repeat("1", 24)
-	if _, err := s.removeOwned("first", id, ""); err != nil { t.Fatal(err) }
+	if _, err := s.removeOwned("first", id, ""); err != nil {
+		t.Fatal(err)
+	}
 	job := s.jobs[id]
 	archive := s.archiveDir(job.OwnerID, job.Author, job.PostID)
-	if err := os.MkdirAll(archive, 0700); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(archive, 0700); err != nil {
+		t.Fatal(err)
+	}
 	keep := filepath.Join(archive, "keep.txt")
-	if err := os.WriteFile(keep, []byte("retain original archive"), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(keep, []byte("retain original archive"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(filepath.Join(root, "jobs.json"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	sqlFirstCorruptArchiveIndex(t, meta)
 	if got := s.trashed("first"); len(got) != 0 {
 		t.Fatal("trash listing exposed stale SQL-primary metadata")
@@ -120,7 +132,9 @@ func TestSQLFirstTrashReadsAndPermanentPurgeFailClosed(t *testing.T) {
 	if _, err := s.purgeOwned("first", "", ""); err == nil {
 		t.Fatal("bulk physical purge bypassed the SQL-primary generation guard")
 	}
-	if s.primaryFatal == nil { t.Fatal("permanent purge did not quarantine diverged SQL-primary") }
+	if s.primaryFatal == nil {
+		t.Fatal("permanent purge did not quarantine diverged SQL-primary")
+	}
 	if actual, err := os.ReadFile(keep); err != nil || string(actual) != "retain original archive" {
 		t.Fatalf("permanent purge modified original files: %q %v", actual, err)
 	}
@@ -135,16 +149,28 @@ func TestSQLFirstWorkerClaimsDoNotAdvanceStaleGenerations(t *testing.T) {
 	id := strings.Repeat("1", 24)
 	importID := strings.Repeat("a", 24)
 	j, ok := s.get(id)
-	if !ok { t.Fatal("missing archive") }
+	if !ok {
+		t.Fatal("missing archive")
+	}
 	j.State = "queued"
-	if err := s.upsert(j); err != nil { t.Fatal(err) }
+	if err := s.upsert(j); err != nil {
+		t.Fatal(err)
+	}
 	v := s.importsFor("first")[0]
 	v.State = "queued"
-	if err := s.updateImport(v); err != nil { t.Fatal(err) }
+	if err := s.updateImport(v); err != nil {
+		t.Fatal(err)
+	}
 	sqlFirstCorruptArchiveIndex(t, meta)
-	if _, ok := s.claimQueued(id); ok { t.Fatal("archive worker started with invalid SQL index") }
-	if _, ok := s.claimImport(importID); ok { t.Fatal("import worker started with invalid SQL index") }
-	if s.primaryFatal == nil { t.Fatal("worker claim failed to quarantine the SQL-primary adapter") }
+	if _, ok := s.claimQueued(id); ok {
+		t.Fatal("archive worker started with invalid SQL index")
+	}
+	if _, ok := s.claimImport(importID); ok {
+		t.Fatal("import worker started with invalid SQL index")
+	}
+	if s.primaryFatal == nil {
+		t.Fatal("worker claim failed to quarantine the SQL-primary adapter")
+	}
 	if s.jobs[id].State != "queued" || s.imports[importID].State != "queued" {
 		t.Fatal("worker mutated in-memory state despite SQL divergence")
 	}
