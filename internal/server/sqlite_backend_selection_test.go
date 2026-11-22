@@ -229,3 +229,25 @@ func TestUnsupportedSQLMarkerBlocksCommittedLegacyJournalBeforeMutation(t *testi
 		t.Fatal("legacy JSON transaction journal was unexpectedly consumed")
 	}
 }
+
+func TestPinExistingJSONBackendStillChecksPendingJournal(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	if err := PinJSONBackendSelection(root); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, sqliteBackendSelectionName)
+	marker, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, sqlitePrimaryTransactionName), []byte("pending"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PinJSONBackendSelection(root); err == nil {
+		t.Fatal("repeated backend pin ignored an unfinished SQL-first transaction")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(marker, got) {
+		t.Fatal("failed repeat changed the original backend selector")
+	}
+}
