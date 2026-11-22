@@ -88,6 +88,13 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = os.Chmod(root, 0700); e != nil {
 		return nil, e
 	}
+	backend, backendErr := readSQLiteBackendSelection(root)
+	if backendErr != nil {
+		return nil, fmt.Errorf("metadata backend selection failed: %w", backendErr)
+	}
+	if backend != "json" {
+		return nil, errors.New("SQLite-primary backend is selected but production Storage is not yet supported")
+	}
 	// Repair an interrupted cross-file metadata commit before parsing either
 	// JSON store or accepting any background work. Invalid journals fail closed.
 	if e = recoverMetadataPair(root); e != nil {
@@ -95,13 +102,6 @@ func newStorage(root, keyString string) (*Storage, error) {
 	}
 	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
 		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
-	}
-	backend, backendErr := readSQLiteBackendSelection(root)
-	if backendErr != nil {
-		return nil, fmt.Errorf("metadata backend selection failed: %w", backendErr)
-	}
-	if backend != "json" {
-		return nil, errors.New("SQLite-primary backend is selected but production Storage is not yet supported")
 	}
 	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport), gates: &archiveGates{}}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))

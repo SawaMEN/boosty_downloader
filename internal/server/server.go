@@ -88,6 +88,15 @@ func New(cfg Config) (*App, error) {
 			_ = dataDirLock.Close()
 		}
 	}()
+	// Fail closed on a corrupt/unsupported durable selection before even
+	// replaying the legacy JSON transaction journal.
+	backend, err := readSQLiteBackendSelection(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("небезопасный выбор хранилища метаданных: %w", err)
+	}
+	if backend != "json" {
+		return nil, errors.New("SQLite backend is durably selected but active SQL-primary startup is not supported yet")
+	}
 	// A crash may have interrupted the JSON two-file transaction. Resolve the
 	// journal before comparing either JSON file with an offline SQLite export.
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
@@ -97,16 +106,6 @@ func New(cfg Config) (*App, error) {
 	// JSON mirror. Finish or abort that transaction BEFORE serving any ACL.
 	if err := recoverSQLitePrimaryCommitLocked(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("SQL-primary journal requires manual recovery: %w", err)
-	}
-	// Never infer active SQL from a flag or the presence of metadata.db.
-	// An unknown or SQL-active durable selector blocks startup before
-	// account migration, HTTP or background jobs can touch legacy JSON.
-	backend, err := readSQLiteBackendSelection(cfg.DataDir)
-	if err != nil {
-		return nil, fmt.Errorf("небезопасный выбор хранилища метаданных: %w", err)
-	}
-	if backend != "json" {
-		return nil, errors.New("SQLite backend is durably selected but active SQL-primary startup is not supported yet")
 	}
 	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
 	// prepared intent. Cancel it only if the pinned recovery snapshot still

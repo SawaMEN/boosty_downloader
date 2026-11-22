@@ -46,16 +46,6 @@ func main() {
 	if *verifyFullSnapshot != "" {
 		verifiers++
 	}
-	if *restoreSQL != "" {
-		if err := server.RestoreDetachedSQLRecovery(*fromFull, *restoreSQL, *restoreTo); err != nil {
-			fmt.Fprintln(os.Stderr, "Detached combined SQL/JSON full recovery rejected:", err)
-			os.Exit(1)
-		}
-		fmt.Println("SQL/JSON metadata and full data restored to a NEW DETACHED directory:", *restoreTo)
-		fmt.Println("Original SQL export, full snapshot and live server were not changed.")
-		fmt.Println("This is NOT an in-place SQL-primary rollback; verify host configuration, ownership and TLS before any test service startup.")
-		return
-	}
 	if *restoreFullSnapshot != "" {
 		verifiers++
 	}
@@ -71,6 +61,16 @@ func main() {
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
 		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
+	}
+	if *restoreSQL != "" {
+		if err := server.RestoreDetachedSQLRecovery(*fromFull, *restoreSQL, *restoreTo); err != nil {
+			fmt.Fprintln(os.Stderr, "Detached combined SQL/JSON full recovery rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("SQL/JSON metadata and full data restored to a NEW DETACHED directory:", *restoreTo)
+		fmt.Println("Original SQL export, full snapshot and live server were not changed.")
+		fmt.Println("This is NOT an in-place SQL-primary rollback; verify host configuration, ownership and TLS before any test service startup.")
+		return
 	}
 	if *restoreFullSnapshot != "" {
 		if err := server.RestoreFullDataSnapshot(*restoreFullSnapshot, *restoreTo); err != nil {
