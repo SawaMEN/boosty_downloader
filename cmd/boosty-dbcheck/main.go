@@ -28,11 +28,12 @@ func main() {
 	prepareCutover := flag.Bool("prepare-sqlite-cutover", false, "durably stage a VERIFIED offline SQL cutover rehearsal without activating SQL-primary")
 	recoverCutover := flag.Bool("recover-sqlite-cutover", false, "safely cancel a prepared offline cutover intent after validating the pinned recovery point")
 	exportSQL := flag.String("export-sqlite-json-dir", "", "create a NEW detached verified SQL-to-JSON recovery metadata snapshot; does not change live JSON")
+	pinJSON := flag.Bool("pin-json-backend", false, "persist a private backend=json selector on a stopped server; never activates SQLite-primary")
 	flag.Parse()
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != ""} {
+	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON} {
 		if enabled {
 			modes++
 		}
@@ -68,7 +69,7 @@ func main() {
 		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreFullSnapshot != "" {
@@ -96,6 +97,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Metadata recovery backup OK: SHA-256 manifest, JSON, SQLite schema and owner ACLs match")
+		return
+	}
+	if *pinJSON {
+		if err := server.PinJSONBackendSelection(*root); err != nil {
+			fmt.Fprintln(os.Stderr, "Offline JSON backend selection rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Verified backend selector is pinned to JSON-primary. SQLite-primary has NOT been activated.")
 		return
 	}
 	if *exportSQL != "" {
