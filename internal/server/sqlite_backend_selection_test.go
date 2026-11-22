@@ -295,3 +295,33 @@ func TestPinJSONBackendSupportsLegacyDataWithoutSQLite(t *testing.T) {
 		t.Fatalf("legacy JSON marker not durable: %q %v", got, err)
 	}
 }
+
+func TestPinExistingJSONBackendRejectsForgedSQLIndexEvenWhenMetadataMatches(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	if err := PinJSONBackendSelection(root); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(root, sqliteBackendSelectionName)
+	pinned, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.db.Exec("UPDATE owner_archives SET title='forged-sql-title' WHERE archive_id=?",
+		strings.Repeat("1", 24)); err != nil {
+		t.Fatal(err)
+	}
+	if err := meta.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := PinJSONBackendSelection(root); err == nil {
+		t.Fatal("JSON backend pin ignored forged SQL indexed title")
+	}
+	after, err := os.ReadFile(markerPath)
+	if err != nil || !bytes.Equal(pinned, after) {
+		t.Fatal("failed pin modified a previously committed backend selector")
+	}
+}
