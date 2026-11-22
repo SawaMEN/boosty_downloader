@@ -376,7 +376,7 @@ func sqliteBackupJSONMatches(root, backup string) error {
 }
 
 func sqliteReindexNoWAL(root string) error {
-	for _, name := range []string{metadataJournalName, "metadata.db-wal"} {
+	for _, name := range []string{metadataJournalName, sqlitePrimaryTransactionName, "metadata.db-wal"} {
 		info, err := os.Lstat(filepath.Join(root, name))
 		if os.IsNotExist(err) {
 			continue
@@ -384,7 +384,8 @@ func sqliteReindexNoWAL(root string) error {
 		if err != nil {
 			return err
 		}
-		if name == metadataJournalName || !info.Mode().IsRegular() || info.Size() != 0 {
+		if name == metadataJournalName || name == sqlitePrimaryTransactionName ||
+			!info.Mode().IsRegular() || info.Size() != 0 {
 			return fmt.Errorf("offline reindex blocked by pending journal/WAL: %s", name)
 		}
 	}

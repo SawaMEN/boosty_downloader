@@ -61,6 +61,9 @@ func New(cfg Config) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
+	if primary := os.Getenv("BD_SQLITE_PRIMARY"); primary != "" && primary != "0" {
+		return nil, errors.New("BD_SQLITE_PRIMARY is not available: SQL-primary storage routing and production cutover have not passed verification")
+	}
 	if os.Getenv("BD_SQLITE_SHADOW") == "1" && os.Getenv("BD_SQLITE_VERIFY") == "1" {
 		return nil, errors.New("BD_SQLITE_SHADOW и BD_SQLITE_VERIFY не должны использоваться одновременно")
 	}
@@ -89,6 +92,11 @@ func New(cfg Config) (*App, error) {
 	// journal before comparing either JSON file with an offline SQLite export.
 	if err := recoverMetadataPair(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("восстановление метаданных не удалось: %w", err)
+	}
+	// SQL can have committed newer grants before a SIGKILL interrupted the
+	// JSON mirror. Finish or abort that transaction BEFORE serving any ACL.
+	if err := recoverSQLitePrimaryCommitLocked(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("SQL-primary journal requires manual recovery: %w", err)
 	}
 	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
 	// prepared intent. Cancel it only if the pinned recovery snapshot still

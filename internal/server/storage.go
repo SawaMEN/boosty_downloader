@@ -91,6 +91,9 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = recoverMetadataPair(root); e != nil {
 		return nil, fmt.Errorf("metadata transaction recovery failed: %w", e)
 	}
+	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
+		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
+	}
 	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport), gates: &archiveGates{}}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if e == nil {

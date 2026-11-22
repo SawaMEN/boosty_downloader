@@ -124,10 +124,12 @@ func PrepareSQLiteBackup(root, output string) (err error) {
 	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
 		return errors.New("backup destination cannot be inside the live data directory")
 	}
-	if _, err := os.Lstat(filepath.Join(root, metadataJournalName)); err == nil {
-		return errors.New("pending JSON metadata transaction: restart to recover before backup")
-	} else if !os.IsNotExist(err) {
-		return err
+	for _, journal := range []string{metadataJournalName, sqlitePrimaryTransactionName} {
+		if _, err := os.Lstat(filepath.Join(root, journal)); err == nil {
+			return fmt.Errorf("pending metadata transaction %s: restart to recover before backup", journal)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	// Raw copying a WAL-mode SQLite file without its uncheckpointed WAL would
 	// make a backup internally inconsistent. Fail rather than copy partial SQL.
