@@ -116,34 +116,11 @@ func PinJSONBackendSelection(root string) error {
 		if !info.Mode().IsRegular() {
 			return errors.New("SQLite database is not a regular file")
 		}
-		if err := verifySQLiteExport(absolute); err != nil {
+		if err := verifyJSONSQLiteAgreement(absolute); err != nil {
 			return fmt.Errorf("cannot pin JSON over divergent SQLite: %w", err)
 		}
 		if err := verifySQLiteSnapshotInventory(absolute); err != nil {
 			return fmt.Errorf("cannot pin JSON over unverified SQL/media inventory: %w", err)
-		}
-		// The older export check does not compare every independently indexed
-		// column (notably title and timestamps). An exact SQL projection read
-		// catches forged indices and grants before JSON can be pinned.
-		jobs, err := sqliteShadowReadJobs(filepath.Join(absolute, "jobs.json"))
-		if err != nil {
-			return err
-		}
-		imports, err := sqliteShadowReadImports(filepath.Join(absolute, "imports.json"))
-		if err != nil {
-			return err
-		}
-		db, err := openSQLiteReadOnly(filepath.Join(absolute, "metadata.db"))
-		if err != nil {
-			return err
-		}
-		parityErr := (&sqliteMetadata{db: db}).verifyJSONParity(context.Background(), jobs, imports)
-		closeErr := db.Close()
-		if parityErr != nil {
-			return fmt.Errorf("cannot pin JSON over a mismatching SQL index/ACL: %w", parityErr)
-		}
-		if closeErr != nil {
-			return closeErr
 		}
 	} else if !os.IsNotExist(err) {
 		return err
@@ -182,4 +159,43 @@ func PinJSONBackendSelection(root string) error {
 		return fmt.Errorf("backend selector cannot replace an existing destination: %w", err)
 	}
 	return syncMetadataDirectory(absolute)
+}
+
+// verifyJSONSQLiteAgreement guards both durable JSON selection and later JSON
+// restarts. Once a backend is pinned, a newer SQL-only grant must never be
+// overwritten by an unverified JSON startup. Call with the data-dir lock held.
+// A legacy JSON deployment without metadata.db is still supported.
+func verifyJSONSQLiteAgreement(root string) error {
+	sqlPath := filepath.Join(root, "metadata.db")
+	info, err := os.Lstat(sqlPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("unsafe SQLite file beside pinned JSON backend")
+	}
+	if err := verifySQLiteExport(root); err != nil {
+		return fmt.Errorf("SQLite/JSON export parity rejected: %w", err)
+	}
+	jobs, err := sqliteShadowReadJobs(filepath.Join(root, "jobs.json"))
+	if err != nil {
+		return err
+	}
+	imports, err := sqliteShadowReadImports(filepath.Join(root, "imports.json"))
+	if err != nil {
+		return err
+	}
+	db, err := openSQLiteReadOnly(sqlPath)
+	if err != nil {
+		return err
+	}
+	parityErr := (&sqliteMetadata{db: db}).verifyJSONParity(context.Background(), jobs, imports)
+	closeErr := db.Close()
+	if parityErr != nil {
+		return fmt.Errorf("pinned JSON differs from indexed SQL metadata/ACL: %w", parityErr)
+	}
+	return closeErr
 }
