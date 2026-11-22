@@ -97,7 +97,12 @@ func PinJSONBackendSelection(root string) error {
 	}
 	path := filepath.Join(absolute, sqliteBackendSelectionName)
 	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, "metadata.db-journal", "metadata.db-wal"} {
-		if _, err := os.Lstat(filepath.Join(absolute, pending)); err == nil {
+		if info, err := os.Lstat(filepath.Join(absolute, pending)); err == nil {
+			// A clean, zero-byte SQLite WAL sidecar may remain after a
+			// read-only checkpoint. Only a real pending WAL blocks pinning.
+			if pending == "metadata.db-wal" && info.Mode().IsRegular() && info.Size() == 0 {
+				continue
+			}
 			return fmt.Errorf("cannot pin backend with pending journal: %s", pending)
 		} else if !os.IsNotExist(err) {
 			return err

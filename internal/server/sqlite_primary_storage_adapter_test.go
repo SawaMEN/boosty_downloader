@@ -138,10 +138,15 @@ func TestSQLFirstStorageDoesNotFallBackToJSONAfterBadSQLACL(t *testing.T) {
 
 func TestSQLFirstStorageRefusesConcurrentShadowWriter(t *testing.T) {
 	store, _, root := sqlFirstStorageFixture(t)
-	store.shadow = &sqliteShadow{}
 	job, ok := store.get(strings.Repeat("1", 24))
 	if !ok {
 		t.Fatal("missing test archive")
+	}
+	// Read the pre-conflict job while the internal SQL-first reader is valid.
+	// Once both incompatible writers are configured, reads must fail closed.
+	store.shadow = &sqliteShadow{}
+	if _, ok := store.get(job.ID); ok || store.primaryFatal == nil {
+		t.Fatal("SQL-primary reader served data despite an active shadow writer")
 	}
 	before, err := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if err != nil {
