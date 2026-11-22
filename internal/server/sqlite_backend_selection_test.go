@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
+	"time"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,5 +161,71 @@ func TestPinJSONBackendRefusesMissingSnapshotAndExistingForeignSelector(t *testi
 	}
 	if err := PinJSONBackendSelection(root); err == nil || !strings.Contains(err.Error(), "cannot replace") {
 		t.Fatalf("pin silently switched SQLite back to JSON: %v", err)
+	}
+}
+
+func TestUnsupportedSQLMarkerBlocksCommittedLegacyJournalBeforeMutation(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	jobsPath := filepath.Join(root, "jobs.json")
+	original, err := os.ReadFile(jobsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := sqliteShadowReadJobs(jobsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("1", 24)
+	j := jobs[id]
+	j.Title = "must never roll forward"
+	j.UpdatedAt = j.UpdatedAt.Add(time.Minute)
+	jobs[id] = j
+	newJobs, err := json.Marshal(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origImports, err := os.ReadFile(filepath.Join(root, "imports.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobImage, err := checkedMetadataImage(root, "jobs.json", newJobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importImage, err := checkedMetadataImage(root, "imports.json", origImports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := json.Marshal(metadataTransaction{
+		Version: metadataJournalVersion, Phase: "committed",
+		Jobs: jobImage, Imports: importImage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, metadataJournalName), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, sqliteBackendSelectionName),
+		[]byte(`{"version":1,"active":"sqlite"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStorage(root, testKey(t)); err == nil {
+		t.Fatal("SQL-selected backend recovered a legacy JSON journal before rejecting startup")
+	}
+	if app, err := New(Config{
+		DataDir: root, AdminUser: "admin", AdminPassword: "strong-password-123",
+		SecretKey: testKey(t),
+	}); err == nil {
+		app.Close()
+		t.Fatal("server recovered JSON journal while SQL was selected")
+	}
+	after, err := os.ReadFile(jobsPath)
+	if err != nil || !bytes.Equal(original, after) {
+		t.Fatal("SQL-selected deployment's JSON was modified before backend validation")
+	}
+	remaining, err := os.ReadFile(filepath.Join(root, metadataJournalName))
+	if err != nil || !bytes.Equal(journal, remaining) {
+		t.Fatal("legacy JSON transaction journal was unexpectedly consumed")
 	}
 }
