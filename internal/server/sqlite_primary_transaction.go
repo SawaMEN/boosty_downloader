@@ -183,9 +183,9 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 			return err
 		}
 	}
-	if err := sqliteReindexNoWAL(root); err != nil {
-		return err
-	}
+	// SQLite itself recovers a committed WAL after SIGKILL. An offline
+	// no-WAL preflight here would incorrectly reject an ordinary crash.
+	// The directory OS lock excludes cooperating concurrent writers.
 	db, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
 	if err != nil {
 		return err
