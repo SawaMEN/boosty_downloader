@@ -25,6 +25,8 @@ type Storage struct {
 	authors map[string][]string
 	imports map[string]*AuthorImport
 	shadow  *sqliteShadow
+	primary *sqliteMetadata // internal SQL-first adapter; never enabled by production configuration
+	primaryFatal error       // no further writes after unresolvable SQL/JSON divergence
 	gates   *archiveGates
 }
 
@@ -151,6 +153,9 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 func (s *Storage) saveJobsLocked() error {
+	if s.primary != nil {
+		return s.saveSQLitePrimaryLocked()
+	}
 	b, e := json.MarshalIndent(s.jobs, "", "  ")
 	if e != nil {
 		return e

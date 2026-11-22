@@ -189,6 +189,9 @@ func jsonUnmarshalImports(raw []byte, into *map[string]*AuthorImport) error {
 }
 
 func (s *Storage) saveImportsLocked() error {
+	if s.primary != nil {
+		return s.saveSQLitePrimaryLocked()
+	}
 	raw, err := json.MarshalIndent(s.imports, "", "  ")
 	if err != nil {
 		return err

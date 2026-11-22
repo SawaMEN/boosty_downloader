@@ -277,6 +277,9 @@ func writeMetadataPair(root string, jobs, imports []byte) error {
 }
 
 func (s *Storage) saveJobsImportsLocked() error {
+	if s.primary != nil {
+		return s.saveSQLitePrimaryLocked()
+	}
 	jobs, err := json.MarshalIndent(s.jobs, "", "  ")
 	if err != nil {
 		return err
