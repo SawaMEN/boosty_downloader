@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,6 +118,32 @@ func PinJSONBackendSelection(root string) error {
 		}
 		if err := verifySQLiteExport(absolute); err != nil {
 			return fmt.Errorf("cannot pin JSON over divergent SQLite: %w", err)
+		}
+		if err := verifySQLiteSnapshotInventory(absolute); err != nil {
+			return fmt.Errorf("cannot pin JSON over unverified SQL/media inventory: %w", err)
+		}
+		// The older export check does not compare every independently indexed
+		// column (notably title and timestamps). An exact SQL projection read
+		// catches forged indices and grants before JSON can be pinned.
+		jobs, err := sqliteShadowReadJobs(filepath.Join(absolute, "jobs.json"))
+		if err != nil {
+			return err
+		}
+		imports, err := sqliteShadowReadImports(filepath.Join(absolute, "imports.json"))
+		if err != nil {
+			return err
+		}
+		db, err := openSQLiteReadOnly(filepath.Join(absolute, "metadata.db"))
+		if err != nil {
+			return err
+		}
+		parityErr := (&sqliteMetadata{db: db}).verifyJSONParity(context.Background(), jobs, imports)
+		closeErr := db.Close()
+		if parityErr != nil {
+			return fmt.Errorf("cannot pin JSON over a mismatching SQL index/ACL: %w", parityErr)
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	} else if !os.IsNotExist(err) {
 		return err
