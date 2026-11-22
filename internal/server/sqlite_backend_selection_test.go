@@ -3,11 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"time"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPinJSONBackendIsCreateOnlyPrivateAndDoesNotMutateData(t *testing.T) {
