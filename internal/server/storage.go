@@ -103,6 +103,16 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
 		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
 	}
+	// A persistent JSON selection is stronger than the legacy implicit JSON
+	// default: if SQLite was subsequently changed, refuse to initialize JSON
+	// or restart workers before verifying the complete SQL/JSON/ACL generation.
+	if _, selectionErr := os.Lstat(filepath.Join(root, sqliteBackendSelectionName)); selectionErr == nil {
+		if e = verifyJSONSQLiteAgreement(root); e != nil {
+			return nil, fmt.Errorf("pinned JSON backend startup parity failed: %w", e)
+		}
+	} else if !os.IsNotExist(selectionErr) {
+		return nil, selectionErr
+	}
 	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport), gates: &archiveGates{}}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if e == nil {
