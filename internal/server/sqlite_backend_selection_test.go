@@ -325,3 +325,49 @@ func TestPinExistingJSONBackendRejectsForgedSQLIndexEvenWhenMetadataMatches(t *t
 		t.Fatal("failed pin modified a previously committed backend selector")
 	}
 }
+
+func TestPinnedJSONStartupRefusesSQLOnlyChangesAfterPin(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	if err := PinJSONBackendSelection(root); err != nil {
+		t.Fatal(err)
+	}
+	jobsPath := filepath.Join(root, "jobs.json")
+	pinnedJSON, err := os.ReadFile(jobsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("1", 24)
+	before, err := meta.job(context.Background(), "first", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := before
+	changed.Title = "newer SQL only"
+	changed.SharedWith = []string{"sql-only-recipient"}
+	changed.UpdatedAt = before.UpdatedAt.Add(time.Minute)
+	if err := meta.apply(context.Background(),
+		[]sqliteArchiveChange{{Before: &before, After: changed}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := meta.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStorage(root, testKey(t)); err == nil {
+		t.Fatal("pinned JSON Storage accepted later SQL-only update")
+	}
+	if app, err := New(Config{
+		DataDir: root, AdminUser: "admin", AdminPassword: "strong-password-123",
+		SecretKey: testKey(t),
+	}); err == nil {
+		app.Close()
+		t.Fatal("server started JSON-primary while pinned SQL had newer grants")
+	}
+	after, err := os.ReadFile(jobsPath)
+	if err != nil || !bytes.Equal(pinnedJSON, after) {
+		t.Fatal("rejected JSON startup rewrote live jobs")
+	}
+}
