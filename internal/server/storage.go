@@ -188,6 +188,17 @@ func (s *Storage) upsert(job Job) error {
 func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primary != nil {
+		jobs, _, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return Job{}, false
+		}
+		j, ok := jobs[id]
+		if !ok || j.DeletedAt != nil {
+			return Job{}, false
+		}
+		return j, true
+	}
 	if s.primaryFatal != nil {
 		return Job{}, false
 	}
@@ -203,6 +214,19 @@ func (s *Storage) all() []Job {
 	if s.primaryFatal != nil {
 		return nil
 	}
+	if s.primary != nil {
+		jobs, _, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return nil
+		}
+		out := make([]Job, 0, len(jobs))
+		for _, j := range jobs {
+			if j.DeletedAt == nil {
+				out = append(out, j)
+			}
+		}
+		return out
+	}
 	out := make([]Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
 		if j.DeletedAt == nil {
@@ -216,6 +240,19 @@ func (s *Storage) queued() []string {
 	defer s.mu.Unlock()
 	if s.primaryFatal != nil {
 		return nil
+	}
+	if s.primary != nil {
+		jobs, _, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return nil
+		}
+		out := make([]string, 0)
+		for id, job := range jobs {
+			if job.DeletedAt == nil && job.State == "queued" {
+				out = append(out, id)
+			}
+		}
+		return out
 	}
 	out := make([]string, 0)
 	for id, j := range s.jobs {

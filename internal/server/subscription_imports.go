@@ -211,6 +211,20 @@ func (s *Storage) importsFor(owner string) []AuthorImport {
 	if s.primaryFatal != nil {
 		return nil
 	}
+	if s.primary != nil {
+		_, imports, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return nil
+		}
+		out := make([]AuthorImport, 0)
+		for _, v := range imports {
+			if v.OwnerID == owner {
+				out = append(out, v)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+		return out
+	}
 	out := make([]AuthorImport, 0)
 	for _, v := range s.imports {
 		if v.OwnerID == owner {
@@ -225,6 +239,20 @@ func (s *Storage) queuedImports() []string {
 	defer s.mu.Unlock()
 	if s.primaryFatal != nil {
 		return nil
+	}
+	if s.primary != nil {
+		_, imports, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return nil
+		}
+		var out []string
+		for id, v := range imports {
+			if v.State == "queued" {
+				out = append(out, id)
+			}
+		}
+		sort.Strings(out)
+		return out
 	}
 	var out []string
 	for id, v := range s.imports {
@@ -289,6 +317,14 @@ func (s *Storage) importCanceled(id string) bool {
 	defer s.mu.Unlock()
 	if s.primaryFatal != nil {
 		return true
+	}
+	if s.primary != nil {
+		_, imports, err := s.sqlitePrimaryReadSnapshotLocked()
+		if err != nil {
+			return true
+		}
+		v, ok := imports[id]
+		return !ok || v.State == "canceled"
 	}
 	v := s.imports[id]
 	return v == nil || v.State == "canceled"
