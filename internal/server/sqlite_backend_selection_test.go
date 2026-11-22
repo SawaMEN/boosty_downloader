@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -249,5 +250,48 @@ func TestPinExistingJSONBackendStillChecksPendingJournal(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(marker, got) {
 		t.Fatal("failed repeat changed the original backend selector")
+	}
+}
+
+func TestPinJSONBackendRefusesSQLOnlyGrantUpdates(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("1", 24)
+	before, err := meta.job(context.Background(), "first", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.SharedWith = []string{"new-sql-member"}
+	after.UpdatedAt = before.UpdatedAt.Add(time.Minute)
+	if err := meta.apply(context.Background(),
+		[]sqliteArchiveChange{{Before: &before, After: after}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := meta.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := PinJSONBackendSelection(root); err == nil {
+		t.Fatal("JSON backend was pinned despite newer SQL-only grants")
+	}
+	if _, err := os.Lstat(filepath.Join(root, sqliteBackendSelectionName)); !os.IsNotExist(err) {
+		t.Fatal("unsafe JSON selection was published")
+	}
+}
+
+func TestPinJSONBackendSupportsLegacyDataWithoutSQLite(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	if err := os.Remove(filepath.Join(root, "metadata.db")); err != nil {
+		t.Fatal(err)
+	}
+	if err := PinJSONBackendSelection(root); err != nil {
+		t.Fatal("JSON-only legacy deployment should be supported:", err)
+	}
+	got, err := readSQLiteBackendSelection(root)
+	if err != nil || got != "json" {
+		t.Fatalf("legacy JSON marker not durable: %q %v", got, err)
 	}
 }
