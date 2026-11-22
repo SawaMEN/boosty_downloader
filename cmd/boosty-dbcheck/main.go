@@ -105,6 +105,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Verified backend selector is pinned to JSON-primary. SQLite-primary has NOT been activated.")
+		fmt.Println("WARNING: future JSON writes without a synchronized SQLite index may BLOCK the next startup; not a production cutover.")
 		return
 	}
 	if *exportSQL != "" {
