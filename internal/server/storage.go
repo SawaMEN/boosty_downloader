@@ -96,6 +96,13 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
 		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
 	}
+	backend, backendErr := readSQLiteBackendSelection(root)
+	if backendErr != nil {
+		return nil, fmt.Errorf("metadata backend selection failed: %w", backendErr)
+	}
+	if backend != "json" {
+		return nil, errors.New("SQLite-primary backend is selected but production Storage is not yet supported")
+	}
 	s := &Storage{root: root, key: key, jobs: make(map[string]*Job), authors: make(map[string][]string), imports: make(map[string]*AuthorImport), gates: &archiveGates{}}
 	raw, e := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if e == nil {
