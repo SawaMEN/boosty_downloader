@@ -17,17 +17,17 @@ import (
 )
 
 type Storage struct {
-	mu      sync.Mutex
-	blobMu  sync.Mutex
-	root    string
-	key     []byte
-	jobs    map[string]*Job
-	authors map[string][]string
-	imports map[string]*AuthorImport
-	shadow  *sqliteShadow
-	primary *sqliteMetadata // internal SQL-first adapter; never enabled by production configuration
-	primaryFatal error       // no further writes after unresolvable SQL/JSON divergence
-	gates   *archiveGates
+	mu           sync.Mutex
+	blobMu       sync.Mutex
+	root         string
+	key          []byte
+	jobs         map[string]*Job
+	authors      map[string][]string
+	imports      map[string]*AuthorImport
+	shadow       *sqliteShadow
+	primary      *sqliteMetadata // internal SQL-first adapter; never enabled by production configuration
+	primaryFatal error           // no further writes after unresolvable SQL/JSON divergence
+	gates        *archiveGates
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
@@ -188,6 +188,9 @@ func (s *Storage) upsert(job Job) error {
 func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return Job{}, false
+	}
 	j, ok := s.jobs[id]
 	if !ok || j.DeletedAt != nil {
 		return Job{}, false
@@ -197,6 +200,9 @@ func (s *Storage) get(id string) (Job, bool) {
 func (s *Storage) all() []Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return nil
+	}
 	out := make([]Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
 		if j.DeletedAt == nil {
@@ -208,6 +214,9 @@ func (s *Storage) all() []Job {
 func (s *Storage) queued() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return nil
+	}
 	out := make([]string, 0)
 	for id, j := range s.jobs {
 		if j.DeletedAt == nil && j.State == "queued" {

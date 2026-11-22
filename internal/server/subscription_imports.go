@@ -208,6 +208,9 @@ func (s *Storage) saveImportsLocked() error {
 func (s *Storage) importsFor(owner string) []AuthorImport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return nil
+	}
 	out := make([]AuthorImport, 0)
 	for _, v := range s.imports {
 		if v.OwnerID == owner {
@@ -220,6 +223,9 @@ func (s *Storage) importsFor(owner string) []AuthorImport {
 func (s *Storage) queuedImports() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return nil
+	}
 	var out []string
 	for id, v := range s.imports {
 		if v.State == "queued" {
@@ -281,6 +287,9 @@ func (s *Storage) cancelImport(owner, id string) error {
 func (s *Storage) importCanceled(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.primaryFatal != nil {
+		return true
+	}
 	v := s.imports[id]
 	return v == nil || v.State == "canceled"
 }
