@@ -256,4 +256,3 @@ func sqlitePrimaryDecodeImages(jobsRaw, importsRaw []byte) (map[string]Job, map[
 	}
 	return jobs, imports, nil
 }
-
