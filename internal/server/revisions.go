@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -127,11 +129,17 @@ func linkArchiveSnapshot(src, dst string) (ArchiveManifest, error) {
 // new download must not destroy the last known-good version. All large media
 // remain shared inodes, so a revision does not duplicate physical video data.
 func (s *Storage) saveArchiveRevision(job Job) (string, error) {
-	// SQL-first history staging and its publication journal must share the
-	// metadata writer lock. JSON-only restore already owns this lock.
+	// Archive refresh calls this wrapper; revision restore already owns
+	// Storage.mu and uses the locked implementation directly.
 	if s.primary != nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+	}
+	return s.saveArchiveRevisionLocked(job)
+}
+
+func (s *Storage) saveArchiveRevisionLocked(job Job) (string, error) {
+	if s.primary != nil {
 		if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 			return "", err
 		}
@@ -261,6 +269,14 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 }
 
 func (s *Storage) pruneArchiveRevisions(job Job) error {
+	if s.primary != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
+	return s.pruneArchiveRevisionsLocked(job)
+}
+
+func (s *Storage) pruneArchiveRevisionsLocked(job Job) error {
 	list, err := s.listArchiveRevisions(job)
 	if err != nil {
 		return err
@@ -270,7 +286,7 @@ func (s *Storage) pruneArchiveRevisions(job Job) error {
 	}
 	for _, version := range list[maxArchiveRevisions:] {
 		if s.primary != nil {
-			if err := s.deleteSQLHistory(job, version.ID); err != nil {
+			if err := s.deleteSQLHistoryLocked(job, version.ID); err != nil {
 				return err
 			}
 			continue
@@ -292,7 +308,9 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		return Job{}, err
 	}
 	if s.primary != nil {
-		return Job{}, errors.New("revision restoration in candidate SQL-primary requires a separate filesystem cutover")
+		if err := sqliteHistoryDeleteGuard(s.root, false); err != nil {
+			return Job{}, err
+		}
 	}
 	// A prior failed attempt must be reconciled before starting a second
 	// restore or exposing a different metadata generation to the journal.
@@ -339,6 +357,18 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		return Job{}, errors.New("jobs.json не соответствует памяти перед восстановлением")
 	}
 	old := *j
+	// The revision restore journal requires a finished old job; do not
+	// create a transaction that startup recovery cannot classify.
+	if old.State != "done" && old.State != "partial" {
+		return Job{}, errors.New("восстановление требует завершённого архива")
+	}
+	if s.primary != nil {
+		// Validate both the selected immutable historical revision and the
+		// live version before creating a new history snapshot.
+		if err := s.verifySQLRestoreRevisionLocked(old, rev, current); err != nil {
+			return Job{}, err
+		}
+	}
 	oldManifest, err := revisionRestoreManifestDigest(live, old.Author, old.PostID)
 	if err != nil {
 		return Job{}, err
@@ -364,7 +394,10 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	// Keep the previous finished version before touching its live directory.
 	// A pre-journal crash can leave an extra history snapshot, but never loses
 	// the original live archive or changes ownership/grants.
-	if _, err := s.saveArchiveRevision(old); err != nil {
+	if _, err := s.saveArchiveRevisionLocked(old); err != nil {
+		return Job{}, err
+	}
+	if err := os.Mkdir(stage, 0700); err != nil {
 		return Job{}, err
 	}
 	man, err := linkArchiveSnapshot(revision, stage)
@@ -375,6 +408,18 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	if man.Author != old.Author || man.PostID != old.PostID {
 		_ = os.RemoveAll(stage)
 		return Job{}, errors.New("версия принадлежит другой публикации")
+	}
+	if s.primary != nil {
+		sourceHash, sourceErr := sqliteHistoryFilesHash(revision)
+		stageHash, stageErr := sqliteHistoryFilesHash(stage)
+		if sourceErr != nil || stageErr != nil || sourceHash != stageHash {
+			_ = os.RemoveAll(stage)
+			return Job{}, errors.New("historical source changed during restore staging")
+		}
+		if err := s.verifySQLRestoreRevisionLocked(old, rev, current); err != nil {
+			_ = os.RemoveAll(stage)
+			return Job{}, err
+		}
 	}
 	journal.NewManifest, err = revisionRestoreManifestDigest(stage, old.Author, old.PostID)
 	if err != nil {
@@ -425,6 +470,11 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	// An error after an atomic metadata rename may still mean the restore
 	// committed. Classify from disk generation, not a returned fsync error.
 	abort := func(cause error) (Job, error) {
+		if s.primary != nil {
+			if recoveryErr := s.recoverSQLFileCommitLocked(); recoveryErr != nil {
+				return Job{}, s.sqlitePrimaryQuarantineLocked(recoveryErr)
+			}
+		}
 		if recoveryErr := recoverArchiveRestoreLocked(s.root); recoveryErr != nil {
 			s.primaryFatal = fmt.Errorf("archive revision restore recovery required: %w; original error: %v", recoveryErr, cause)
 			return Job{}, s.primaryFatal
@@ -477,9 +527,47 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 			return abort(err)
 		}
 	}
-	*j = next
-	if err := s.saveJobsLocked(); err != nil {
-		return abort(err)
+	if s.primary != nil {
+		imports := make(map[string]AuthorImport, len(s.imports))
+		for key, item := range s.imports {
+			if item == nil {
+				return abort(errors.New("nil SQL restore import"))
+			}
+			imports[key] = *item
+		}
+		restored, err := sqliteReindexReadRevision(s.root, next, "current:"+next.ID,
+			[]string{"library", next.OwnerID, next.Author, next.PostID}, true)
+		if err != nil {
+			return abort(err)
+		}
+		hooks := &sqlitePrimaryCommitHooks{
+			checkpoint: func(phase string) error {
+				if s.restoreCheckpoint != nil {
+					return s.restoreCheckpoint("primary-"+phase)
+				}
+				return nil
+			},
+			reconcileExtra: func(ctx context.Context, tx *sql.Tx) error {
+				// Prove the restored bytes still match the selected immutable
+				// history row, even after the directory was swapped.
+				historical := restored
+				historical.id, historical.current = rev, false
+				historical.path = filepath.ToSlash(filepath.Join("revisions", next.OwnerID, next.Author, next.PostID, rev))
+				if err := sqliteVerifyIndexedRevision(ctx, tx, historical, afterJobs); err != nil {
+					return err
+				}
+				return sqliteArchivePublishCurrentRevision(ctx, tx, restored, afterJobs)
+			},
+		}
+		if err := sqlitePrimaryCommitMetadata(s.root, s.primary, afterJobs, imports, hooks); err != nil {
+			return abort(err)
+		}
+		*j = next
+	} else {
+		*j = next
+		if err := s.saveJobsLocked(); err != nil {
+			return abort(err)
+		}
 	}
 	if s.restoreCheckpoint != nil {
 		if err := s.restoreCheckpoint("metadata"); err != nil {
@@ -490,7 +578,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		s.primaryFatal = fmt.Errorf("restored archive committed, cleanup pending until startup recovery: %w", err)
 		return Job{}, s.primaryFatal
 	}
-	_ = s.pruneArchiveRevisions(next)
+	_ = s.pruneArchiveRevisionsLocked(next)
 	s.notifySQLiteMedia()
 	return next, nil
 }
