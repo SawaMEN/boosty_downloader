@@ -305,3 +305,19 @@ sudo boosty-dbcheck --data-dir /var/lib/boosty-downloader \
 `--cutover-preflight` откажет, если хотя бы один из пунктов не выполнен: существование и SHA-256 резервной копии, совпадение её `jobs.json`, `imports.json` и `metadata.db` с текущими файлами, а также одинаковое наличие и содержимое `accounts.json` и `authors.json`, отсутствие незавершённого журнала JSON или WAL, совпадение владельческих метаданных и ACL в SQL/JSON, валидность истории и SHA-256 реальных медиа/CAS-файлов. Команда **ничего не меняет** и не означает разрешение включить SQLite как primary backend. Она не заменяет полный снимок VPS (медиа, ключи, аккаунты, TLS), проверку восстановления и испытания отказов диска.
 
 При экспериментальном `BD_SQLITE_MEDIA_SHADOW=1` сканирование файлов использует контекст отмены сервера; при остановке службы оно должно прерываться, а SQL-транзакция — откатываться. Индекс и физические CAS-файлы не используются для выдачи доступа пользователям.
+
+
+## Полный recovery point для пробного SQLite cutover (24.11.2026)
+
+Для более строгой репетиции на остановленном сервисе, после создания актуального согласованного SQL-экспорта:
+
+```bash
+sudo bdy stop
+sudo boosty-dbcheck --data-dir /var/lib/boosty-downloader --backup-dir /root/boosty-cutover-meta
+sudo boosty-dbcheck --data-dir /var/lib/boosty-downloader --full-snapshot-dir /root/boosty-cutover-full
+sudo boosty-dbcheck --data-dir /var/lib/boosty-downloader \
+  --prepare-sqlite-cutover --recovery-dir /root/boosty-cutover-meta \
+  --cutover-full-snapshot-dir /root/boosty-cutover-full
+```
+
+Флаг `--cutover-full-snapshot-dir` также работает с `--cutover-preflight`, без создания журнала. Проверяются точное дерево живых файлов, размеры, права, SHA-256, токены, служебные данные и все архивные файлы. Репетиция v2 закрепляет хеш полного манифеста; при запуске или явном `--recover-sqlite-cutover` повторяет полную сверку. Изменение даже неиндексированных файлов оставляет intent и блокирует запуск. Существующие репетиции v1 продолжают поддерживаться. Это по-прежнему **не активация SQLite-primary** и не замена отдельному резервированию внешней конфигурации и VPS.

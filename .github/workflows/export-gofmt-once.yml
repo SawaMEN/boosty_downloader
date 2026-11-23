@@ -1,4 +1,4 @@
-name: Archive metadata transaction verification
+name: Full recovery point verification
 on:
   push:
     branches: [tooling/gofmt-video-journal-20261123]
@@ -10,12 +10,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Format and verify archive journal
+      - name: Format and test cutover recovery
         shell: bash
         run: |
-          gofmt -w internal/server/archive_update_transaction.go internal/server/archive.go internal/server/archive_update_transaction_test.go
-          go test ./internal/server -run '^TestArchiveUpdate' -count=1 -v
-          for path in internal/server/archive_update_transaction.go internal/server/archive.go internal/server/archive_update_transaction_test.go; do
+          gofmt -w internal/server/sqlite_cutover_journal.go internal/server/sqlite_cutover_preflight.go internal/server/sqlite_backend_selection.go cmd/boosty-dbcheck/main.go internal/server/sqlite_cutover_full_snapshot.go internal/server/sqlite_cutover_full_snapshot_test.go
+          go test ./internal/server -run '^TestSQLiteCutover' -count=1 -v
+          go test ./cmd/boosty-dbcheck
+          for path in internal/server/sqlite_cutover_journal.go internal/server/sqlite_cutover_preflight.go internal/server/sqlite_backend_selection.go cmd/boosty-dbcheck/main.go internal/server/sqlite_cutover_full_snapshot.go internal/server/sqlite_cutover_full_snapshot_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"

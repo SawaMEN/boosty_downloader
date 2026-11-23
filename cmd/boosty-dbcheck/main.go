@@ -25,6 +25,7 @@ func main() {
 	restoreShadow := flag.Bool("restore-sqlite-shadow", false, "offline atomic restoration of only the detached SQLite index from a verified backup; JSON is never overwritten")
 	recoveryDir := flag.String("recovery-dir", "", "required VERIFIED metadata backup used by --reindex-media or --cutover-preflight")
 	cutoverPreflight := flag.Bool("cutover-preflight", false, "read-only preflight of JSON ACLs, SQL media index and an identical recovery backup")
+	cutoverFull := flag.String("cutover-full-snapshot-dir", "", "require a verified exact full data snapshot with --cutover-preflight or --prepare-sqlite-cutover")
 	prepareCutover := flag.Bool("prepare-sqlite-cutover", false, "durably stage a VERIFIED offline SQL cutover rehearsal without activating SQL-primary")
 	recoverCutover := flag.Bool("recover-sqlite-cutover", false, "safely cancel a prepared offline cutover intent after validating the pinned recovery point")
 	exportSQL := flag.String("export-sqlite-json-dir", "", "create a NEW detached verified SQL-to-JSON recovery metadata snapshot; does not change live JSON")
@@ -53,13 +54,14 @@ func main() {
 		verifiers++
 	}
 	if flag.NArg() != 0 || verifiers > 1 ||
+		(*cutoverFull != "" && !*cutoverPreflight && !*prepareCutover) ||
 		(*restoreTo != "" && *restoreFullSnapshot == "" && *restoreSQL == "") ||
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
 		(*restoreSQL != "" && (*fromFull == "" || *restoreTo == "")) ||
 		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreSQL != "" {
@@ -118,7 +120,13 @@ func main() {
 		return
 	}
 	if *prepareCutover {
-		if err := server.PrepareSQLiteCutoverRehearsal(*root, *recoveryDir); err != nil {
+		var err error
+		if *cutoverFull != "" {
+			err = server.PrepareSQLiteCutoverFullRehearsal(*root, *recoveryDir, *cutoverFull)
+		} else {
+			err = server.PrepareSQLiteCutoverRehearsal(*root, *recoveryDir)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "SQLite cutover rehearsal failed:", err)
 			os.Exit(1)
 		}
@@ -135,7 +143,13 @@ func main() {
 		return
 	}
 	if *cutoverPreflight {
-		if err := server.VerifySQLiteCutoverPreflight(*root, *recoveryDir); err != nil {
+		var err error
+		if *cutoverFull != "" {
+			err = server.VerifySQLiteCutoverFullPreflight(*root, *recoveryDir, *cutoverFull)
+		} else {
+			err = server.VerifySQLiteCutoverPreflight(*root, *recoveryDir)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "SQLite cutover preflight failed:", err)
 			os.Exit(1)
 		}

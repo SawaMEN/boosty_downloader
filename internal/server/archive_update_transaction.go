@@ -31,8 +31,8 @@ type archiveUpdateJournal struct {
 	NewDevice   uint64 `json:"newDevice"`
 	NewInode    uint64 `json:"newInode"`
 	NewManifest string `json:"newManifest"`
-	BeforeJobs string `json:"beforeJobs,omitempty"`
-	AfterJobs string `json:"afterJobs,omitempty"`
+	BeforeJobs  string `json:"beforeJobs,omitempty"`
+	AfterJobs   string `json:"afterJobs,omitempty"`
 }
 
 type archiveUpdateStage struct {
