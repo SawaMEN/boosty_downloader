@@ -1,4 +1,4 @@
-name: SQL metadata hot path verification
+name: SQL primary large library verification
 on:
   push:
     branches: [tooling/sqlite-history-journal-20261124]
@@ -11,13 +11,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Format, test and benchmark SQL metadata
+      - name: Format and test streaming guard
         shell: bash
         run: |
-          gofmt -w internal/server/sqlite_metadata.go internal/server/sqlite_shadow.go internal/server/sqlite_preflight.go internal/server/sqlite_metadata_perf_test.go
-          go test ./internal/server -run '^(TestSQLiteMetadata|TestSQLPrimary|TestSQLFirst|TestSQLiteShadow|TestSQLVideo|TestSQLPurge|TestSQLBlobGC|TestSQLiteRollback)' -count=1 -v -timeout=120s
-          go test ./internal/server -run '^$' -bench '^BenchmarkSQLiteMetadataEqual$' -benchmem -benchtime=300ms -count=3
-          for path in internal/server/sqlite_metadata.go internal/server/sqlite_shadow.go internal/server/sqlite_preflight.go internal/server/sqlite_metadata_perf_test.go; do
+          gofmt -w internal/server/sqlite_shadow.go internal/server/sqlite_primary_read_adapter.go internal/server/sqlite_primary_scale_test.go
+          go test ./internal/server -run '^(TestSQLPrimary|TestSQLFirst|TestSQLiteMetadata|TestSQLiteShadow|TestSQLVideo|TestSQLPurge|TestSQLBlobGC|TestSQLiteRollback|TestSQLHistory|TestSQLRevisionRestore)' -count=1 -v -timeout=180s
+          go test ./internal/server -run '^$' -bench '^BenchmarkSQLPrimaryLibraryGuard$' -benchmem -benchtime=1x -count=1 -timeout=180s
+          for path in internal/server/sqlite_shadow.go internal/server/sqlite_primary_read_adapter.go internal/server/sqlite_primary_scale_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"

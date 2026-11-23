@@ -84,8 +84,31 @@ func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
 	if s.primary == nil {
 		return nil
 	}
-	_, _, err := s.sqlitePrimaryReadSnapshotLocked()
-	return err
+	// Mutation guards only need proof of parity, not a second materialized
+	// inventory. Validate the same SQL rows and ACLs in one read transaction.
+	if s.shadow!=nil{return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary read conflicts with JSON shadow writer"))}
+	ctx:=context.Background()
+	tx,err:=s.primary.db.BeginTx(ctx,&sql.TxOptions{ReadOnly:true})
+	if err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	defer tx.Rollback()
+	jobCount,importCount:=0,0
+	if err:=sqliteShadowVisitJobs(ctx,tx,func(id string,job Job)error{
+		current:=s.jobs[id]
+		if current==nil||!sqliteShadowEqual(*current,job){return fmt.Errorf("SQL-primary archive generation differs: %s",id)}
+		jobCount++
+		return nil
+	});err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	if err:=sqliteShadowVisitImports(ctx,tx,func(id string,imp AuthorImport)error{
+		current:=s.imports[id]
+		if current==nil||!sqliteShadowEqual(*current,imp){return fmt.Errorf("SQL-primary import generation differs: %s",id)}
+		importCount++
+		return nil
+	});err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	if jobCount!=len(s.jobs)||importCount!=len(s.imports){
+		return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary inventory differs from in-memory generation"))
+	}
+	if err:=tx.Commit();err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	return nil
 }
 
 // guardArchiveFileMutation checks the internal SQL-primary snapshot and job

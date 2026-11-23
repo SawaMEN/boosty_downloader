@@ -244,8 +244,12 @@ func sqliteSameJSON(a, b []byte) bool {
 	if !json.Valid(a) {
 		return false
 	}
-	if bytes.Equal(a,b){return true}
-	if !json.Valid(b){return false}
+	if bytes.Equal(a, b) {
+		return true
+	}
+	if !json.Valid(b) {
+		return false
+	}
 	var left, right any
 	da := json.NewDecoder(bytes.NewReader(a))
 	db := json.NewDecoder(bytes.NewReader(b))

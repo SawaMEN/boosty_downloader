@@ -382,8 +382,12 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 	}
 	// Preserve retained grants and their original creation timestamps.
 	var previous []string
-	if found {previous=c.Before.SharedWith}
-	if err:=sqliteApplyGrantDelta(ctx,tx,j.ID,previous,j.SharedWith,sqliteDate(j.UpdatedAt));err!=nil{return err}
+	if found {
+		previous = c.Before.SharedWith
+	}
+	if err := sqliteApplyGrantDelta(ctx, tx, j.ID, previous, j.SharedWith, sqliteDate(j.UpdatedAt)); err != nil {
+		return err
+	}
 
 	action := "metadata_update"
 	if !found {
@@ -395,20 +399,35 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 	return err
 }
 
-func sqliteApplyGrantDelta(ctx context.Context,tx *sql.Tx,id string,before,after []string,created string)error{
-	old:=make(map[string]bool,len(before))
-	for _,member:=range before{old[member]=true}
-	for _,member:=range after{
-		if old[member]{delete(old,member);continue}
-		if _,err:=tx.ExecContext(ctx,"INSERT INTO archive_grants (archive_id,grantee_owner_id,created_at) VALUES (?,?,?)",id,member,created);err!=nil{return err}
+func sqliteApplyGrantDelta(ctx context.Context, tx *sql.Tx, id string, before, after []string, created string) error {
+	old := make(map[string]bool, len(before))
+	for _, member := range before {
+		old[member] = true
 	}
-	for _,member:=range before{
-		if !old[member]{continue}
-		result,err:=tx.ExecContext(ctx,"DELETE FROM archive_grants WHERE archive_id=? AND grantee_owner_id=?",id,member)
-		if err!=nil{return err}
-		n,err:=result.RowsAffected()
-		if err!=nil{return err}
-		if n!=1{return errSQLiteConflict}
+	for _, member := range after {
+		if old[member] {
+			delete(old, member)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO archive_grants (archive_id,grantee_owner_id,created_at) VALUES (?,?,?)", id, member, created); err != nil {
+			return err
+		}
+	}
+	for _, member := range before {
+		if !old[member] {
+			continue
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM archive_grants WHERE archive_id=? AND grantee_owner_id=?", id, member)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errSQLiteConflict
+		}
 	}
 	return nil
 }
