@@ -112,6 +112,9 @@ func New(cfg Config) (*App, error) {
 	if err := recoverArchivePurgeLocked(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("archive purge journal requires manual recovery: %w", err)
 	}
+	if err := recoverArchiveRestoreLocked(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("archive restore journal requires manual recovery: %w", err)
+	}
 	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
 	// prepared intent. Cancel it only if the pinned recovery snapshot still
 	// exactly matches JSON, SQL, ACL and media; otherwise fail closed before

@@ -482,6 +482,10 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		s.mu.Unlock()
 		return 0, err
 	}
+	if err := recoverArchiveRestoreLocked(s.root); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
 	if author != "" {
 		for _, v := range s.imports {
 			if v.OwnerID == owner && v.Author == author && (v.State == "queued" || v.State == "running") {

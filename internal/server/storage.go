@@ -27,8 +27,9 @@ type Storage struct {
 	shadow          *sqliteShadow
 	primary         *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
 	primaryFatal    error              // no further writes after unresolvable SQL/JSON divergence
-	purgeCheckpoint func(string) error // crash/failure injection in tests only
-	gates           *archiveGates
+	purgeCheckpoint   func(string) error // crash/failure injection in tests only
+	restoreCheckpoint func(string) error // crash/failure injection in tests only
+	gates             *archiveGates
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
@@ -106,6 +107,9 @@ func newStorage(root, keyString string) (*Storage, error) {
 	}
 	if e = recoverArchivePurgeLocked(root); e != nil {
 		return nil, fmt.Errorf("archive purge journal recovery failed: %w", e)
+	}
+	if e = recoverArchiveRestoreLocked(root); e != nil {
+		return nil, fmt.Errorf("archive restore journal recovery failed: %w", e)
 	}
 	// A persistent JSON selection is stronger than the legacy implicit JSON
 	// default: if SQLite was subsequently changed, refuse to initialize JSON

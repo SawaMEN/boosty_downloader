@@ -136,7 +136,27 @@ func (s *Storage) saveArchiveRevision(job Job) (string, error) {
 	if man.Author != job.Author || man.PostID != job.PostID {
 		return "", errors.New("манифест старой копии не соответствует публикации")
 	}
+
+	// A revision is the only durable fallback when replacing the live
+	// directory. Fsync hardlink directory entries before returning success.
+	media := filepath.Join(stage, "media")
+	if info, err := os.Lstat(media); err == nil && info.IsDir() {
+		if err := syncMetadataDirectory(media); err != nil {
+			return "", err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := syncMetadataDirectory(stage); err != nil {
+		return "", err
+	}
+	if err := syncMetadataDirectory(root); err != nil {
+		return "", err
+	}
 	if err := os.Rename(stage, filepath.Join(root, id)); err != nil {
+		return "", err
+	}
+	if err := syncMetadataDirectory(root); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -203,6 +223,17 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 		return Job{}, err
 	}
+	if s.primary != nil {
+		return Job{}, errors.New("revision restoration in candidate SQL-primary requires a separate filesystem cutover")
+	}
+	// A prior failed attempt must be reconciled before starting a second
+	// restore or exposing a different metadata generation to the journal.
+	if err := recoverArchiveRestoreLocked(s.root); err != nil {
+		return Job{}, err
+	}
+	if err := recoverArchivePurgeLocked(s.root); err != nil {
+		return Job{}, err
+	}
 	j := s.jobs[id]
 	if j == nil || j.OwnerID != owner || j.DeletedAt != nil {
 		return Job{}, errors.New("архив не найден")
@@ -210,69 +241,217 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	if j.State == "queued" || j.State == "running" {
 		return Job{}, errors.New("сначала дождитесь завершения загрузки")
 	}
-	if !safeArchivePart(j.OwnerID) || !safeArchivePart(j.Author) || !safeArchivePart(j.PostID) {
+	if !safeArchivePart(j.OwnerID) || !safeArchivePart(j.Author) || !safeArchivePart(j.PostID) || !validRevisionID(j.ID) {
 		return Job{}, errors.New("неверный путь архива")
 	}
-	revision := filepath.Join(s.revisionsDir(*j), rev)
-	info, err := os.Lstat(revision)
-	if err != nil || !info.IsDir() {
-		return Job{}, errors.New("версия не найдена")
-	}
 	live := s.archiveDir(j.OwnerID, j.Author, j.PostID)
+	revision := filepath.Join(s.revisionsDir(*j), rev)
+	if source, err := purgeSafePath(s.root, revision); err != nil || source == nil {
+		return Job{}, errors.New("версия не найдена или небезопасна")
+	}
+	if existing, err := purgeSafePath(s.root, live); err != nil || existing == nil {
+		return Job{}, errors.New("действующий архив отсутствует или небезопасен")
+	}
+	before, err := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+	if err != nil {
+		return Job{}, err
+	}
+	var diskJobs map[string]Job
+	if err := json.Unmarshal(before, &diskJobs); err != nil || diskJobs == nil {
+		return Job{}, errors.New("некорректные метаданные перед восстановлением версии")
+	}
+	current := make(map[string]Job, len(s.jobs))
+	for key, item := range s.jobs {
+		if item == nil || diskJobs[key].ID != key {
+			return Job{}, errors.New("ошибка соответствия задания и jobs.json")
+		}
+		current[key] = *item
+	}
+	if !sqliteShadowEqual(current, diskJobs) {
+		return Job{}, errors.New("jobs.json не соответствует памяти перед восстановлением")
+	}
+	old := *j
+	oldManifest, err := revisionRestoreManifestDigest(live, old.Author, old.PostID)
+	if err != nil {
+		return Job{}, err
+	}
 	nonce, err := newRevisionID()
 	if err != nil {
 		return Job{}, err
 	}
-	stage := filepath.Join(filepath.Dir(live), ".restore-"+nonce)
-	backup := filepath.Join(filepath.Dir(live), ".previous-"+nonce)
-	defer os.RemoveAll(stage)
-	man, err := linkArchiveSnapshot(revision, stage)
+	journal := revisionRestoreJournal{
+		Version: 1, JobID: j.ID, Owner: j.OwnerID, Author: j.Author,
+		Post: j.PostID, Revision: rev, Nonce: nonce, BeforeHash: metadataDigest(before),
+		OldManifest: oldManifest,
+	}
+	_, stage, backup, err := revisionRestorePaths(s.root, journal)
 	if err != nil {
 		return Job{}, err
 	}
-	if man.Author != j.Author || man.PostID != j.PostID {
+	for _, dir := range []string{stage, backup} {
+		if exists, err := purgeSafePath(s.root, dir); err != nil || exists != nil {
+			return Job{}, errors.New("временное место восстановления занято или небезопасно")
+		}
+	}
+	// Keep the previous finished version before touching its live directory.
+	// A pre-journal crash can leave an extra history snapshot, but never loses
+	// the original live archive or changes ownership/grants.
+	if _, err := s.saveArchiveRevision(old); err != nil {
+		return Job{}, err
+	}
+	man, err := linkArchiveSnapshot(revision, stage)
+	if err != nil {
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	}
+	if man.Author != old.Author || man.PostID != old.PostID {
+		_ = os.RemoveAll(stage)
 		return Job{}, errors.New("версия принадлежит другой публикации")
 	}
-	// Preserve the current snapshot in history, including when restoring an
-	// older one; if saving that snapshot fails, the live copy is untouched.
-	if _, err := s.saveArchiveRevision(*j); err != nil {
+	journal.NewManifest, err = revisionRestoreManifestDigest(stage, old.Author, old.PostID)
+	if err != nil {
+		_ = os.RemoveAll(stage)
 		return Job{}, err
 	}
-	if err := os.Rename(live, backup); err != nil {
+	// Persist the stage hardlinks and its new directory entries before a
+	// journal could ever authorize metadata to point at the new live folder.
+	if media, err := purgeSafePath(s.root, filepath.Join(stage, "media")); err != nil {
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	} else if media != nil {
+		if err := syncMetadataDirectory(filepath.Join(stage, "media")); err != nil {
+			_ = os.RemoveAll(stage)
+			return Job{}, err
+		}
+	}
+	if err := syncMetadataDirectory(stage); err != nil {
+		_ = os.RemoveAll(stage)
 		return Job{}, err
 	}
-	if err := os.Rename(stage, live); err != nil {
-		_ = os.Rename(backup, live)
+	if err := syncMetadataDirectory(filepath.Dir(stage)); err != nil {
+		_ = os.RemoveAll(stage)
 		return Job{}, err
 	}
-	before := *j
-	j.Title = man.Title
-	j.ArchiveUpdatedAt = man.CapturedAt
-	j.Subscription = man.Subscription
-	j.RequiredTier = man.RequiredTier
-	j.DoneFiles = len(man.Assets)
-	j.TotalFiles = len(man.Assets)
-	j.CommentsPartial = len(man.Failures) > 0 || man.CommentsStatus == "частично"
-	j.State = "done"
-	if j.CommentsPartial {
-		j.State = "partial"
+	next := restoredArchiveJob(old, man)
+	afterJobs := make(map[string]Job, len(current))
+	for key, value := range current {
+		afterJobs[key] = value
 	}
-	j.Error = ""
-	j.AutoSync = false
-	j.SharedWith = nil
-	j.SharedForAll = false
-	j.UpdatedAt = time.Now().UTC()
+	afterJobs[id] = next
+	after, err := json.MarshalIndent(afterJobs, "", "  ")
+	if err != nil {
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	}
+	journal.AfterHash = metadataDigest(after)
+	// An error after an atomic metadata rename may still mean the restore
+	// committed. Classify from disk generation, not a returned fsync error.
+	abort := func(cause error) (Job, error) {
+		if recoveryErr := recoverArchiveRestoreLocked(s.root); recoveryErr != nil {
+			s.primaryFatal = fmt.Errorf("archive revision restore recovery required: %w; original error: %v", recoveryErr, cause)
+			return Job{}, s.primaryFatal
+		}
+		actual, readErr := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+		if readErr != nil {
+			s.primaryFatal = fmt.Errorf("archive revision restore cannot classify disk generation: %w", readErr)
+			return Job{}, s.primaryFatal
+		}
+		switch metadataDigest(actual) {
+		case journal.BeforeHash:
+			*j = old
+			return Job{}, cause
+		case journal.AfterHash:
+			*j = next
+			s.notifySQLiteMedia()
+			return next, nil
+		default:
+			s.primaryFatal = errors.New("archive revision restore ended with unknown metadata generation")
+			return Job{}, s.primaryFatal
+		}
+	}
+	if err := writeRevisionRestoreJournal(s.root, journal); err != nil {
+		// writeSyncedMetadata may have published the journal before returning
+		// fsync failure; recover it rather than unconditionally discarding it.
+		if info, statErr := os.Lstat(filepath.Join(s.root, revisionRestoreJournalName)); statErr == nil && info.Mode().IsRegular() {
+			return abort(err)
+		}
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	}
+	if s.restoreCheckpoint != nil {
+		if err := s.restoreCheckpoint("journal"); err != nil {
+			return abort(err)
+		}
+	}
+	if err := durableRevisionRestoreRename(s.root, live, backup); err != nil {
+		return abort(err)
+	}
+	if s.restoreCheckpoint != nil {
+		if err := s.restoreCheckpoint("old-moved"); err != nil {
+			return abort(err)
+		}
+	}
+	if err := durableRevisionRestoreRename(s.root, stage, live); err != nil {
+		return abort(err)
+	}
+	if s.restoreCheckpoint != nil {
+		if err := s.restoreCheckpoint("new-moved"); err != nil {
+			return abort(err)
+		}
+	}
+	*j = next
 	if err := s.saveJobsLocked(); err != nil {
-		*j = before
-		_ = os.RemoveAll(live)
-		_ = os.Rename(backup, live)
-		return Job{}, err
+		return abort(err)
 	}
-	restored := *j
-	_ = os.RemoveAll(backup)
-	_ = s.pruneArchiveRevisions(restored)
+	if s.restoreCheckpoint != nil {
+		if err := s.restoreCheckpoint("metadata"); err != nil {
+			return abort(err)
+		}
+	}
+	if err := recoverArchiveRestoreLocked(s.root); err != nil {
+		s.primaryFatal = fmt.Errorf("restored archive committed, cleanup pending until startup recovery: %w", err)
+		return Job{}, s.primaryFatal
+	}
+	_ = s.pruneArchiveRevisions(next)
 	s.notifySQLiteMedia()
-	return restored, nil
+	return next, nil
+}
+
+func revisionRestoreManifestDigest(dir, author, post string) (string, error) {
+	manifest := filepath.Join(dir, "manifest.json")
+	info, err := os.Lstat(manifest)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("manifest of version restore is missing or unsafe")
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		return "", err
+	}
+	var man ArchiveManifest
+	if err := json.Unmarshal(data, &man); err != nil || man.Author != author || man.PostID != post {
+		return "", errors.New("manifest of restored version belongs to another post")
+	}
+	return metadataDigest(data), nil
+}
+
+func restoredArchiveJob(current Job, man ArchiveManifest) Job {
+	current.Title = man.Title
+	current.ArchiveUpdatedAt = man.CapturedAt
+	current.Subscription = man.Subscription
+	current.RequiredTier = man.RequiredTier
+	current.DoneFiles = len(man.Assets)
+	current.TotalFiles = len(man.Assets)
+	current.CommentsPartial = len(man.Failures) > 0 || man.CommentsStatus == "частично"
+	current.State = "done"
+	if current.CommentsPartial {
+		current.State = "partial"
+	}
+	current.Error = ""
+	current.AutoSync = false
+	current.SharedWith = nil
+	current.SharedForAll = false
+	current.UpdatedAt = time.Now().UTC()
+	return current
 }
 
 func (a *App) listJobRevisions(w http.ResponseWriter, r *http.Request) {
