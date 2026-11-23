@@ -263,3 +263,88 @@ func TestRevisionRestoreJournalBlocksOfflineReindex(t *testing.T) {
 		t.Fatal("SQLite reindex accepted pending physical version replacement")
 	}
 }
+
+func TestRevisionRestoreRecoversInterruptedCleanupInStages(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		folder string
+	}{
+		{phase: "journal", folder: "stage"},
+		{phase: "new-moved", folder: "live"},
+		{phase: "metadata", folder: "backup"},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			root, key, job, _, live := revisionRestoreFixture(t)
+			revisionRestoreKill(t, root, key, tc.phase)
+			raw, err := os.ReadFile(filepath.Join(root, revisionRestoreJournalName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var j revisionRestoreJournal
+			if err := json.Unmarshal(raw, &j); err != nil {
+				t.Fatal(err)
+			}
+			_, stage, backup, err := revisionRestorePaths(root, j)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := map[string]string{"stage": stage, "live": live, "backup": backup}[tc.folder]
+			// Simulate a second SIGKILL after cleanup has removed the
+			// manifest, but before it has removed the directory inode.
+			if err := os.Remove(filepath.Join(dir, "manifest.json")); err != nil {
+				t.Fatal(err)
+			}
+			s, err := newStorage(root, key)
+			if err != nil {
+				t.Fatalf("second crash during cleanup blocked recovery: %v", err)
+			}
+			want := "Current"
+			if tc.phase == "metadata" {
+				want = "Previous"
+			}
+			if s.jobs[job.ID] == nil || s.jobs[job.ID].Title != want {
+				t.Fatalf("wrong metadata after partial cleanup: %+v", s.jobs[job.ID])
+			}
+			if _, err := os.Lstat(filepath.Join(root, revisionRestoreJournalName)); !os.IsNotExist(err) {
+				t.Fatal("recovery left durable journal after partial cleanup")
+			}
+		})
+	}
+}
+
+func TestRevisionRestoreRefusesReplacedDirectoryWithMatchingManifest(t *testing.T) {
+	root, key, _, _, _ := revisionRestoreFixture(t)
+	revisionRestoreKill(t, root, key, "old-moved")
+	raw, err := os.ReadFile(filepath.Join(root, revisionRestoreJournalName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var journal revisionRestoreJournal
+	if err := json.Unmarshal(raw, &journal); err != nil {
+		t.Fatal(err)
+	}
+	_, stage, _, err := revisionRestorePaths(root, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := stage + ".moved"
+	if err := os.Rename(stage, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(backup, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "manifest.json"), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStorage(root, key); err == nil {
+		t.Fatal("same manifest but different directory inode was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(backup, "index.html")); err != nil {
+		t.Fatal("recovery modified original files after inode substitution", err)
+	}
+}
