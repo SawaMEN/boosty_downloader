@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const videoPublicationJournalName = ".video-publication-transaction.json"
@@ -21,25 +20,25 @@ const maxVideoPublicationHTML = 64 << 20
 // finish new media + metadata. The four JSON/HTML images and both media
 // hardlinks remain in a private staging directory until recovery finishes.
 type videoPublicationJournal struct {
-	Version int
-	Phase string
-	Nonce string
-	JobID string
-	Owner string
-	Author string
-	Post string
-	Target string
-	StageDevice uint64
-	StageInode uint64
-	BeforeManifest string
-	AfterManifest string
-	BeforeHTML string
-	AfterHTML string
-	HadOldMedia bool
-	BeforeMediaSHA string
+	Version         int
+	Phase           string
+	Nonce           string
+	JobID           string
+	Owner           string
+	Author          string
+	Post            string
+	Target          string
+	StageDevice     uint64
+	StageInode      uint64
+	BeforeManifest  string
+	AfterManifest   string
+	BeforeHTML      string
+	AfterHTML       string
+	HadOldMedia     bool
+	BeforeMediaSHA  string
 	BeforeMediaSize int64
-	AfterMediaSHA string
-	AfterMediaSize int64
+	AfterMediaSHA   string
+	AfterMediaSize  int64
 }
 
 // All filesystem paths are derived from validated identifiers, never from a
@@ -198,13 +197,21 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 		return false, errors.New("video publication stage directory was replaced or lost")
 	}
 	oldManifest, err := videoPublicationReadImage(stage, "manifest.before", j.BeforeManifest, maxArchiveManifestBytes)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	newManifest, err := videoPublicationReadImage(stage, "manifest.after", j.AfterManifest, maxArchiveManifestBytes)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	oldHTML, err := videoPublicationReadImage(stage, "html.before", j.BeforeHTML, maxVideoPublicationHTML)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	newHTML, err := videoPublicationReadImage(stage, "html.after", j.AfterHTML, maxVideoPublicationHTML)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	var oldMan, newMan ArchiveManifest
 	if json.Unmarshal(oldManifest, &oldMan) != nil || json.Unmarshal(newManifest, &newMan) != nil ||
 		oldMan.Author != j.Author || oldMan.PostID != j.Post ||
@@ -213,7 +220,9 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 	}
 	// The metadata entry cannot be redirected to a different owner/post.
 	jobsRaw, err := videoPublicationReadFile(root, "jobs.json", 64<<20)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	var jobs map[string]Job
 	if json.Unmarshal(jobsRaw, &jobs) != nil {
 		return false, errors.New("video publication jobs metadata is invalid")
@@ -224,22 +233,34 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 		return false, errors.New("video publication owner or archive changed")
 	}
 	stageNew := filepath.Join(stage, "media.new")
-	if err := videoPublicationCheckMedia(stageNew, j.AfterMediaSHA, j.AfterMediaSize); err != nil { return false, err }
+	if err := videoPublicationCheckMedia(stageNew, j.AfterMediaSHA, j.AfterMediaSize); err != nil {
+		return false, err
+	}
 	newInfo, err := os.Lstat(stageNew)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	var oldInfo os.FileInfo
 	if j.HadOldMedia {
-		if err := videoPublicationCheckMedia(filepath.Join(stage, "media.old"), j.BeforeMediaSHA, j.BeforeMediaSize); err != nil { return false, err }
+		if err := videoPublicationCheckMedia(filepath.Join(stage, "media.old"), j.BeforeMediaSHA, j.BeforeMediaSize); err != nil {
+			return false, err
+		}
 		oldInfo, err = os.Lstat(filepath.Join(stage, "media.old"))
-		if err != nil { return false, err }
+		if err != nil {
+			return false, err
+		}
 	}
 	if err := videoPublicationMatchInode(dest, oldInfo, newInfo, j.HadOldMedia); err != nil {
 		return false, err
 	}
 	currentManifest, _, err := readArchiveManifestNoFollow(folder)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	currentHTML, err := videoPublicationReadFile(folder, "index.html", maxVideoPublicationHTML)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	if d := metadataDigest(currentManifest); d != j.BeforeManifest && d != j.AfterManifest {
 		return false, errors.New("video publication live manifest has an unknown generation")
 	}
@@ -249,23 +270,39 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 	commit := j.Phase == "committed"
 	mediaDir := filepath.Join(folder, "media")
 	if commit {
-		if err := videoPublicationReplayMedia(mediaDir, j.Target, stageNew, j.Nonce, newInfo); err != nil { return false, err }
-		if err := writeSyncedMetadata(folder, "manifest.json", newManifest); err != nil { return false, err }
-		if err := writeSyncedMetadata(folder, "index.html", newHTML); err != nil { return false, err }
+		if err := videoPublicationReplayMedia(mediaDir, j.Target, stageNew, j.Nonce, newInfo); err != nil {
+			return false, err
+		}
+		if err := writeSyncedMetadata(folder, "manifest.json", newManifest); err != nil {
+			return false, err
+		}
+		if err := writeSyncedMetadata(folder, "index.html", newHTML); err != nil {
+			return false, err
+		}
 	} else {
 		if j.HadOldMedia {
-			if err := videoPublicationReplayMedia(mediaDir, j.Target, filepath.Join(stage, "media.old"), j.Nonce, oldInfo); err != nil { return false, err }
+			if err := videoPublicationReplayMedia(mediaDir, j.Target, filepath.Join(stage, "media.old"), j.Nonce, oldInfo); err != nil {
+				return false, err
+			}
 		} else if oldMedia, err := os.Lstat(dest); err == nil {
 			if !os.SameFile(oldMedia, newInfo) {
 				return false, errors.New("video rollback refused unknown media")
 			}
-			if err := os.Remove(dest); err != nil { return false, err }
-			if err := syncMetadataDirectory(mediaDir); err != nil { return false, err }
+			if err := os.Remove(dest); err != nil {
+				return false, err
+			}
+			if err := syncMetadataDirectory(mediaDir); err != nil {
+				return false, err
+			}
 		} else if !os.IsNotExist(err) {
 			return false, err
 		}
-		if err := writeSyncedMetadata(folder, "manifest.json", oldManifest); err != nil { return false, err }
-		if err := writeSyncedMetadata(folder, "index.html", oldHTML); err != nil { return false, err }
+		if err := writeSyncedMetadata(folder, "manifest.json", oldManifest); err != nil {
+			return false, err
+		}
+		if err := writeSyncedMetadata(folder, "index.html", oldHTML); err != nil {
+			return false, err
+		}
 	}
 	// Finalize the journal first. An interrupted cleanup leaves an orphaned
 	// stage that startup may safely reclaim without replaying the transaction.
@@ -291,9 +328,13 @@ func videoPublicationPrepare(root string, job Job, target, staged string, manife
 	}
 	folder := filepath.Join(root, "library", job.OwnerID, job.Author, job.PostID)
 	htmlBefore, err := videoPublicationReadFile(folder, "index.html", maxVideoPublicationHTML)
-	if err != nil { return videoPublicationJournal{}, err }
+	if err != nil {
+		return videoPublicationJournal{}, err
+	}
 	nonce, err := newRevisionID()
-	if err != nil { return videoPublicationJournal{}, err }
+	if err != nil {
+		return videoPublicationJournal{}, err
+	}
 	j := videoPublicationJournal{
 		Version: 1, Phase: "prepared", Nonce: nonce, JobID: job.ID,
 		Owner: job.OwnerID, Author: job.Author, Post: job.PostID, Target: target,
@@ -302,44 +343,82 @@ func videoPublicationPrepare(root string, job Job, target, staged string, manife
 		AfterMediaSHA: mediaDigest, AfterMediaSize: mediaSize,
 	}
 	_, stage, dest, err := videoPublicationPathsForStage(root, j)
-	if err != nil { return j, err }
-	if err := os.Mkdir(stage, 0700); err != nil { return j, err }
+	if err != nil {
+		return j, err
+	}
+	if err := os.Mkdir(stage, 0700); err != nil {
+		return j, err
+	}
 	prepared := false
-	defer func() { if !prepared { _ = os.RemoveAll(stage) } }()
-	if err := syncMetadataDirectory(root); err != nil { return j, err }
+	defer func() {
+		if !prepared {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	if err := syncMetadataDirectory(root); err != nil {
+		return j, err
+	}
 	for name, data := range map[string][]byte{
 		"manifest.before": manifestBefore, "manifest.after": manifestAfter,
 		"html.before": htmlBefore, "html.after": htmlAfter,
 	} {
-		if err := writeAtomic(filepath.Join(stage, name), data); err != nil { return j, err }
+		if err := writeAtomic(filepath.Join(stage, name), data); err != nil {
+			return j, err
+		}
 	}
 	stagedInfo, err := os.Lstat(staged)
-	if err != nil || !stagedInfo.Mode().IsRegular() { return j, errors.New("unsafe staged video file") }
-	if err := os.Link(staged, filepath.Join(stage, "media.new")); err != nil { return j, err }
-	if err := videoPublicationCheckMedia(filepath.Join(stage, "media.new"), mediaDigest, mediaSize); err != nil { return j, err }
+	if err != nil || !stagedInfo.Mode().IsRegular() {
+		return j, errors.New("unsafe staged video file")
+	}
+	if err := os.Link(staged, filepath.Join(stage, "media.new")); err != nil {
+		return j, err
+	}
+	if err := videoPublicationCheckMedia(filepath.Join(stage, "media.new"), mediaDigest, mediaSize); err != nil {
+		return j, err
+	}
 	if old, err := os.Lstat(dest); err == nil {
-		if !old.Mode().IsRegular() { return j, errors.New("unsafe existing video rendition") }
+		if !old.Mode().IsRegular() {
+			return j, errors.New("unsafe existing video rendition")
+		}
 		j.HadOldMedia = true
 		j.BeforeMediaSize, j.BeforeMediaSHA, err = fileDigest(dest)
-		if err != nil { return j, err }
-		if err := os.Link(dest, filepath.Join(stage, "media.old")); err != nil { return j, err }
-		if err := videoPublicationCheckMedia(filepath.Join(stage, "media.old"), j.BeforeMediaSHA, j.BeforeMediaSize); err != nil { return j, err }
+		if err != nil {
+			return j, err
+		}
+		if err := os.Link(dest, filepath.Join(stage, "media.old")); err != nil {
+			return j, err
+		}
+		if err := videoPublicationCheckMedia(filepath.Join(stage, "media.old"), j.BeforeMediaSHA, j.BeforeMediaSize); err != nil {
+			return j, err
+		}
 	} else if !os.IsNotExist(err) {
 		return j, err
 	}
 	// An encoder may not have synced its output. Ensure the staged inode
 	// survives a power failure before journal publication can reference it.
 	file, err := os.Open(filepath.Join(stage, "media.new"))
-	if err != nil { return j, err }
+	if err != nil {
+		return j, err
+	}
 	syncErr := file.Sync()
 	closeErr := file.Close()
-	if syncErr != nil { return j, syncErr }
-	if closeErr != nil { return j, closeErr }
-	if err := syncMetadataDirectory(stage); err != nil { return j, err }
+	if syncErr != nil {
+		return j, syncErr
+	}
+	if closeErr != nil {
+		return j, closeErr
+	}
+	if err := syncMetadataDirectory(stage); err != nil {
+		return j, err
+	}
 	j.StageDevice, j.StageInode, err = revisionRestoreIdentity(root, stage)
-	if err != nil { return j, err }
+	if err != nil {
+		return j, err
+	}
 	data, err := json.Marshal(j)
-	if err != nil { return j, err }
+	if err != nil {
+		return j, err
+	}
 	if err := writeSyncedMetadata(root, videoPublicationJournalName, data); err != nil {
 		// The atomic rename may have published the journal before fsync failed.
 		if _, exists, _ := videoPublicationReadJournal(root); exists {
@@ -368,58 +447,99 @@ func publishVideoRenditionDurably(root string, j videoPublicationJournal, checkp
 		if err != nil {
 			return false, fmt.Errorf("video publication recovery required: %w (original error: %v)", err, cause)
 		}
-		if committed { return true, nil }
+		if committed {
+			return true, nil
+		}
 		return false, cause
 	}
 	fail := func(name string) error {
-		if checkpoint != nil { return checkpoint(name) }
+		if checkpoint != nil {
+			return checkpoint(name)
+		}
 		return nil
 	}
-	if err := fail("journal"); err != nil { return abort(err) }
+	if err := fail("journal"); err != nil {
+		return abort(err)
+	}
 	folder, stage, dest, err := videoPublicationPaths(root, j)
-	if err != nil { return abort(err) }
-	if err := videoPublicationReplayMedia(filepath.Dir(dest), j.Target, filepath.Join(stage, "media.new"), j.Nonce, mustVideoStageInfo(filepath.Join(stage, "media.new"))); err != nil { return abort(err) }
-	if err := fail("media"); err != nil { return abort(err) }
+	if err != nil {
+		return abort(err)
+	}
+	newInfo, err := os.Lstat(filepath.Join(stage, "media.new"))
+	if err != nil || !newInfo.Mode().IsRegular() {
+		return abort(errors.New("video publication stage media is missing or unsafe"))
+	}
+	if err := videoPublicationReplayMedia(filepath.Dir(dest), j.Target, filepath.Join(stage, "media.new"), j.Nonce, newInfo); err != nil {
+		return abort(err)
+	}
+	if err := fail("media"); err != nil {
+		return abort(err)
+	}
 	manifest, err := videoPublicationReadImage(stage, "manifest.after", j.AfterManifest, maxArchiveManifestBytes)
-	if err != nil { return abort(err) }
-	if err := writeSyncedMetadata(folder, "manifest.json", manifest); err != nil { return abort(err) }
-	if err := fail("manifest"); err != nil { return abort(err) }
+	if err != nil {
+		return abort(err)
+	}
+	if err := writeSyncedMetadata(folder, "manifest.json", manifest); err != nil {
+		return abort(err)
+	}
+	if err := fail("manifest"); err != nil {
+		return abort(err)
+	}
 	html, err := videoPublicationReadImage(stage, "html.after", j.AfterHTML, maxVideoPublicationHTML)
-	if err != nil { return abort(err) }
-	if err := writeSyncedMetadata(folder, "index.html", html); err != nil { return abort(err) }
-	if err := fail("html"); err != nil { return abort(err) }
+	if err != nil {
+		return abort(err)
+	}
+	if err := writeSyncedMetadata(folder, "index.html", html); err != nil {
+		return abort(err)
+	}
+	if err := fail("html"); err != nil {
+		return abort(err)
+	}
 	j.Phase = "committed"
 	data, err := json.Marshal(j)
-	if err != nil { return abort(err) }
-	if err := writeSyncedMetadata(root, videoPublicationJournalName, data); err != nil { return abort(err) }
-	if err := fail("committed"); err != nil { return abort(err) }
+	if err != nil {
+		return abort(err)
+	}
+	if err := writeSyncedMetadata(root, videoPublicationJournalName, data); err != nil {
+		return abort(err)
+	}
+	if err := fail("committed"); err != nil {
+		return abort(err)
+	}
 	committed, err := recoverVideoPublicationJournal(root)
-	if err != nil { return false, err }
-	if !committed { return false, errors.New("video publication unexpectedly rolled back") }
+	if err != nil {
+		return false, err
+	}
+	if !committed {
+		return false, errors.New("video publication unexpectedly rolled back")
+	}
 	return true, nil
 }
 
-func mustVideoStageInfo(path string) os.FileInfo {
-	info, _ := os.Lstat(path)
-	return info
-}
-
 func videoPublicationStageNameValid(name string) bool {
-	if !strings.HasPrefix(name, videoPublicationStagePrefix) { return false }
+	if !strings.HasPrefix(name, videoPublicationStagePrefix) {
+		return false
+	}
 	return validRevisionID(strings.TrimPrefix(name, videoPublicationStagePrefix))
 }
 
 // A crash before the journal exists may leave a private stage directory.
 // Reclaim only the fixed, untrusted-object-free shape created above.
 func cleanupAbandonedVideoPublicationStages(root string) error {
-	if _, found, err := videoPublicationReadJournal(root); err != nil { return err } else if found {
+	if _, found, err := videoPublicationReadJournal(root); err != nil {
+		return err
+	} else if found {
 		return errors.New("cannot clean video publication staging with a pending journal")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, videoPublicationStagePrefix) { continue }
+		if !strings.HasPrefix(name, videoPublicationStagePrefix) {
+			continue
+		}
 		if !videoPublicationStageNameValid(name) || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("unsafe orphaned video publication staging directory")
 		}
@@ -428,7 +548,9 @@ func cleanupAbandonedVideoPublicationStages(root string) error {
 			return errors.New("unsafe orphaned video publication staging path")
 		}
 		children, err := os.ReadDir(path)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		for _, child := range children {
 			switch child.Name() {
 			case "manifest.before", "manifest.after", "html.before", "html.after", "media.old", "media.new":
@@ -441,11 +563,10 @@ func cleanupAbandonedVideoPublicationStages(root string) error {
 				return errors.New("unsafe video publication staging child")
 			}
 		}
-		if err := os.RemoveAll(path); err != nil { return err }
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
 	}
 	return syncMetadataDirectory(root)
 }
 
-// Suppress linter warning about context-free timestamps when no transaction
-// is active; generations are compared by exact hashes, never wall-clock time.
-var _ = time.Time{}

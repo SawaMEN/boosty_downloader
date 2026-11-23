@@ -11,7 +11,7 @@ jobs:
       - name: Print base64 of formatted Go files
         shell: bash
         run: |
-          for path in internal/server/video_publication_journal.go internal/server/video_publication.go internal/server/storage.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go; do
+          for path in internal/server/video_publication_journal.go internal/server/video_publication.go internal/server/storage.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go internal/server/video_publication_journal_test.go internal/server/sqlite_revision_reindex.go; do
             gofmt -w "$path"
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
