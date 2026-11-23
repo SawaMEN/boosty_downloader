@@ -15,7 +15,6 @@ const (
 	archiveUpdateCrashRoot = "BOOSTY_ARCHIVE_UPDATE_CRASH_ROOT"
 	archiveUpdateCrashKey = "BOOSTY_ARCHIVE_UPDATE_CRASH_KEY"
 	archiveUpdateCrashPhase = "BOOSTY_ARCHIVE_UPDATE_CRASH_PHASE"
-	archiveUpdateCrashOld = "BOOSTY_ARCHIVE_UPDATE_CRASH_OLD"
 )
 
 func archiveUpdateFixture(t *testing.T, old bool) (string, string, Job, string) {
@@ -194,7 +193,7 @@ func TestArchiveUpdateRefusesTamperedStage(t *testing.T) {
 }
 
 func TestArchiveUpdateOfflineReindexBlocked(t *testing.T) {
-	root, key, _, _ := archiveUpdateFixture(t, false)
+	root, _, _, _ := archiveUpdateFixture(t, false)
 	archiveUpdateKill(t, root, key, "journal")
 	if err := sqliteReindexNoWAL(root); err == nil {
 		t.Fatal("offline SQLite reindex accepted pending archive update")
