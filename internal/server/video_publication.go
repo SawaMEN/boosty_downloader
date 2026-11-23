@@ -13,7 +13,7 @@ import (
 // FFmpeg run. Encoding itself never mutates live media or its manifest.
 // Callers remove the staged file if publication returns false or an error.
 func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source ArchiveAsset, targetName, staged string, size int64, digest string) (bool, error) {
-	if !safeArchivePart(source.Filename) || !safeArchivePart(targetName) ||
+	if source.Filename == targetName || !safeArchivePart(source.Filename) || !safeArchivePart(targetName) ||
 		source.Type != "ok_video" || source.SHA256 == "" || source.Size <= 0 {
 		return false, errors.New("unsafe video source or rendition name")
 	}
@@ -23,14 +23,32 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	}
 	defer unlock()
 
-	current, exists := a.store.get(job.ID)
-	if !exists || (current.State != "done" && current.State != "partial") ||
+	// Lock order: archive gate, video journal mutex, metadata mutex.
+	// A concurrent trash/ACL change must not race with a durable journal.
+	a.store.videoPublicationMu.Lock()
+	defer a.store.videoPublicationMu.Unlock()
+	a.store.mu.Lock()
+	defer a.store.mu.Unlock()
+	if err := a.store.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return false, err
+	}
+	entry := a.store.jobs[job.ID]
+	if entry == nil || entry.DeletedAt != nil {
+		return false, nil
+	}
+	current := *entry
+	if (current.State != "done" && current.State != "partial") ||
 		current.OwnerID != job.OwnerID || current.Author != job.Author ||
 		current.PostID != job.PostID || !current.ArchiveUpdatedAt.Equal(job.ArchiveUpdatedAt) {
 		return false, nil
 	}
-	if err := a.store.guardArchiveFileMutation(current); err != nil {
-		return false, fmt.Errorf("unsafe video publication generation: %w", err)
+	if a.store.primary != nil {
+		if err := sqliteHistoryDeleteGuard(a.store.root,false); err != nil {
+			return false, err
+		}
+		if err := a.store.verifySQLVideoCurrentLocked(current); err != nil {
+			return false, err
+		}
 	}
 	folder := a.store.archiveDir(job.OwnerID, job.Author, job.PostID)
 	originalJSON, latest, err := readArchiveManifestNoFollow(folder)
@@ -46,6 +64,9 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 		if asset.Filename == source.Filename && asset.Type == source.Type &&
 			asset.SHA256 == source.SHA256 && asset.Size == source.Size {
 			stillCurrent = true
+		}
+		if asset.Filename == targetName && (asset.Type != "transcoded_video" || asset.SourceFile != source.Filename) {
+			return false, errors.New("video rendition would overwrite unrelated media")
 		}
 		if asset.Filename == targetName && asset.Type == "transcoded_video" &&
 			asset.SourceSHA256 == source.SHA256 && asset.SHA256 != "" {
@@ -89,28 +110,26 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	}
 	// Only one publication may own the data-root journal at a time. Archive
 	// writer gate is already held, preventing refresh/restore of this post.
-	a.store.videoPublicationMu.Lock()
-	defer a.store.videoPublicationMu.Unlock()
-	journal, err := videoPublicationPrepare(a.store.root, current, targetName, staged, originalJSON, manifestAfter, html, size, digest)
+	journal, err := videoPublicationPrepareMode(a.store.root, current, targetName, staged, originalJSON, manifestAfter, html, size, digest, a.store.primary != nil)
 	if err != nil {
 		// A failed directory fsync may still have published the journal.
 		if _, found, readErr := videoPublicationReadJournal(a.store.root); found && readErr == nil {
 			if _, recoverErr := recoverVideoPublicationJournal(a.store.root); recoverErr != nil {
-				a.store.mu.Lock()
 				a.store.primaryFatal = fmt.Errorf("video journal recovery failed: %w", recoverErr)
-				a.store.mu.Unlock()
 				return false, recoverErr
 			}
 		}
 		return false, err
 	}
-	published, err := publishVideoRenditionDurably(a.store.root, journal, a.store.videoCheckpoint)
+	var commitSQL func() error
+	if a.store.primary != nil {
+		commitSQL = func() error { return a.store.commitSQLVideoLocked(journal) }
+	}
+	published, err := publishVideoRenditionDurablyWithSQL(a.store.root, journal, a.store.videoCheckpoint, commitSQL)
 	if err != nil {
 		// Fail closed if the recovery journal was not fully reconciled.
 		if _, pending, _ := videoPublicationReadJournal(a.store.root); pending {
-			a.store.mu.Lock()
 			a.store.primaryFatal = fmt.Errorf("video publication recovery is pending: %w", err)
-			a.store.mu.Unlock()
 		}
 		return false, err
 	}

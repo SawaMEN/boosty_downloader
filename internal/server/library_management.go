@@ -672,7 +672,7 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		hooks := &sqlitePrimaryCommitHooks{
 			checkpoint: func(phase string) error {
 				if s.purgeCheckpoint != nil {
-					return s.purgeCheckpoint("primary-"+phase)
+					return s.purgeCheckpoint("primary-" + phase)
 				}
 				return nil
 			},
@@ -681,20 +681,20 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 				// assets and grants. Keep every other owner's blob rows.
 				for _, id := range ids {
 					var count int
-					if err := tx.QueryRowContext(ctx,"SELECT COUNT(*) FROM archive_revisions WHERE archive_id=?",id).Scan(&count); err != nil || count != 0 {
+					if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM archive_revisions WHERE archive_id=?", id).Scan(&count); err != nil || count != 0 {
 						return errors.New("purged archive still has SQL revision references")
 					}
 				}
-				_,err:=tx.ExecContext(ctx,`DELETE FROM media_blobs WHERE NOT EXISTS
+				_, err := tx.ExecContext(ctx, `DELETE FROM media_blobs WHERE NOT EXISTS
 					(SELECT 1 FROM revision_assets a WHERE a.sha256=media_blobs.sha256)`)
 				return err
 			},
 		}
-		if err := sqlitePrimaryCommitMetadata(s.root,s.primary,afterJobs,imports,hooks); err != nil {
+		if err := sqlitePrimaryCommitMetadata(s.root, s.primary, afterJobs, imports, hooks); err != nil {
 			return abort(err)
 		}
 		for _, key := range ids {
-			delete(s.jobs,key)
+			delete(s.jobs, key)
 		}
 	} else {
 		for _, key := range ids {
