@@ -22,6 +22,11 @@ func TestSQLArchivePublicationCrashWorker(t *testing.T) {
 	s.primary=meta
 	job,ok:=s.get(strings.Repeat("1",24))
 	if !ok { t.Fatal("missing SQL job") }
+	// The shared audit fixture intentionally starts as failed. Model a
+	// real worker's durable claim before the publication fault checkpoints.
+	job.State = "running"
+	job.Error = ""
+	if err := s.upsert(job); err != nil { t.Fatal(err) }
 	stage:=archiveUpdateWriteStage(t,s,job)
 	s.archiveUpdateCheckpoint=func(phase string) error {
 		if phase==os.Getenv("BOOSTY_TEST_SQL_ARCHIVE_PHASE") {
