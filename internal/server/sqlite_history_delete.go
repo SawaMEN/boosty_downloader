@@ -104,6 +104,10 @@ func sqliteHistoryDeleteIndex(ctx context.Context, tx *sql.Tx, root string, j sq
 func (s *Storage) deleteSQLHistory(job Job, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.deleteSQLHistoryLocked(job, id)
+}
+
+func (s *Storage) deleteSQLHistoryLocked(job Job, id string) error {
 	if s.primary == nil {
 		return errors.New("SQL history deletion requires primary adapter")
 	}
