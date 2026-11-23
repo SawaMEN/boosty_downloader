@@ -251,6 +251,10 @@ func (s *Storage) enableSQLiteShadow(ctx context.Context) error {
 // match their own identity columns and grants; corruption is not overwritten.
 // Revisions, media bytes, user accounts and private tokens are not mirrored.
 func (m *sqliteMetadata) reconcile(ctx context.Context, jobs map[string]Job, imports map[string]AuthorImport) error {
+	return m.reconcileWithExtra(ctx, jobs, imports, nil)
+}
+
+func (m *sqliteMetadata) reconcileWithExtra(ctx context.Context, jobs map[string]Job, imports map[string]AuthorImport, extra func(context.Context, *sql.Tx) error) error {
 	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
@@ -303,6 +307,11 @@ func (m *sqliteMetadata) reconcile(ctx context.Context, jobs map[string]Job, imp
 	for id, old := range storedImports {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM author_imports WHERE import_id=? AND owner_id=?",
 			id, old.OwnerID); err != nil {
+			return err
+		}
+	}
+	if extra != nil {
+		if err := extra(ctx, tx); err != nil {
 			return err
 		}
 	}

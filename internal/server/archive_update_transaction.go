@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -449,9 +451,6 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 		return false, err
 	}
-	if s.primary != nil {
-		return false, errors.New("whole-archive publication requires JSON-authoritative storage until SQL cutover")
-	}
 	checkpoint := func(phase string) error {
 		if s.archiveUpdateCheckpoint != nil {
 			return s.archiveUpdateCheckpoint(phase)
@@ -489,6 +488,28 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 	}
 	beforeHash, afterHash := metadataDigest(before), metadataDigest(after)
 	reconcile := func(cause error) (bool, error) {
+		// Resolve SQL's commit point before classifying the directory
+		// journal from the JSON generation. A committed SQL transaction
+		// may still have the old jobs.json if the mirror write failed.
+		if s.primary != nil {
+			if err := recoverMetadataPair(s.root); err != nil {
+				return false, s.sqlitePrimaryQuarantineLocked(err)
+			}
+			if err := recoverSQLitePrimaryCommitLocked(s.root); err != nil {
+				return false, s.sqlitePrimaryQuarantineLocked(err)
+			}
+			jobs, err := sqliteShadowReadJobs(filepath.Join(s.root, "jobs.json"))
+			if err != nil {
+				return false, s.sqlitePrimaryQuarantineLocked(err)
+			}
+			imports, err := sqliteShadowReadImports(filepath.Join(s.root, "imports.json"))
+			if err != nil {
+				return false, s.sqlitePrimaryQuarantineLocked(err)
+			}
+			if err := s.primary.verifyJSONParity(context.Background(), jobs, imports); err != nil {
+				return false, s.sqlitePrimaryQuarantineLocked(err)
+			}
+		}
 		if _, err := recoverArchiveUpdateJournal(s.root); err != nil {
 			s.primaryFatal = fmt.Errorf("archive update recovery failed: %w (initial error: %v)", err, cause)
 			return false, s.primaryFatal
@@ -542,9 +563,32 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 	if err := checkpoint("new-moved"); err != nil {
 		return reconcile(err)
 	}
-	// The exact jobs.json generation is the commit point. A crash or fsync
-	// error after rename is classified by the bytes on disk, not intent.
-	if err := writeSyncedMetadata(s.root, "jobs.json", after); err != nil {
+	// SQL-first candidates commit jobs and the verified current revision
+	// in one SQL transaction, then replay the JSON mirror. JSON mode keeps
+	// its existing single-file commit. Recovery resolves SQL first.
+	if s.primary != nil {
+		imports := make(map[string]AuthorImport, len(s.imports))
+		for id, item := range s.imports {
+			if item == nil {
+				return reconcile(errors.New("nil SQL-first import"))
+			}
+			imports[id] = *item
+		}
+		revision, err := sqliteReindexReadRevision(s.root, next, "current:"+next.ID,
+			[]string{"library", next.OwnerID, next.Author, next.PostID}, true)
+		if err != nil {
+			return reconcile(err)
+		}
+		hooks := &sqlitePrimaryCommitHooks{
+			checkpoint: func(phase string) error { return checkpoint("primary-" + phase) },
+			reconcileExtra: func(ctx context.Context, tx *sql.Tx) error {
+				return sqliteArchivePublishCurrentRevision(ctx, tx, revision, diskJobs)
+			},
+		}
+		if err := sqlitePrimaryCommitMetadata(s.root, s.primary, diskJobs, imports, hooks); err != nil {
+			return reconcile(err)
+		}
+	} else if err := writeSyncedMetadata(s.root, "jobs.json", after); err != nil {
 		return reconcile(err)
 	}
 	if err := checkpoint("metadata"); err != nil {
