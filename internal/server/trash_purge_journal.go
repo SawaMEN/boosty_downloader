@@ -28,6 +28,8 @@ type purgeMove struct {
 	Author string `json:"author"`
 	Post   string `json:"post"`
 	Slot   string `json:"slot"`
+	Device uint64 `json:"device,omitempty"`
+	Inode  uint64 `json:"inode,omitempty"`
 }
 
 type purgeJournal struct {
@@ -153,6 +155,10 @@ func planPurgeMoves(root string, folders map[string]bool) ([]purgeMove, error) {
 			return nil, err
 		}
 		m.Slot = hex.EncodeToString(token[:])
+		m.Device, m.Inode, err = revisionRestoreIdentity(root, src)
+		if err != nil {
+			return nil, err
+		}
 		_, dst, _ := purgeMovePaths(root, m)
 		if existing, err := purgeSafePath(root, dst); err != nil || existing != nil {
 			return nil, errors.New("archive purge stage destination already exists or is unsafe")
@@ -163,7 +169,7 @@ func planPurgeMoves(root string, folders map[string]bool) ([]purgeMove, error) {
 }
 
 func writePurgeJournal(root string, journal purgeJournal) error {
-	if journal.Version != 1 || !purgeValidHex(journal.BeforeHash) ||
+	if (journal.Version != 1 && journal.Version != 2) || !purgeValidHex(journal.BeforeHash) ||
 		!purgeValidHex(journal.AfterHash) || journal.BeforeHash == journal.AfterHash {
 		return errors.New("invalid archive purge journal generation")
 	}
@@ -187,6 +193,11 @@ func purgeStageMove(root string, move purgeMove) error {
 	}
 	if info, err := purgeSafePath(root, src); err != nil || info == nil {
 		return errors.New("archive disappeared before staged purge")
+	}
+	if move.Inode != 0 {
+		if _, err := revisionRestoreDirectory(root, src, "", move.Author, move.Post, move.Device, move.Inode, false); err != nil {
+			return err
+		}
 	}
 	if info, err := purgeSafePath(root, dst); err != nil || info != nil {
 		return errors.New("archive stage was already occupied")
@@ -215,7 +226,7 @@ func recoverArchivePurgeLocked(root string) error {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() < 1 || info.Size() > 32<<20 {
 		return errors.New("unsafe archive purge transaction journal")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := videoPublicationReadFile(root, purgeJournalName, 32<<20)
 	if err != nil {
 		return err
 	}
@@ -229,7 +240,7 @@ func recoverArchivePurgeLocked(root string) error {
 	if err := dec.Decode(&extra); err != io.EOF {
 		return errors.New("archive purge journal has trailing data")
 	}
-	if journal.Version != 1 || !purgeValidHex(journal.BeforeHash) ||
+	if (journal.Version != 1 && journal.Version != 2) || !purgeValidHex(journal.BeforeHash) ||
 		!purgeValidHex(journal.AfterHash) || journal.BeforeHash == journal.AfterHash ||
 		len(journal.Moves) > 100000 {
 		return errors.New("invalid archive purge journal version or generation")
@@ -269,6 +280,16 @@ func recoverArchivePurgeLocked(root string) error {
 		dstInfo, err := purgeSafePath(root, dst)
 		if err != nil {
 			return err
+		}
+		if journal.Version == 2 {
+			if move.Device == 0 || move.Inode == 0 {
+				return errors.New("missing pinned purge directory identity")
+			}
+			for _, candidate := range []string{src, dst} {
+				if _, err := revisionRestoreDirectory(root, candidate, "", move.Author, move.Post, move.Device, move.Inode, false); err != nil {
+					return err
+				}
+			}
 		}
 		if before && (srcInfo == nil) == (dstInfo == nil) {
 			return errors.New("uncommitted purge cannot identify the original archive folder")

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -473,8 +475,10 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		return 0, err
 	}
 	if s.primary != nil {
-		s.mu.Unlock()
-		return 0, errors.New("physical purge in candidate SQL-primary requires a separate filesystem transaction cutover")
+		if err := sqliteHistoryDeleteGuard(s.root, false); err != nil {
+			s.mu.Unlock()
+			return 0, err
+		}
 	}
 	// A previous completed purge may have been interrupted during cleanup.
 	// Finish its recovery before planning another physical transaction.
@@ -575,18 +579,31 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		s.mu.Unlock()
 		return 0, err
 	}
+	if s.primary != nil {
+		if err := s.verifySQLPurgeLocked(currentJobs, selected, folders); err != nil {
+			s.mu.Unlock()
+			return 0, err
+		}
+	}
 	moves, err := planPurgeMoves(s.root, folders)
 	if err != nil {
 		s.mu.Unlock()
 		return 0, err
 	}
-	journal := purgeJournal{Version: 1, BeforeHash: metadataDigest(before), AfterHash: metadataDigest(after), Moves: moves}
+	journal := purgeJournal{Version: 2, BeforeHash: metadataDigest(before), AfterHash: metadataDigest(after), Moves: moves}
 	backup := make(map[string]*Job, len(ids))
 	// Recover and classify an error by the on-disk generation, not by the
 	// point at which the write returned an error. An fsync error can occur
 	// after rename: this must never cause metadata rollback over a purge
 	// that already committed.
 	abort := func(cause error) (int, error) {
+		if s.primary != nil {
+			if recoveryErr := s.recoverSQLFileCommitLocked(); recoveryErr != nil {
+				err := s.sqlitePrimaryQuarantineLocked(recoveryErr)
+				s.mu.Unlock()
+				return 0, err
+			}
+		}
 		if recoveryErr := recoverArchivePurgeLocked(s.root); recoveryErr != nil {
 			s.primaryFatal = fmt.Errorf("archive purge recovery failed: %w; original failure: %v", recoveryErr, cause)
 			s.mu.Unlock()
@@ -602,7 +619,14 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			for _, key := range ids {
 				delete(s.jobs, key)
 			}
+			s.notifySQLiteMedia()
+			sqlPrimary := s.primary != nil
 			s.mu.Unlock()
+			// A SQL CAS reference need not be a physical hardlink. Until
+			// SQL-aware GC is implemented, do not reclaim physical CAS here.
+			if sqlPrimary {
+				return len(ids), nil
+			}
 			if blobErr := s.collectUnusedBlobs(); blobErr != nil {
 				return len(ids), fmt.Errorf("archive purge committed but blob cleanup failed: %w", blobErr)
 			}
@@ -637,12 +661,49 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			}
 		}
 	}
-	for _, key := range ids {
-		backup[key] = s.jobs[key]
-		delete(s.jobs, key)
-	}
-	if err := s.saveJobsLocked(); err != nil {
-		return abort(err)
+	if s.primary != nil {
+		imports := make(map[string]AuthorImport, len(s.imports))
+		for key, item := range s.imports {
+			if item == nil {
+				return abort(errors.New("nil SQL purge import"))
+			}
+			imports[key] = *item
+		}
+		hooks := &sqlitePrimaryCommitHooks{
+			checkpoint: func(phase string) error {
+				if s.purgeCheckpoint != nil {
+					return s.purgeCheckpoint("primary-" + phase)
+				}
+				return nil
+			},
+			reconcileExtra: func(ctx context.Context, tx *sql.Tx) error {
+				// FK cascades delete only the removed owner's revisions,
+				// assets and grants. Keep every other owner's blob rows.
+				for _, id := range ids {
+					var count int
+					if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM archive_revisions WHERE archive_id=?", id).Scan(&count); err != nil || count != 0 {
+						return errors.New("purged archive still has SQL revision references")
+					}
+				}
+				_, err := tx.ExecContext(ctx, `DELETE FROM media_blobs WHERE NOT EXISTS
+					(SELECT 1 FROM revision_assets a WHERE a.sha256=media_blobs.sha256)`)
+				return err
+			},
+		}
+		if err := sqlitePrimaryCommitMetadata(s.root, s.primary, afterJobs, imports, hooks); err != nil {
+			return abort(err)
+		}
+		for _, key := range ids {
+			delete(s.jobs, key)
+		}
+	} else {
+		for _, key := range ids {
+			backup[key] = s.jobs[key]
+			delete(s.jobs, key)
+		}
+		if err := s.saveJobsLocked(); err != nil {
+			return abort(err)
+		}
 	}
 	if s.purgeCheckpoint != nil {
 		if err := s.purgeCheckpoint("metadata"); err != nil {
@@ -655,7 +716,11 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		return len(ids), s.primaryFatal
 	}
 	s.notifySQLiteMedia()
+	sqlPrimary := s.primary != nil
 	s.mu.Unlock()
+	if sqlPrimary {
+		return len(ids), nil
+	}
 	if cleanupErr := s.collectUnusedBlobs(); cleanupErr != nil {
 		return len(ids), fmt.Errorf("archives purged but unreferenced blob cleanup failed: %w", cleanupErr)
 	}
