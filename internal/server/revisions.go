@@ -2,8 +2,8 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -543,7 +543,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		hooks := &sqlitePrimaryCommitHooks{
 			checkpoint: func(phase string) error {
 				if s.restoreCheckpoint != nil {
-					return s.restoreCheckpoint("primary-"+phase)
+					return s.restoreCheckpoint("primary-" + phase)
 				}
 				return nil
 			},
