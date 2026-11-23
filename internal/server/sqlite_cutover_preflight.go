@@ -43,7 +43,12 @@ func verifySQLiteCutoverPreflightLocked(absolute, backup string) error {
 	if err := sqliteReindexSameBackup(absolute, backup); err != nil {
 		return fmt.Errorf("metadata backup is not the same recovery point as live data: %w", err)
 	}
-	if err := verifySQLiteExport(absolute); err != nil {
+	if _, err := os.Lstat(filepath.Join(absolute, "metadata.db-journal")); err == nil {
+		return errors.New("SQLite cutover blocked by pending rollback journal")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := verifyJSONSQLiteAgreement(absolute); err != nil {
 		return fmt.Errorf("SQL is not an exact owner-qualified JSON projection: %w", err)
 	}
 	if err := verifySQLiteSnapshotInventory(absolute); err != nil {

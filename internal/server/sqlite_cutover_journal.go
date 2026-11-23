@@ -26,6 +26,8 @@ type sqliteCutoverIntent struct {
 	DataDir            string    `json:"dataDir"`
 	BackupDir          string    `json:"backupDir"`
 	BackupManifestHash string    `json:"backupManifestSha256"`
+	FullSnapshotDir    string    `json:"fullSnapshotDir,omitempty"`
+	FullSnapshotHash   string    `json:"fullSnapshotManifestSha256,omitempty"`
 	PreparedAt         time.Time `json:"preparedAt"`
 }
 
@@ -43,6 +45,19 @@ func PrepareSQLiteCutoverRehearsal(root, backup string) error {
 }
 
 func prepareSQLiteCutoverRehearsal(root, backup string, hooks *sqliteCutoverRehearsalHooks) error {
+	return prepareSQLiteCutoverRehearsalWithFull(root, backup, "", hooks)
+}
+
+// PrepareSQLiteCutoverFullRehearsal requires an exact full data recovery point
+// in addition to the existing verified metadata backup. SQL stays disabled.
+func PrepareSQLiteCutoverFullRehearsal(root, backup, snapshot string) error {
+	if snapshot == "" {
+		return errors.New("full recovery snapshot is required")
+	}
+	return prepareSQLiteCutoverRehearsalWithFull(root, backup, snapshot, nil)
+}
+
+func prepareSQLiteCutoverRehearsalWithFull(root, backup, snapshot string, hooks *sqliteCutoverRehearsalHooks) error {
 	if root == "" || backup == "" {
 		return errors.New("live data and external recovery snapshot are required")
 	}
@@ -92,6 +107,19 @@ func prepareSQLiteCutoverRehearsal(root, backup string, hooks *sqliteCutoverRehe
 		Version: sqliteCutoverIntentVersion, Phase: "prepared",
 		DataDir: physicalRoot, BackupDir: physicalBackup,
 		BackupManifestHash: manifestHash, PreparedAt: time.Now().UTC(),
+	}
+	if snapshot != "" {
+		physicalSnapshot, err := fullCutoverSnapshotPath(abs, snapshot)
+		if err != nil {
+			return err
+		}
+		hash, err := verifyFullCutoverSnapshotLocked(abs, physicalSnapshot, false)
+		if err != nil {
+			return err
+		}
+		intent.Version = 2
+		intent.FullSnapshotDir = physicalSnapshot
+		intent.FullSnapshotHash = hash
 	}
 	raw, err := json.Marshal(intent)
 	if err != nil {
@@ -164,7 +192,9 @@ func readSQLiteCutoverIntent(root string) (sqliteCutoverIntent, bool, error) {
 	if err := json.Unmarshal(raw, &intent); err != nil {
 		return intent, false, err
 	}
-	if intent.Version != sqliteCutoverIntentVersion || intent.Phase != "prepared" ||
+	if (intent.Version != sqliteCutoverIntentVersion && intent.Version != 2) || intent.Phase != "prepared" ||
+		(intent.Version == 1 && (intent.FullSnapshotDir != "" || intent.FullSnapshotHash != "")) ||
+		(intent.Version == 2 && (!filepath.IsAbs(intent.FullSnapshotDir) || !sqliteReindexDigestValid(intent.FullSnapshotHash))) ||
 		intent.PreparedAt.IsZero() || intent.PreparedAt.After(time.Now().UTC().Add(5*time.Minute)) ||
 		len(intent.BackupManifestHash) != sha256.Size*2 {
 		return intent, false, errors.New("unknown or invalid SQLite cutover phase")
@@ -218,6 +248,19 @@ func recoverSQLiteCutoverRehearsalLocked(root string) error {
 	manifestHash, _, err = backupFileDigest(physicalBackup, "backup-manifest.json")
 	if err != nil || manifestHash != intent.BackupManifestHash {
 		return errors.New("SQLite cutover snapshot changed during recovery")
+	}
+	if intent.Version == 2 {
+		physical, err := fullCutoverSnapshotPath(root, intent.FullSnapshotDir)
+		if err != nil || physical != intent.FullSnapshotDir {
+			return errors.New("full cutover snapshot changed physical location")
+		}
+		hash, err := verifyFullCutoverSnapshotLocked(root, physical, true)
+		if err != nil {
+			return fmt.Errorf("full cutover recovery point differs: %w", err)
+		}
+		if hash != intent.FullSnapshotHash {
+			return errors.New("full cutover snapshot manifest changed since preparation")
+		}
 	}
 	// Removing the durable marker is the ONLY mutation. SQL-primary is still
 	// disabled, and the untouched JSON remains the authoritative backend.
