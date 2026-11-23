@@ -124,7 +124,7 @@ func PrepareSQLiteBackup(root, output string) (err error) {
 	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
 		return errors.New("backup destination cannot be inside the live data directory")
 	}
-	for _, journal := range []string{metadataJournalName, sqlitePrimaryTransactionName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName} {
+	for _, journal := range []string{metadataJournalName, sqlitePrimaryTransactionName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName, sqliteRollbackJournalName, sqliteCutoverIntentName, "metadata.db-journal"} {
 		if _, err := os.Lstat(filepath.Join(root, journal)); err == nil {
 			return fmt.Errorf("pending metadata transaction %s: restart to recover before backup", journal)
 		} else if !os.IsNotExist(err) {

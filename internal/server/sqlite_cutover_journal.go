@@ -26,8 +26,8 @@ type sqliteCutoverIntent struct {
 	DataDir            string    `json:"dataDir"`
 	BackupDir          string    `json:"backupDir"`
 	BackupManifestHash string    `json:"backupManifestSha256"`
-	FullSnapshotDir string `json:"fullSnapshotDir,omitempty"`
-	FullSnapshotHash string `json:"fullSnapshotManifestSha256,omitempty"`
+	FullSnapshotDir    string    `json:"fullSnapshotDir,omitempty"`
+	FullSnapshotHash   string    `json:"fullSnapshotManifestSha256,omitempty"`
 	PreparedAt         time.Time `json:"preparedAt"`
 }
 

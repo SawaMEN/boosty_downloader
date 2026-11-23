@@ -29,12 +29,15 @@ func main() {
 	prepareCutover := flag.Bool("prepare-sqlite-cutover", false, "durably stage a VERIFIED offline SQL cutover rehearsal without activating SQL-primary")
 	recoverCutover := flag.Bool("recover-sqlite-cutover", false, "safely cancel a prepared offline cutover intent after validating the pinned recovery point")
 	exportSQL := flag.String("export-sqlite-json-dir", "", "create a NEW detached verified SQL-to-JSON recovery metadata snapshot; does not change live JSON")
+	rollbackSQL := flag.Bool("rollback-sqlite-to-json", false, "offline rollback of explicitly selected SQLite using its newest verified jobs and imports")
+	rollbackFull := flag.String("rollback-full-snapshot-dir", "", "required exact full data snapshot for --rollback-sqlite-to-json")
+	recoverRollback := flag.Bool("recover-sqlite-rollback", false, "resume an interrupted verified SQLite-to-JSON rollback")
 	pinJSON := flag.Bool("pin-json-backend", false, "persist a private backend=json selector on a stopped server; never activates SQLite-primary")
 	flag.Parse()
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON} {
+	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON, *rollbackSQL, *recoverRollback} {
 		if enabled {
 			modes++
 		}
@@ -54,6 +57,7 @@ func main() {
 		verifiers++
 	}
 	if flag.NArg() != 0 || verifiers > 1 ||
+		(*rollbackSQL != (*rollbackFull != "")) ||
 		(*cutoverFull != "" && !*cutoverPreflight && !*prepareCutover) ||
 		(*restoreTo != "" && *restoreFullSnapshot == "" && *restoreSQL == "") ||
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
@@ -61,7 +65,7 @@ func main() {
 		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend | --rollback-sqlite-to-json --rollback-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-rollback] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreSQL != "" {
@@ -99,6 +103,22 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Metadata recovery backup OK: SHA-256 manifest, JSON, SQLite schema and owner ACLs match")
+		return
+	}
+	if *rollbackSQL {
+		if err := server.RollbackSQLiteToJSON(*root, *rollbackFull); err != nil {
+			fmt.Fprintln(os.Stderr, "Offline SQLite rollback rejected or interrupted:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Verified latest SQL jobs/imports published to JSON; JSON backend selected. SQLite and media were not replaced.")
+		return
+	}
+	if *recoverRollback {
+		if err := server.RecoverSQLiteRollback(*root); err != nil {
+			fmt.Fprintln(os.Stderr, "SQLite rollback recovery rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Pending SQLite-to-JSON rollback completed or no intent exists.")
 		return
 	}
 	if *pinJSON {

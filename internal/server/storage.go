@@ -94,6 +94,9 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = os.Chmod(root, 0700); e != nil {
 		return nil, e
 	}
+	if e = recoverSQLiteRollbackLocked(root, nil); e != nil {
+		return nil, fmt.Errorf("SQLite rollback recovery failed: %w", e)
+	}
 	backend, backendErr := readSQLiteBackendSelection(root)
 	if backendErr != nil {
 		return nil, fmt.Errorf("metadata backend selection failed: %w", backendErr)
