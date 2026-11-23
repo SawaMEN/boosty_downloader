@@ -1,8 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -474,6 +472,16 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		s.mu.Unlock()
 		return 0, err
 	}
+	if s.primary != nil {
+		s.mu.Unlock()
+		return 0, errors.New("physical purge in candidate SQL-primary requires a separate filesystem transaction cutover")
+	}
+	// A previous completed purge may have been interrupted during cleanup.
+	// Finish its recovery before planning another physical transaction.
+	if err := recoverArchivePurgeLocked(s.root); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
 	if author != "" {
 		for _, v := range s.imports {
 			if v.OwnerID == owner && v.Author == author && (v.State == "queued" || v.State == "running") {
@@ -520,77 +528,125 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			delete(folders, s.revisionsDir(*j))
 		}
 	}
-	trash := filepath.Join(s.root, "trash")
-	if err := os.MkdirAll(trash, 0700); err != nil {
+	// Stage physical folders only after a durable journal pins BEFORE and
+	// AFTER jobs.json generations. A crash before metadata publication rolls
+	// back every staged rename; after publication it completes removal.
+	diskJobs, err := sqliteShadowReadJobs(filepath.Join(s.root, "jobs.json"))
+	if err != nil {
 		s.mu.Unlock()
 		return 0, err
 	}
-	// Do not follow a substituted symlink when staging files for deletion.
-	trashInfo, err := os.Lstat(trash)
-	if err != nil || !trashInfo.IsDir() {
+	currentJobs := make(map[string]Job, len(s.jobs))
+	for key, job := range s.jobs {
+		if job == nil {
+			s.mu.Unlock()
+			return 0, errors.New("nil archive while planning permanent deletion")
+		}
+		currentJobs[key] = *job
+	}
+	if !sqliteShadowEqual(currentJobs, diskJobs) {
 		s.mu.Unlock()
-		return 0, errors.New("путь временной корзины небезопасен")
+		return 0, errors.New("archive purge blocked: in-memory jobs differ from jobs.json")
 	}
-	rollback := func() {
-		for i := len(moves) - 1; i >= 0; i-- {
-			_ = os.Rename(moves[i].dst, moves[i].src)
+	before, err := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+	if err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	afterJobs := make(map[string]Job, len(currentJobs)-len(ids))
+	for key, job := range currentJobs {
+		if !selected[key] {
+			afterJobs[key] = job
 		}
 	}
-	for folder := range folders {
-		info, err := os.Lstat(folder)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			rollback()
-			s.mu.Unlock()
-			return 0, err
-		}
-		if !info.IsDir() {
-			rollback()
-			s.mu.Unlock()
-			return 0, errors.New("путь архива не является каталогом")
-		}
-		b := make([]byte, 12)
-		if _, err = rand.Read(b); err != nil {
-			rollback()
-			s.mu.Unlock()
-			return 0, err
-		}
-		dest := filepath.Join(trash, hex.EncodeToString(b))
-		if err = os.Rename(folder, dest); err != nil {
-			rollback()
-			s.mu.Unlock()
-			return 0, err
-		}
-		moves = append(moves, moved{folder, dest})
+	after, err := json.MarshalIndent(afterJobs, "", "  ")
+	if err != nil {
+		s.mu.Unlock()
+		return 0, err
 	}
-	backup := map[string]*Job{}
+	moves, err := planPurgeMoves(s.root, folders)
+	if err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	journal := purgeJournal{Version: 1, BeforeHash: metadataDigest(before), AfterHash: metadataDigest(after), Moves: moves}
+	backup := make(map[string]*Job, len(ids))
+	// Recover and classify an error by the on-disk generation, not by the
+	// point at which the write returned an error. An fsync error can occur
+	// after rename: this must never cause metadata rollback over a purge
+	// that already committed.
+	abort := func(cause error) (int, error) {
+		if recoveryErr := recoverArchivePurgeLocked(s.root); recoveryErr != nil {
+			s.primaryFatal = fmt.Errorf("archive purge recovery failed: %w; original failure: %v", recoveryErr, cause)
+			s.mu.Unlock()
+			return 0, s.primaryFatal
+		}
+		actual, readErr := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+		if readErr != nil {
+			s.primaryFatal = fmt.Errorf("archive purge cannot classify jobs generation: %w", readErr)
+			s.mu.Unlock()
+			return 0, s.primaryFatal
+		}
+		if metadataDigest(actual) == journal.AfterHash {
+			for _, key := range ids {
+				delete(s.jobs, key)
+			}
+			s.mu.Unlock()
+			if blobErr := s.collectUnusedBlobs(); blobErr != nil {
+				return len(ids), fmt.Errorf("archive purge committed but blob cleanup failed: %w", blobErr)
+			}
+			return len(ids), nil
+		}
+		if metadataDigest(actual) == journal.BeforeHash {
+			for key, job := range backup {
+				s.jobs[key] = job
+			}
+			s.mu.Unlock()
+			return 0, cause
+		}
+		s.primaryFatal = errors.New("archive purge metadata changed to an unrecognized generation")
+		s.mu.Unlock()
+		return 0, s.primaryFatal
+	}
+	if err := writePurgeJournal(s.root, journal); err != nil {
+		return abort(err)
+	}
+	if s.purgeCheckpoint != nil {
+		if err := s.purgeCheckpoint("journal"); err != nil {
+			return abort(err)
+		}
+	}
+	for _, move := range moves {
+		if err := purgeStageMove(s.root, move); err != nil {
+			return abort(err)
+		}
+		if s.purgeCheckpoint != nil {
+			if err := s.purgeCheckpoint("moved"); err != nil {
+				return abort(err)
+			}
+		}
+	}
 	for _, key := range ids {
 		backup[key] = s.jobs[key]
 		delete(s.jobs, key)
 	}
 	if err := s.saveJobsLocked(); err != nil {
-		for key, j := range backup {
-			s.jobs[key] = j
+		return abort(err)
+	}
+	if s.purgeCheckpoint != nil {
+		if err := s.purgeCheckpoint("metadata"); err != nil {
+			return abort(err)
 		}
-		rollback()
+	}
+	if err := recoverArchivePurgeLocked(s.root); err != nil {
+		s.primaryFatal = fmt.Errorf("archive purge committed, cleanup pending until recovery: %w", err)
 		s.mu.Unlock()
-		return 0, err
+		return len(ids), s.primaryFatal
 	}
 	s.notifySQLiteMedia()
 	s.mu.Unlock()
-	var cleanupErr error
-	for _, move := range moves {
-		if err := os.RemoveAll(move.dst); err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-		}
-	}
-	if cleanupErr == nil {
-		cleanupErr = s.collectUnusedBlobs()
-	}
-	if cleanupErr != nil {
-		return len(ids), fmt.Errorf("архивы удалены из медиатеки, но очистка корзины не завершена: %w", cleanupErr)
+	if cleanupErr := s.collectUnusedBlobs(); cleanupErr != nil {
+		return len(ids), fmt.Errorf("archives purged but unreferenced blob cleanup failed: %w", cleanupErr)
 	}
 	return len(ids), nil
 }

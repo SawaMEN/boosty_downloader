@@ -107,6 +107,11 @@ func New(cfg Config) (*App, error) {
 	if err := recoverSQLitePrimaryCommitLocked(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("SQL-primary journal requires manual recovery: %w", err)
 	}
+	// Resolve any interrupted archive folder staging BEFORE SQLite preflight
+	// and before exposing archive metadata or bytes to authenticated users.
+	if err := recoverArchivePurgeLocked(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("archive purge journal requires manual recovery: %w", err)
+	}
 	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
 	// prepared intent. Cancel it only if the pinned recovery snapshot still
 	// exactly matches JSON, SQL, ACL and media; otherwise fail closed before
