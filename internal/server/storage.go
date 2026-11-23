@@ -111,6 +111,11 @@ func newStorage(root, keyString string) (*Storage, error) {
 	if e = recoverArchiveRestoreLocked(root); e != nil {
 		return nil, fmt.Errorf("archive restore journal recovery failed: %w", e)
 	}
+	// A killed encoder leaves only private, unpublished staging data.
+	// Remove it before serving users or starting new workers.
+	if e = cleanupAbandonedVideoStages(root); e != nil {
+		return nil, fmt.Errorf("orphaned video staging cleanup failed: %w", e)
+	}
 	// A persistent JSON selection is stronger than the legacy implicit JSON
 	// default: if SQLite was subsequently changed, refuse to initialize JSON
 	// or restart workers before verifying the complete SQL/JSON/ACL generation.

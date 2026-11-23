@@ -110,9 +110,10 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	rollback := func(cause error) (bool, error) {
 		if err := writeAtomic(filepath.Join(folder, "manifest.json"), originalJSON); err != nil {
 			a.store.mu.Lock()
-			a.store.primaryFatal = fmt.Errorf("video manifest rollback failed: %w", err)
+			fatal := fmt.Errorf("video manifest rollback failed: %w", err)
+			a.store.primaryFatal = fatal
 			a.store.mu.Unlock()
-			return false, a.store.primaryFatal
+			return false, fatal
 		}
 		var fileErr error
 		if backup != "" {
@@ -122,9 +123,10 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 		}
 		if fileErr != nil {
 			a.store.mu.Lock()
-			a.store.primaryFatal = fmt.Errorf("video file rollback failed: %w", fileErr)
+			fatal := fmt.Errorf("video file rollback failed: %w", fileErr)
+			a.store.primaryFatal = fatal
 			a.store.mu.Unlock()
-			return false, a.store.primaryFatal
+			return false, fatal
 		}
 		return false, cause
 	}
