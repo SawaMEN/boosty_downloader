@@ -332,14 +332,16 @@ func sqliteShadowEqual(a, b any) bool {
 	return bytes.Equal(left, right) || sqliteSameJSON(left, right)
 }
 
-func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx)(map[string]Job,error){
-	result:=make(map[string]Job)
-	err:=sqliteShadowVisitJobs(ctx,tx,func(id string,job Job)error{result[id]=job;return nil})
-	if err!=nil{return nil,err}
-	return result,nil
+func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error) {
+	result := make(map[string]Job)
+	err := sqliteShadowVisitJobs(ctx, tx, func(id string, job Job) error { result[id] = job; return nil })
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string,Job)error) error {
+func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, Job) error) error {
 	grantRows, err := tx.QueryContext(ctx, "SELECT archive_id,grantee_owner_id FROM archive_grants")
 	if err != nil {
 		return err
@@ -420,8 +422,11 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string,Jo
 			}
 		}
 		delete(grants, id)
-		seen[id]=struct{}{}
-		if err:=visit(id,job);err!=nil{rows.Close();return err}
+		seen[id] = struct{}{}
+		if err := visit(id, job); err != nil {
+			rows.Close()
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -465,14 +470,16 @@ func sqliteShadowArchivedMatches(raw sql.NullString, want time.Time) bool {
 	return sqliteShadowDateMatches(raw.String, want)
 }
 
-func sqliteShadowSQLImports(ctx context.Context,tx *sql.Tx)(map[string]AuthorImport,error){
-	result:=make(map[string]AuthorImport)
-	err:=sqliteShadowVisitImports(ctx,tx,func(id string,imp AuthorImport)error{result[id]=imp;return nil})
-	if err!=nil{return nil,err}
-	return result,nil
+func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorImport, error) {
+	result := make(map[string]AuthorImport)
+	err := sqliteShadowVisitImports(ctx, tx, func(id string, imp AuthorImport) error { result[id] = imp; return nil })
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-func sqliteShadowVisitImports(ctx context.Context,tx *sql.Tx,visit func(string,AuthorImport)error)error {
+func sqliteShadowVisitImports(ctx context.Context, tx *sql.Tx, visit func(string, AuthorImport) error) error {
 	rows, err := tx.QueryContext(ctx,
 		"SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json FROM author_imports")
 	if err != nil {
@@ -505,8 +512,11 @@ func sqliteShadowVisitImports(ctx context.Context,tx *sql.Tx,visit func(string,A
 			rows.Close()
 			return fmt.Errorf("SQLite shadow import identity mismatch: %q", id)
 		}
-		seen[id]=struct{}{}
-		if err:=visit(id,imp);err!=nil{rows.Close();return err}
+		seen[id] = struct{}{}
+		if err := visit(id, imp); err != nil {
+			rows.Close()
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

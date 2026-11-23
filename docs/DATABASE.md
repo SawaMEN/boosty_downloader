@@ -417,3 +417,8 @@ boosty-dbcheck --data-dir "$DATA" --activate-sqlite-primary \
 ## Потоковая проверка SQL generation (12.4.20)
 
 Mutation guard проверяет все jobs/imports и ACL в одной read-only транзакции через общие row visitors, сравнивая запись с in-memory generation непосредственно при чтении. Не создаётся вторая полная карта Job/AuthorImport для проверки, но проверяются дубликаты, пропущенные и лишние строки, ACL, даты и ownership. Полное чтение для каталогов остаётся прежним. BenchmarkSQLPrimaryLibraryGuard сравнивает материализованный и потоковый пути на синтетических библиотеках 1000/10000/100000 записей, без сетевых запросов и медиаданных. Эта оптимизация не устраняет линейную сложность проверки; кеширование ACL не используется.
+
+
+## Индексированные point reads (12.4.21)
+
+Повторные get и importCanceled читают проверенную запись в fresh SQL transaction, не кешируют ACL. Перед первым чтением и после изменения connection-local TEMP token, PRAGMA data_version/schema_version, total_changes или размера in-memory inventory выполняется полный streaming guard. Stamp проверяется повторно после commit; обнаруженная смена generation блокирует ответ. При совпадающем stamp проверяется точный SQL payload и ACL запрошенной записи с памятью; несвязанные изменения только в памяти выявляются при следующем полном guard, который по-прежнему обязателен перед записью, каталогами и healthz. TEMP token не сохраняется в БД. Point-warm benchmark исключает первичную полную проверку, cold read остаётся линейным.

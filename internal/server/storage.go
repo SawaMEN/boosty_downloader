@@ -28,6 +28,7 @@ type Storage struct {
 	imports                       map[string]*AuthorImport
 	shadow                        *sqliteShadow
 	primary                       *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
+	primaryPointStamp             sqlitePrimaryGeneration
 	primaryFatal                  error              // no further writes after unresolvable SQL/JSON divergence
 	purgeCheckpoint               func(string) error // crash/failure injection in tests only
 	restoreCheckpoint             func(string) error // crash/failure injection in tests only
@@ -267,15 +268,9 @@ func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.primary != nil {
-		jobs, _, err := s.sqlitePrimaryReadSnapshotLocked()
-		if err != nil {
-			return Job{}, false
-		}
-		j, ok := jobs[id]
-		if !ok || j.DeletedAt != nil {
-			return Job{}, false
-		}
-		return j, true
+		j,ok,err:=s.sqlitePrimaryPointJobLocked(id)
+		if err!=nil||!ok||j.DeletedAt!=nil{return Job{},false}
+		return j,true
 	}
 	if s.primaryFatal != nil {
 		return Job{}, false

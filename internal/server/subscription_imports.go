@@ -325,12 +325,8 @@ func (s *Storage) importCanceled(id string) bool {
 		return true
 	}
 	if s.primary != nil {
-		_, imports, err := s.sqlitePrimaryReadSnapshotLocked()
-		if err != nil {
-			return true
-		}
-		v, ok := imports[id]
-		return !ok || v.State == "canceled"
+		v,ok,err:=s.sqlitePrimaryPointImportLocked(id)
+		return err!=nil||!ok||v.State=="canceled"
 	}
 	v := s.imports[id]
 	return v == nil || v.State == "canceled"

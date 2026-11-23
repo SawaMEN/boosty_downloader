@@ -74,9 +74,8 @@ func (s *Storage) sqlitePrimaryQuarantineLocked(cause error) error {
 // ownership or grants. Call BEFORE changing maps or touching archive files,
 // with Storage.mu held. Legacy JSON mode has no extra SQL dependency.
 //
-// This uses the full checked SQL generation until production SQL-primary has
-// an audited, constant-time generation fence; it is intentionally not a live
-// SQL-primary activation switch.
+// Mutations always use the full checked SQL generation, independently of
+// the point-read generation optimization.
 func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
 	if s.primaryFatal != nil {
 		return s.primaryFatal
@@ -86,28 +85,19 @@ func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
 	}
 	// Mutation guards only need proof of parity, not a second materialized
 	// inventory. Validate the same SQL rows and ACLs in one read transaction.
-	if s.shadow!=nil{return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary read conflicts with JSON shadow writer"))}
-	ctx:=context.Background()
-	tx,err:=s.primary.db.BeginTx(ctx,&sql.TxOptions{ReadOnly:true})
-	if err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
-	defer tx.Rollback()
-	jobCount,importCount:=0,0
-	if err:=sqliteShadowVisitJobs(ctx,tx,func(id string,job Job)error{
-		current:=s.jobs[id]
-		if current==nil||!sqliteShadowEqual(*current,job){return fmt.Errorf("SQL-primary archive generation differs: %s",id)}
-		jobCount++
-		return nil
-	});err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
-	if err:=sqliteShadowVisitImports(ctx,tx,func(id string,imp AuthorImport)error{
-		current:=s.imports[id]
-		if current==nil||!sqliteShadowEqual(*current,imp){return fmt.Errorf("SQL-primary import generation differs: %s",id)}
-		importCount++
-		return nil
-	});err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
-	if jobCount!=len(s.jobs)||importCount!=len(s.imports){
-		return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary inventory differs from in-memory generation"))
+	if s.shadow != nil {
+		return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary read conflicts with JSON shadow writer"))
 	}
-	if err:=tx.Commit();err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	ctx := context.Background()
+	tx, err := s.primary.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return s.sqlitePrimaryQuarantineLocked(err)
+	}
+	defer tx.Rollback()
+	if err:=s.sqlitePrimaryValidateTxLocked(ctx,tx);err!=nil{return s.sqlitePrimaryQuarantineLocked(err)}
+	if err := tx.Commit(); err != nil {
+		return s.sqlitePrimaryQuarantineLocked(err)
+	}
 	return nil
 }
 
@@ -131,6 +121,37 @@ func (s *Storage) guardArchiveFileMutation(job Job) error {
 		job.State != "running" || job.DeletedAt != nil ||
 		current.State != "running" || current.DeletedAt != nil {
 		return s.sqlitePrimaryQuarantineLocked(errors.New("archive generation changed before physical write"))
+	}
+	return nil
+}
+
+
+// Shared full validation for mutation guards and invalidated point generations.
+// Storage.mu is held; the caller controls the consistent read transaction.
+func (s *Storage) sqlitePrimaryValidateTxLocked(ctx context.Context,tx *sql.Tx)error{
+	jobCount, importCount := 0, 0
+	if err := sqliteShadowVisitJobs(ctx, tx, func(id string, job Job) error {
+		current := s.jobs[id]
+		if current == nil || !sqliteShadowEqual(*current, job) {
+			return fmt.Errorf("SQL-primary archive generation differs: %s", id)
+		}
+		jobCount++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := sqliteShadowVisitImports(ctx, tx, func(id string, imp AuthorImport) error {
+		current := s.imports[id]
+		if current == nil || !sqliteShadowEqual(*current, imp) {
+			return fmt.Errorf("SQL-primary import generation differs: %s", id)
+		}
+		importCount++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if jobCount != len(s.jobs) || importCount != len(s.imports) {
+		return errors.New("SQL-primary inventory differs from in-memory generation")
 	}
 	return nil
 }
