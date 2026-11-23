@@ -39,7 +39,7 @@ type archiveUpdateStage struct {
 }
 
 func archiveUpdatePaths(root string, j archiveUpdateJournal) (live, stage, backup string, err error) {
-	if j.Version != 1 || (j.Phase != "prepared" && j.Phase != "committed") ||
+	if j.Version != 1 || (j.Phase != "prepared" && j.Phase != "committed" && j.Phase != "aborting") ||
 		!validRevisionID(j.Nonce) || !safeArchivePart(j.JobID) ||
 		!safeArchivePart(j.Owner) || !safeArchivePart(j.Author) || !safeArchivePart(j.Post) ||
 		!purgeValidHex(j.NewManifest) || j.NewDevice == 0 || j.NewInode == 0 ||
@@ -311,7 +311,10 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	stageKind, err := archiveUpdateWhich(root, stage, j, false)
+	// A prepared stage must still have the exact SHA-256 manifest that was
+	// committed into the journal. Only an explicitly durable aborting phase
+	// permits partially removed stage files on repeated-crash cleanup.
+	stageKind, err := archiveUpdateWhich(root, stage, j, j.Phase == "prepared")
 	if err != nil { return false, err }
 	backupKind, err := archiveUpdateWhich(root, backup, j, false)
 	if err != nil { return false, err }
@@ -337,6 +340,14 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 			}
 			if liveKind == "new" {
 				if err := durableRevisionRestoreRemove(root, live); err != nil { return false, err }
+			}
+		}
+		if j.Phase != "aborting" {
+			j.Phase = "aborting"
+			data, err := json.Marshal(j)
+			if err != nil { return false, err }
+			if err := writeSyncedMetadata(root, archiveUpdateJournalName, data); err != nil {
+				return false, err
 			}
 		}
 		if stageKind == "new" {
