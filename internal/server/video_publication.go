@@ -113,7 +113,9 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 		}
 		return false, err
 	}
-	if !published { return false, nil }
+	if !published {
+		return false, nil
+	}
 	a.store.notifySQLiteMedia()
 	return true, nil
 }

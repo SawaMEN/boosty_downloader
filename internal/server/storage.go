@@ -17,21 +17,21 @@ import (
 )
 
 type Storage struct {
-	mu                sync.Mutex
-	blobMu            sync.Mutex
+	mu                 sync.Mutex
+	blobMu             sync.Mutex
 	videoPublicationMu sync.Mutex
-	root              string
-	key               []byte
-	jobs              map[string]*Job
-	authors           map[string][]string
-	imports           map[string]*AuthorImport
-	shadow            *sqliteShadow
-	primary           *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
-	primaryFatal      error              // no further writes after unresolvable SQL/JSON divergence
-	purgeCheckpoint   func(string) error // crash/failure injection in tests only
-	restoreCheckpoint func(string) error // crash/failure injection in tests only
-	videoCheckpoint   func(string) error // video journal crash/failure injection
-	gates             *archiveGates
+	root               string
+	key                []byte
+	jobs               map[string]*Job
+	authors            map[string][]string
+	imports            map[string]*AuthorImport
+	shadow             *sqliteShadow
+	primary            *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
+	primaryFatal       error              // no further writes after unresolvable SQL/JSON divergence
+	purgeCheckpoint    func(string) error // crash/failure injection in tests only
+	restoreCheckpoint  func(string) error // crash/failure injection in tests only
+	videoCheckpoint    func(string) error // video journal crash/failure injection
+	gates              *archiveGates
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
