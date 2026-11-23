@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -324,7 +325,9 @@ func sqliteShadowEqual(a, b any) bool {
 		return false
 	}
 	right, err := json.Marshal(b)
-	return err == nil && sqliteSameJSON(left, right)
+	if err != nil{return false}
+	// Equal successful Marshal outputs already prove JSON equality.
+	return bytes.Equal(left,right)||sqliteSameJSON(left,right)
 }
 
 func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error) {

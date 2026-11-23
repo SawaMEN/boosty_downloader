@@ -33,8 +33,8 @@ func sqliteRequireOfflineJSON(root string) error {
 // replacement is the commit point; prior to it JSON remains selected.
 // ActivateSQLitePrimaryExperimental selects SQLite only while the service is
 // stopped. The server still requires BD_SQLITE_PRIMARY=1 on every start.
-func ActivateSQLitePrimaryExperimental(root,backup,snapshot string)error{
-	return activateSQLPrimaryOffline(root,backup,snapshot,nil)
+func ActivateSQLitePrimaryExperimental(root, backup, snapshot string) error {
+	return activateSQLPrimaryOffline(root, backup, snapshot, nil)
 }
 
 func activateSQLPrimaryOffline(root, backup, snapshot string, checkpoint func(string) error) error {
@@ -81,23 +81,37 @@ func activateSQLPrimaryOffline(root, backup, snapshot string, checkpoint func(st
 	}
 	// Account state remains in its existing store. Never enable an archive
 	// backend which would silently bootstrap a replacement admin account.
-	if err:=verifySQLPrimaryAccounts(root);err!=nil{return err}
-	if checkpoint != nil {
-		if err := checkpoint("validated"); err != nil {return err}
+	if err := verifySQLPrimaryAccounts(root); err != nil {
+		return err
 	}
-	if err := sqliteRequireOfflineJSON(root); err != nil {return err}
-	if err := sqliteHistoryDeleteGuard(root, false); err != nil {return err}
-	selector, err := json.Marshal(sqliteBackendSelection{Version: 1, Active: "sqlite"})
-	if err != nil {return err}
-	if err := writeSyncedMetadata(root, sqliteBackendSelectionName, selector); err != nil {return err}
 	if checkpoint != nil {
-		if err := checkpoint("selected"); err != nil {return err}
+		if err := checkpoint("validated"); err != nil {
+			return err
+		}
+	}
+	if err := sqliteRequireOfflineJSON(root); err != nil {
+		return err
+	}
+	if err := sqliteHistoryDeleteGuard(root, false); err != nil {
+		return err
+	}
+	selector, err := json.Marshal(sqliteBackendSelection{Version: 1, Active: "sqlite"})
+	if err != nil {
+		return err
+	}
+	if err := writeSyncedMetadata(root, sqliteBackendSelectionName, selector); err != nil {
+		return err
+	}
+	if checkpoint != nil {
+		if err := checkpoint("selected"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // Validate before newAccounts can bootstrap an empty or absent account file.
-func verifySQLPrimaryAccounts(root string)error{
+func verifySQLPrimaryAccounts(root string) error {
 	raw, err := videoPublicationReadFile(root, "accounts.json", 64<<20)
 	if err != nil {
 		return fmt.Errorf("SQL activation requires existing account metadata: %w", err)

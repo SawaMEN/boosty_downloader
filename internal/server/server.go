@@ -60,10 +60,13 @@ type App struct {
 }
 
 func New(cfg Config) (*App, error) {
-	switch os.Getenv("BD_SQLITE_PRIMARY"){
-	case "", "0":return newAppMode(cfg,false)
-	case "1":return newAppMode(cfg,true)
-	default:return nil,errors.New("BD_SQLITE_PRIMARY must be 0 or 1")
+	switch os.Getenv("BD_SQLITE_PRIMARY") {
+	case "", "0":
+		return newAppMode(cfg, false)
+	case "1":
+		return newAppMode(cfg, true)
+	default:
+		return nil, errors.New("BD_SQLITE_PRIMARY must be 0 or 1")
 	}
 }
 
@@ -178,7 +181,9 @@ func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 		return nil, err
 	}
 	if sqlPrimary {
-		if err:=verifySQLPrimaryAccounts(cfg.DataDir);err!=nil{return nil,err}
+		if err := verifySQLPrimaryAccounts(cfg.DataDir); err != nil {
+			return nil, err
+		}
 	}
 	accounts, err := newAccounts(cfg.DataDir, cfg.AdminUser, cfg.AdminPassword)
 	if err != nil {

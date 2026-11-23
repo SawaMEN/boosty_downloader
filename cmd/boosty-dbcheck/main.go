@@ -61,7 +61,7 @@ func main() {
 	if flag.NArg() != 0 || verifiers > 1 ||
 		(*rollbackSQL != (*rollbackFull != "")) ||
 		(*activatePrimary != *confirmPrimary) ||
-		(*activatePrimary && *cutoverFull=="") ||
+		(*activatePrimary && *cutoverFull == "") ||
 		(*cutoverFull != "" && !*cutoverPreflight && !*prepareCutover && !*activatePrimary) ||
 		(*restoreTo != "" && *restoreFullSnapshot == "" && *restoreSQL == "") ||
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
@@ -144,8 +144,8 @@ func main() {
 		return
 	}
 	if *activatePrimary {
-		if err:=server.ActivateSQLitePrimaryExperimental(*root,*recoveryDir,*cutoverFull);err!=nil{
-			fmt.Fprintln(os.Stderr,"Experimental SQLite activation rejected:",err)
+		if err := server.ActivateSQLitePrimaryExperimental(*root, *recoveryDir, *cutoverFull); err != nil {
+			fmt.Fprintln(os.Stderr, "Experimental SQLite activation rejected:", err)
 			os.Exit(1)
 		}
 		fmt.Println("EXPERIMENTAL SQLite-primary selected. Start only with BD_SQLITE_PRIMARY=1 and all shadow/verify modes disabled.")
