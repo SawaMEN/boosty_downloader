@@ -45,7 +45,7 @@ type videoPublicationJournal struct {
 // journal supplied absolute path. A journal cannot target another owner.
 func videoPublicationPaths(root string, j videoPublicationJournal) (folder, stage, target string, err error) {
 	if j.Version != 1 || (j.Phase != "prepared" && j.Phase != "committed") ||
-		!validRevisionID(j.Nonce) || !validRevisionID(j.JobID) ||
+		!validRevisionID(j.Nonce) || !safeArchivePart(j.JobID) ||
 		!safeArchivePart(j.Owner) || !safeArchivePart(j.Author) ||
 		!safeArchivePart(j.Post) || !safeArchivePart(j.Target) ||
 		j.StageDevice == 0 || j.StageInode == 0 ||
@@ -316,7 +316,7 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 }
 
 func videoPublicationPrepare(root string, job Job, target, staged string, manifestBefore, manifestAfter, htmlAfter []byte, mediaSize int64, mediaDigest string) (videoPublicationJournal, error) {
-	if !validRevisionID(job.ID) || !safeArchivePart(job.OwnerID) ||
+	if !safeArchivePart(job.ID) || !safeArchivePart(job.OwnerID) ||
 		!safeArchivePart(job.Author) || !safeArchivePart(job.PostID) || !safeArchivePart(target) ||
 		!purgeValidHex(mediaDigest) || mediaSize <= 0 || mediaSize > maxArchiveMediaSize ||
 		len(manifestBefore) > maxArchiveManifestBytes || len(manifestAfter) > maxArchiveManifestBytes ||
@@ -433,7 +433,7 @@ func videoPublicationPrepare(root string, job Job, target, staged string, manife
 // Validate the staged path using the fixed, checked identifiers before the
 // media inode and manifest hashes are available.
 func videoPublicationPathsForStage(root string, j videoPublicationJournal) (string, string, string, error) {
-	if !validRevisionID(j.Nonce) || !validRevisionID(j.JobID) || !safeArchivePart(j.Owner) ||
+	if !validRevisionID(j.Nonce) || !safeArchivePart(j.JobID) || !safeArchivePart(j.Owner) ||
 		!safeArchivePart(j.Author) || !safeArchivePart(j.Post) || !safeArchivePart(j.Target) {
 		return "", "", "", errors.New("unsafe video publication staging path")
 	}
@@ -569,4 +569,3 @@ func cleanupAbandonedVideoPublicationStages(root string) error {
 	}
 	return syncMetadataDirectory(root)
 }
-

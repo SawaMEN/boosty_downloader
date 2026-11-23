@@ -155,8 +155,18 @@ func TestVideoWorkerArchivesRendition(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	man := ArchiveManifest{Title: "Video", Assets: []ArchiveAsset{{Filename: "source.mkv", Type: "ok_video", Size: n, SHA256: digest}}}
+	man := ArchiveManifest{
+		Title: "Video", Author: job.Author, PostID: job.PostID,
+		CapturedAt: time.Now().UTC(),
+		Assets: []ArchiveAsset{{Filename: "source.mkv", Type: "ok_video", Size: n, SHA256: digest}},
+	}
 	if e = writeJSON(filepath.Join(base, "manifest.json"), man); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(base, "post.json"), []byte(`{"data":[]}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(base, "index.html"), []byte("previous archive HTML"), 0600); e != nil {
 		t.Fatal(e)
 	}
 	app.processVideoTask(VideoTask{JobID: job.ID})

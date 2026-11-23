@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -116,6 +117,9 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	if !published {
 		return false, nil
 	}
+	// The journal preserves the new inode until its durable commit and
+	// cleanup. After success the caller's temporary link is no longer needed.
+	_ = os.Remove(staged)
 	a.store.notifySQLiteMedia()
 	return true, nil
 }
