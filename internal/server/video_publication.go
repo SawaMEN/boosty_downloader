@@ -1,9 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -82,60 +82,38 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	if err != nil {
 		return false, err
 	}
-	mediaDir := filepath.Join(folder, "media")
-	dest := filepath.Join(mediaDir, targetName)
-	// Preserve an older rendition until both metadata files are written.
-	// This rollback covers ordinary errors; a future durable journal is still
-	// needed for SIGKILL/power loss between multiple renames.
-	var backup string
-	if old, err := os.Lstat(dest); err == nil {
-		if !old.Mode().IsRegular() {
-			return false, errors.New("unsafe existing video rendition")
-		}
-		nonce, err := newRevisionID()
-		if err != nil {
-			return false, err
-		}
-		backup = filepath.Join(mediaDir, ".video-backup-"+nonce)
-		if err := os.Link(dest, backup); err != nil {
-			return false, err
-		}
-		defer os.Remove(backup)
-	} else if !os.IsNotExist(err) {
+	manifestAfter, err := json.MarshalIndent(latest, "", "  ")
+	if err != nil {
 		return false, err
 	}
-	if err := os.Rename(staged, dest); err != nil {
+	// Only one publication may own the data-root journal at a time. Archive
+	// writer gate is already held, preventing refresh/restore of this post.
+	a.store.videoPublicationMu.Lock()
+	defer a.store.videoPublicationMu.Unlock()
+	journal, err := videoPublicationPrepare(a.store.root, current, targetName, staged, originalJSON, manifestAfter, html, size, digest)
+	if err != nil {
+		// A failed directory fsync may still have published the journal.
+		if _, found, readErr := videoPublicationReadJournal(a.store.root); found && readErr == nil {
+			if _, recoverErr := recoverVideoPublicationJournal(a.store.root); recoverErr != nil {
+				a.store.mu.Lock()
+				a.store.primaryFatal = fmt.Errorf("video journal recovery failed: %w", recoverErr)
+				a.store.mu.Unlock()
+				return false, recoverErr
+			}
+		}
 		return false, err
 	}
-	rollback := func(cause error) (bool, error) {
-		if err := writeAtomic(filepath.Join(folder, "manifest.json"), originalJSON); err != nil {
+	published, err := publishVideoRenditionDurably(a.store.root, journal, a.store.videoCheckpoint)
+	if err != nil {
+		// Fail closed if the recovery journal was not fully reconciled.
+		if _, pending, _ := videoPublicationReadJournal(a.store.root); pending {
 			a.store.mu.Lock()
-			fatal := fmt.Errorf("video manifest rollback failed: %w", err)
-			a.store.primaryFatal = fatal
+			a.store.primaryFatal = fmt.Errorf("video publication recovery is pending: %w", err)
 			a.store.mu.Unlock()
-			return false, fatal
 		}
-		var fileErr error
-		if backup != "" {
-			fileErr = os.Rename(backup, dest)
-		} else {
-			fileErr = os.Remove(dest)
-		}
-		if fileErr != nil {
-			a.store.mu.Lock()
-			fatal := fmt.Errorf("video file rollback failed: %w", fileErr)
-			a.store.primaryFatal = fatal
-			a.store.mu.Unlock()
-			return false, fatal
-		}
-		return false, cause
+		return false, err
 	}
-	if err := writeJSON(filepath.Join(folder, "manifest.json"), latest); err != nil {
-		return rollback(err)
-	}
-	if err := writeAtomic(filepath.Join(folder, "index.html"), html); err != nil {
-		return rollback(err)
-	}
+	if !published { return false, nil }
 	a.store.notifySQLiteMedia()
 	return true, nil
 }

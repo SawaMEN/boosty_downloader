@@ -19,6 +19,7 @@ import (
 type Storage struct {
 	mu                sync.Mutex
 	blobMu            sync.Mutex
+	videoPublicationMu sync.Mutex
 	root              string
 	key               []byte
 	jobs              map[string]*Job
@@ -29,6 +30,7 @@ type Storage struct {
 	primaryFatal      error              // no further writes after unresolvable SQL/JSON divergence
 	purgeCheckpoint   func(string) error // crash/failure injection in tests only
 	restoreCheckpoint func(string) error // crash/failure injection in tests only
+	videoCheckpoint   func(string) error // video journal crash/failure injection
 	gates             *archiveGates
 }
 
@@ -110,6 +112,12 @@ func newStorage(root, keyString string) (*Storage, error) {
 	}
 	if e = recoverArchiveRestoreLocked(root); e != nil {
 		return nil, fmt.Errorf("archive restore journal recovery failed: %w", e)
+	}
+	if _, e = recoverVideoPublicationJournal(root); e != nil {
+		return nil, fmt.Errorf("video publication journal recovery failed: %w", e)
+	}
+	if e = cleanupAbandonedVideoPublicationStages(root); e != nil {
+		return nil, fmt.Errorf("orphaned video publication cleanup failed: %w", e)
 	}
 	// A killed encoder leaves only private, unpublished staging data.
 	// Remove it before serving users or starting new workers.
