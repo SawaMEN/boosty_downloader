@@ -48,6 +48,9 @@ func restoreSQLiteShadowWithHooks(root, backup string, hooks *restoreSQLiteShado
 		return err
 	}
 	defer lock.Close()
+	if err := sqliteRequireOfflineJSON(root); err != nil {
+		return err
+	}
 	// A backup physically inside the live data directory could be rewritten
 	// by the application or mistakenly included in archive maintenance. Do
 	// not permit recovery from an in-place or symlink-aliased source.
