@@ -174,3 +174,14 @@ func TestVideoPublicationRejectsDamagedJournalStage(t *testing.T) {
 		t.Fatalf("invalid journal recovery changed original HTML: %q %v", raw, err)
 	}
 }
+
+func TestVideoPublicationPendingJournalBlocksOfflineReindex(t *testing.T) {
+	app, _, _, _, _ := videoPublicationFixture(t)
+	root := app.store.root
+	key := base64.StdEncoding.EncodeToString(app.store.key)
+	staged, _, _ := newVideoPublicationStage(t, root)
+	videoJournalSIGKILL(t, root, key, staged, "journal")
+	if err := sqliteReindexNoWAL(root); err == nil {
+		t.Fatal("offline SQLite reindex accepted an unresolved video publication journal")
+	}
+}
