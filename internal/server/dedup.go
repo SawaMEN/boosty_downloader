@@ -83,11 +83,29 @@ func (s *Storage) deduplicateAsset(path, digest string, size int64) error {
 // discardBlobIfUnreferenced is cheap enough to run after a media replacement.
 // It avoids retaining a large orphan until the next user deletes an archive.
 func (s *Storage) discardBlobIfUnreferenced(digest string) error {
-	if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
-		return nil
+	return s.discardBlobsIfUnreferenced([]string{digest})
+}
+
+// Batch the old archive's media digests so SQL validation runs only once.
+func (s *Storage) discardBlobsIfUnreferenced(digests []string) error {
+	if len(digests)==0 {return nil}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.primary != nil {
+		return s.sqliteCollectUnusedBlobsLocked(digests)
 	}
 	s.blobMu.Lock()
 	defer s.blobMu.Unlock()
+	for _,digest:=range digests{
+		if err:=s.discardJSONBlobLocked(digest);err!=nil{return err}
+	}
+	return nil
+}
+
+func (s *Storage) discardJSONBlobLocked(digest string) error {
+	if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
+		return nil
+	}
 	object := filepath.Join(s.root, "blobs", "sha256", digest[:2], digest)
 	info, err := os.Lstat(object)
 	if os.IsNotExist(err) {
@@ -109,6 +127,11 @@ func (s *Storage) discardBlobIfUnreferenced(digest string) error {
 // collectUnusedBlobs reclaims the shared-object link after the last post
 // referencing it has been deleted. It does not delete any post media itself.
 func (s *Storage) collectUnusedBlobs() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.primary != nil {
+		return s.sqliteCollectUnusedBlobsLocked(nil)
+	}
 	s.blobMu.Lock()
 	defer s.blobMu.Unlock()
 	root := filepath.Join(s.root, "blobs", "sha256")

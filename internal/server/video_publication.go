@@ -43,7 +43,7 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 		return false, nil
 	}
 	if a.store.primary != nil {
-		if err := sqliteHistoryDeleteGuard(a.store.root,false); err != nil {
+		if err := sqliteHistoryDeleteGuard(a.store.root, false); err != nil {
 			return false, err
 		}
 		if err := a.store.verifySQLVideoCurrentLocked(current); err != nil {

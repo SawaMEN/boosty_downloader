@@ -39,8 +39,8 @@ type videoPublicationJournal struct {
 	BeforeMediaSize int64
 	AfterMediaSHA   string
 	AfterMediaSize  int64
-	JobsHash string `json:",omitempty"`
-	ImportsHash string `json:",omitempty"`
+	JobsHash        string `json:",omitempty"`
+	ImportsHash     string `json:",omitempty"`
 }
 
 // All filesystem paths are derived from validated identifiers, never from a
@@ -276,21 +276,29 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 	if j.Version == 2 {
 		// SQL's event and revision index commit atomically. The filesystem
 		// phase can lag behind an already committed SQL transaction.
-		commit, err = sqliteVideoRecoveryDecision(root,j,job,jobsRaw,oldMan,newMan,stage)
-		if err != nil { return false, err }
+		commit, err = sqliteVideoRecoveryDecision(root, j, job, jobsRaw, oldMan, newMan, stage)
+		if err != nil {
+			return false, err
+		}
 	}
 	mediaDir := filepath.Join(folder, "media")
 	// A crash between link and rename may leave the OTHER valid image
 	// linked at the replay temp name. Remove only the pinned old/new inode,
 	// including when the destination already matches or did not exist.
 	temp := filepath.Join(mediaDir, ".video-replay-"+j.Nonce)
-	if info,err:=os.Lstat(temp);err==nil {
-		if !info.Mode().IsRegular() || (!os.SameFile(info,newInfo) && !(j.HadOldMedia && os.SameFile(info,oldInfo))) {
+	if info, err := os.Lstat(temp); err == nil {
+		if !info.Mode().IsRegular() || (!os.SameFile(info, newInfo) && !(j.HadOldMedia && os.SameFile(info, oldInfo))) {
 			return false, errors.New("unexpected video replay temporary inode")
 		}
-		if err:=os.Remove(temp);err!=nil{return false,err}
-		if err:=syncMetadataDirectory(mediaDir);err!=nil{return false,err}
-	} else if !os.IsNotExist(err) {return false,err}
+		if err := os.Remove(temp); err != nil {
+			return false, err
+		}
+		if err := syncMetadataDirectory(mediaDir); err != nil {
+			return false, err
+		}
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
 	if commit {
 		if err := videoPublicationReplayMedia(mediaDir, j.Target, stageNew, j.Nonce, newInfo); err != nil {
 			return false, err
@@ -328,8 +336,10 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 	}
 	// Finalize the journal first. An interrupted cleanup leaves an orphaned
 	// stage that startup may safely reclaim without replaying the transaction.
-	final,found,err:=videoPublicationReadJournal(root)
-	if err!=nil||!found||final!=j{return false,errors.New("video journal changed during recovery")}
+	final, found, err := videoPublicationReadJournal(root)
+	if err != nil || !found || final != j {
+		return false, errors.New("video journal changed during recovery")
+	}
 	if err := removeSyncedMetadata(root, videoPublicationJournalName); err != nil {
 		return false, err
 	}
@@ -340,7 +350,7 @@ func recoverVideoPublicationJournal(root string) (bool, error) {
 }
 
 func videoPublicationPrepare(root string, job Job, target, staged string, manifestBefore, manifestAfter, htmlAfter []byte, mediaSize int64, mediaDigest string) (videoPublicationJournal, error) {
-	return videoPublicationPrepareMode(root,job,target,staged,manifestBefore,manifestAfter,htmlAfter,mediaSize,mediaDigest,false)
+	return videoPublicationPrepareMode(root, job, target, staged, manifestBefore, manifestAfter, htmlAfter, mediaSize, mediaDigest, false)
 }
 
 func videoPublicationPrepareMode(root string, job Job, target, staged string, manifestBefore, manifestAfter, htmlAfter []byte, mediaSize int64, mediaDigest string, sqlPrimary bool) (videoPublicationJournal, error) {
@@ -371,12 +381,16 @@ func videoPublicationPrepareMode(root string, job Job, target, staged string, ma
 		AfterMediaSHA: mediaDigest, AfterMediaSize: mediaSize,
 	}
 	if sqlPrimary {
-		j.Version=2
-		jobs,err:=videoPublicationReadFile(root,"jobs.json",64<<20)
-		if err!=nil{return j,err}
-		imports,err:=videoPublicationReadFile(root,"imports.json",64<<20)
-		if err!=nil{return j,err}
-		j.JobsHash,j.ImportsHash=metadataDigest(jobs),metadataDigest(imports)
+		j.Version = 2
+		jobs, err := videoPublicationReadFile(root, "jobs.json", 64<<20)
+		if err != nil {
+			return j, err
+		}
+		imports, err := videoPublicationReadFile(root, "imports.json", 64<<20)
+		if err != nil {
+			return j, err
+		}
+		j.JobsHash, j.ImportsHash = metadataDigest(jobs), metadataDigest(imports)
 	}
 	_, stage, dest, err := videoPublicationPathsForStage(root, j)
 	if err != nil {
@@ -478,7 +492,7 @@ func videoPublicationPathsForStage(root string, j videoPublicationJournal) (stri
 }
 
 func publishVideoRenditionDurably(root string, j videoPublicationJournal, checkpoint func(string) error) (bool, error) {
-	return publishVideoRenditionDurablyWithSQL(root,j,checkpoint,nil)
+	return publishVideoRenditionDurablyWithSQL(root, j, checkpoint, nil)
 }
 
 func publishVideoRenditionDurablyWithSQL(root string, j videoPublicationJournal, checkpoint func(string) error, commitSQL func() error) (bool, error) {
@@ -535,12 +549,22 @@ func publishVideoRenditionDurablyWithSQL(root string, j videoPublicationJournal,
 	if err := fail("html"); err != nil {
 		return abort(err)
 	}
-	if j.Version==2 {
-		if commitSQL==nil{return abort(errors.New("missing SQL video commit callback"))}
-		if err:=fail("sql-prepared");err!=nil{return abort(err)}
-		if err:=commitSQL();err!=nil{return abort(err)}
-		if err:=fail("sql-committed");err!=nil{return abort(err)}
-	} else if commitSQL!=nil{return abort(errors.New("unexpected SQL video commit callback"))}
+	if j.Version == 2 {
+		if commitSQL == nil {
+			return abort(errors.New("missing SQL video commit callback"))
+		}
+		if err := fail("sql-prepared"); err != nil {
+			return abort(err)
+		}
+		if err := commitSQL(); err != nil {
+			return abort(err)
+		}
+		if err := fail("sql-committed"); err != nil {
+			return abort(err)
+		}
+	} else if commitSQL != nil {
+		return abort(errors.New("unexpected SQL video commit callback"))
+	}
 	j.Phase = "committed"
 	data, err := json.Marshal(j)
 	if err != nil {

@@ -523,12 +523,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if !published {
 		return errors.New("публикация архива была отменена")
 	}
-	// Only now can previous content-addressed objects be released.
-	for _, previous := range prior {
-		if previous.SHA256 != "" {
-			_ = a.store.discardBlobIfUnreferenced(previous.SHA256)
-		}
-	}
+
 	j.ArchiveUpdatedAt = man.CapturedAt
 	if len(man.Failures) == 0 && !j.CommentsPartial {
 		if _, err := a.store.discardIdenticalRevision(*j, revisionID); err != nil {
@@ -537,6 +532,14 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	}
 	if err := a.store.pruneArchiveRevisions(*j); err != nil {
 		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
+	}
+	// Reclaim only after the current revision and history retention commit.
+	digests:=make([]string,0,len(prior))
+	for _,previous:=range prior{
+		if previous.SHA256!=""{digests=append(digests,previous.SHA256)}
+	}
+	if err:=a.store.discardBlobsIfUnreferenced(digests);err!=nil{
+		fmt.Fprintf(os.Stderr,"CAS cleanup: %v\n",err)
 	}
 	if len(man.Failures) > 0 {
 		j.CommentsPartial = true

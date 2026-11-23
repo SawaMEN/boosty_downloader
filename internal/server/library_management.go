@@ -620,13 +620,7 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 				delete(s.jobs, key)
 			}
 			s.notifySQLiteMedia()
-			sqlPrimary := s.primary != nil
 			s.mu.Unlock()
-			// A SQL CAS reference need not be a physical hardlink. Until
-			// SQL-aware GC is implemented, do not reclaim physical CAS here.
-			if sqlPrimary {
-				return len(ids), nil
-			}
 			if blobErr := s.collectUnusedBlobs(); blobErr != nil {
 				return len(ids), fmt.Errorf("archive purge committed but blob cleanup failed: %w", blobErr)
 			}
@@ -716,11 +710,7 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		return len(ids), s.primaryFatal
 	}
 	s.notifySQLiteMedia()
-	sqlPrimary := s.primary != nil
 	s.mu.Unlock()
-	if sqlPrimary {
-		return len(ids), nil
-	}
 	if cleanupErr := s.collectUnusedBlobs(); cleanupErr != nil {
 		return len(ids), fmt.Errorf("archives purged but unreferenced blob cleanup failed: %w", cleanupErr)
 	}

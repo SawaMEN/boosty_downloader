@@ -1,4 +1,4 @@
-name: SQL video publication verification
+name: SQL CAS garbage collection verification
 on:
   push:
     branches: [tooling/sqlite-history-journal-20261124]
@@ -11,12 +11,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Format and verify SQL video
+      - name: Format and verify CAS GC
         shell: bash
         run: |
-          gofmt -w internal/server/video_publication.go internal/server/video_publication_journal.go internal/server/sqlite_video_publication.go internal/server/sqlite_video_publication_test.go
-          go test ./internal/server -run '^(TestSQLVideo|TestVideoPublication|TestVideoRendition|TestSQLPurge|TestSQLRevisionRestore|TestSQLHistory)' -count=1 -v -timeout=120s
-          for path in internal/server/video_publication.go internal/server/video_publication_journal.go internal/server/sqlite_video_publication.go internal/server/sqlite_video_publication_test.go; do
+          gofmt -w internal/server/dedup.go internal/server/library_management.go internal/server/sqlite_history_delete.go internal/server/archive.go internal/server/sqlite_blob_gc.go internal/server/sqlite_blob_gc_test.go
+          go test ./internal/server -run '^(TestSQLBlobGC|TestSQLPurge|TestSQLHistory|TestSQLRevisionRestore|TestSQLVideo|TestOwnerScopedTiers|TestPurgeJournal|TestArchiveUpdate)' -count=1 -v -timeout=120s
+          for path in internal/server/dedup.go internal/server/library_management.go internal/server/sqlite_history_delete.go internal/server/archive.go internal/server/sqlite_blob_gc.go internal/server/sqlite_blob_gc_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"
