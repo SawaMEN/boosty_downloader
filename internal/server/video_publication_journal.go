@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const videoPublicationJournalName = ".video-publication-transaction.json"
@@ -466,7 +465,11 @@ func publishVideoRenditionDurably(root string, j videoPublicationJournal, checkp
 	if err != nil {
 		return abort(err)
 	}
-	if err := videoPublicationReplayMedia(filepath.Dir(dest), j.Target, filepath.Join(stage, "media.new"), j.Nonce, mustVideoStageInfo(filepath.Join(stage, "media.new"))); err != nil {
+	newInfo, err := os.Lstat(filepath.Join(stage, "media.new"))
+	if err != nil || !newInfo.Mode().IsRegular() {
+		return abort(errors.New("video publication stage media is missing or unsafe"))
+	}
+	if err := videoPublicationReplayMedia(filepath.Dir(dest), j.Target, filepath.Join(stage, "media.new"), j.Nonce, newInfo); err != nil {
 		return abort(err)
 	}
 	if err := fail("media"); err != nil {
@@ -511,11 +514,6 @@ func publishVideoRenditionDurably(root string, j videoPublicationJournal, checkp
 		return false, errors.New("video publication unexpectedly rolled back")
 	}
 	return true, nil
-}
-
-func mustVideoStageInfo(path string) os.FileInfo {
-	info, _ := os.Lstat(path)
-	return info
 }
 
 func videoPublicationStageNameValid(name string) bool {
@@ -572,6 +570,3 @@ func cleanupAbandonedVideoPublicationStages(root string) error {
 	return syncMetadataDirectory(root)
 }
 
-// Suppress linter warning about context-free timestamps when no transaction
-// is active; generations are compared by exact hashes, never wall-clock time.
-var _ = time.Time{}
