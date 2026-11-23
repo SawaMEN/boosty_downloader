@@ -57,7 +57,7 @@ func TestSQLFirstArchiveWriteGuardRejectsDivergentIndexBeforeFiles(t *testing.T)
 
 func TestSQLFirstArchiveWriteGuardRejectsWrongIdentityAndJobState(t *testing.T) {
 	for _, test := range []struct {
-		name string
+		name  string
 		alter func(*Job)
 	}{
 		{"owner", func(j *Job) { j.OwnerID = "other" }},
