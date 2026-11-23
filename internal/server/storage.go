@@ -86,12 +86,12 @@ type Job struct {
 }
 
 func newStorage(root, keyString string) (*Storage, error) {
-	return newStorageMode(root,keyString,false,nil)
+	return newStorageMode(root, keyString, false, nil)
 }
 
 // The experimental SQL startup caller must own the OS data-directory lock.
 // No public server option invokes it until activation and shutdown are audited.
-func newStorageMode(root,keyString string,sqlPrimary bool,checkpoint func(string)error) (*Storage,error) {
+func newStorageMode(root, keyString string, sqlPrimary bool, checkpoint func(string) error) (*Storage, error) {
 	key, e := base64.StdEncoding.DecodeString(keyString)
 	if e != nil || len(key) != 32 {
 		return nil, errors.New("BD_SECRET_KEY должен содержать 32 байта в base64")
@@ -110,10 +110,14 @@ func newStorageMode(root,keyString string,sqlPrimary bool,checkpoint func(string
 		return nil, fmt.Errorf("metadata backend selection failed: %w", backendErr)
 	}
 	if sqlPrimary {
-		if backend!="sqlite" {return nil,errors.New("experimental SQL startup requires an explicit SQLite selector")}
-		if _,err:=os.Lstat(filepath.Join(root,sqliteCutoverIntentName));err==nil{
-			return nil,errors.New("experimental SQL startup refuses a pending cutover rehearsal")
-		}else if !os.IsNotExist(err){return nil,err}
+		if backend != "sqlite" {
+			return nil, errors.New("experimental SQL startup requires an explicit SQLite selector")
+		}
+		if _, err := os.Lstat(filepath.Join(root, sqliteCutoverIntentName)); err == nil {
+			return nil, errors.New("experimental SQL startup refuses a pending cutover rehearsal")
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	} else if backend != "json" {
 		return nil, errors.New("SQLite-primary backend is selected but production Storage is not yet supported")
 	}
@@ -155,7 +159,7 @@ func newStorageMode(root,keyString string,sqlPrimary bool,checkpoint func(string
 		return nil, fmt.Errorf("orphaned video staging cleanup failed: %w", e)
 	}
 	if sqlPrimary {
-		return openSQLPrimaryStorageLocked(root,key,checkpoint)
+		return openSQLPrimaryStorageLocked(root, key, checkpoint)
 	}
 	// A persistent JSON selection is stronger than the legacy implicit JSON
 	// default: if SQLite was subsequently changed, refuse to initialize JSON

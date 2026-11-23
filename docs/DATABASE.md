@@ -377,3 +377,8 @@ Video journal v2 фиксирует хеши jobs/imports. Поскольку п
 ## Внутренний SQL-first startup (12.4.14)
 
 Внутренний конструктор под OS flock принимает только явный SQLite selector. После файлового recovery он открывает существующую базу, checkpoint WAL, проверяет SQL/JSON/ACL и полную инвентаризацию медиа, затем загружает проверенный SQL snapshot. Прерванные running jobs/imports переводятся в queued одной SQL-first транзакцией. Ошибки блокируют запуск без JSON fallback; при ошибке SQL handle закрывается. Публичный New и BD_SQLITE_PRIMARY по-прежнему запрещают SQL-active запуск до интеграции жизненного цикла приложения и отдельной безопасной активации.
+
+
+## SQL-first App lifecycle (12.4.15)
+
+Внутренний конструктор App требует явный SQLite selector и запрещает параллельный shadow/verify/catalog shadow. До запуска HTTP и workers используется SQL startup с восстановлением и проверкой индекса; legacy job migrations не исполняются. Ошибка инициализации освобождает SQL handle и OS flock. Close идемпотентен и закрывает SQLite после остановки workers, до освобождения flock. При карантине SQL healthz сообщает 503 без раскрытия внутренних данных. Публичный New и BD_SQLITE_PRIMARY остаются заблокированы для SQLite до отдельной офлайн-активации.
