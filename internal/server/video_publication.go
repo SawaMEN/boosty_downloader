@@ -87,7 +87,9 @@ func (a *App) publishVideoRendition(job Job, capturedAt time.Time, source Archiv
 	}
 	filtered := make([]ArchiveAsset, 0, len(latest.Assets)+1)
 	for _, asset := range latest.Assets {
-		if asset.Type == "transcoded_video" && asset.SourceFile == source.Filename {
+		// Other codec variants have independent media paths. Do not remove
+		// their manifest/index references while leaving bytes on disk.
+		if asset.Filename == targetName {
 			continue
 		}
 		filtered = append(filtered, asset)

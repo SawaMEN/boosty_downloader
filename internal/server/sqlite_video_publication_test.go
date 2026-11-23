@@ -2,6 +2,7 @@ package server
 
 import(
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -20,12 +21,17 @@ func sqlVideoFixture(t *testing.T)(string,string,Job,string){
 	app.Close()
 	// The legacy video fixture permits zero timestamps. SQL does not.
 	now:=time.Now().UTC()
-	jobs,err:=sqliteShadowReadJobs(filepath.Join(root,"jobs.json"))
+	// Read the legacy fixture without the strict SQL timestamp validator.
+	// Only pass validated records to the actual migration below.
+	raw,err:=os.ReadFile(filepath.Join(root,"jobs.json"))
 	if err!=nil{t.Fatal(err)}
+	var jobs map[string]Job
+	if err:=json.Unmarshal(raw,&jobs);err!=nil{t.Fatal(err)}
 	job=jobs[job.ID]
 	job.CreatedAt,job.UpdatedAt=now,now
 	jobs[job.ID]=job
 	if err:=writeJSON(filepath.Join(root,"jobs.json"),jobs);err!=nil{t.Fatal(err)}
+	if _,err:=sqliteShadowReadJobs(filepath.Join(root,"jobs.json"));err!=nil{t.Fatal(err)}
 	if err:=writeJSON(filepath.Join(root,"imports.json"),map[string]AuthorImport{});err!=nil{t.Fatal(err)}
 	cmd:=exec.Command("python3","../../tools/sqlite_migrate.py","--data-dir",root,"--output",filepath.Join(root,"metadata.db"))
 	if out,err:=cmd.CombinedOutput();err!=nil{t.Fatalf("SQL video migration: %v %s",err,out)}
@@ -110,4 +116,32 @@ func TestVideoPublicationRollbackCleansPinnedReplayTemp(t *testing.T){
 			if _,err:=os.Lstat(temp);!os.IsNotExist(err){t.Fatal("replay temp leaked",err)}
 		})
 	}
+}
+
+
+func TestSQLVideoPublicationKeepsOtherCodec(t *testing.T) {
+	root,key,job,folder:=sqlVideoFixture(t)
+	s,err:=newStorage(root,key)
+	if err!=nil{t.Fatal(err)}
+	meta,err:=openSQLiteMetadata(filepath.Join(root,"metadata.db"))
+	if err!=nil{t.Fatal(err)}
+	defer meta.close()
+	s.primary=meta
+	a:=&App{store:s,archiveGates:s.gates}
+	_,man,err:=readArchiveManifestNoFollow(folder)
+	if err!=nil{t.Fatal(err)}
+	original:=man.Assets[0]
+	for _,target:=range []string{"movie.mp4.h264.mp4","movie.mp4.hevc.mp4"}{
+		staged,size,digest:=newVideoPublicationStage(t,root)
+		if ok,err:=a.publishVideoRendition(job,man.CapturedAt,original,target,staged,size,digest);err!=nil||!ok{
+			t.Fatal("video publication",target,ok,err)
+		}
+		if _,err:=os.Stat(filepath.Join(folder,"media",target));err!=nil{t.Fatal(err)}
+	}
+	_,after,err:=readArchiveManifestNoFollow(folder)
+	if err!=nil||len(after.Assets)!=3{t.Fatal("codec variants lost",after.Assets,err)}
+	var count int
+	if err:=meta.db.QueryRow("SELECT COUNT(*) FROM revision_assets WHERE revision_id=?","current:"+job.ID).Scan(&count);err!=nil||count!=3{t.Fatal("codec variants missing from SQL",count,err)}
+	if err:=meta.db.QueryRow("SELECT COUNT(*) FROM archive_events WHERE archive_id=? AND event_type='video_publication'",job.ID).Scan(&count);err!=nil||count!=2{t.Fatal("missing commit events",count,err)}
+	if _,pending,err:=videoPublicationReadJournal(root);err!=nil||pending{t.Fatal("journal leaked",err)}
 }
