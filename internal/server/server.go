@@ -60,12 +60,12 @@ type App struct {
 }
 
 func New(cfg Config) (*App, error) {
-	return newAppMode(cfg,false)
+	return newAppMode(cfg, false)
 }
 
 // SQL-primary lifecycle is exercised through this internal constructor.
 // Public configuration remains disabled until a verified offline activation.
-func newAppMode(cfg Config,sqlPrimary bool) (*App,error) {
+func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
 	}
@@ -73,8 +73,10 @@ func newAppMode(cfg Config,sqlPrimary bool) (*App,error) {
 		return nil, errors.New("BD_SQLITE_PRIMARY is not available: SQL-primary storage routing and production cutover have not passed verification")
 	}
 	if sqlPrimary {
-		for _,flag:=range []string{"BD_SQLITE_SHADOW","BD_SQLITE_VERIFY","BD_SQLITE_MEDIA_SHADOW","BD_SQLITE_CATALOG_READS"} {
-			if os.Getenv(flag)=="1"{return nil,fmt.Errorf("SQL-primary conflicts with %s",flag)}
+		for _, flag := range []string{"BD_SQLITE_SHADOW", "BD_SQLITE_VERIFY", "BD_SQLITE_MEDIA_SHADOW", "BD_SQLITE_CATALOG_READS"} {
+			if os.Getenv(flag) == "1" {
+				return nil, fmt.Errorf("SQL-primary conflicts with %s", flag)
+			}
 		}
 	}
 	if os.Getenv("BD_SQLITE_SHADOW") == "1" && os.Getenv("BD_SQLITE_VERIFY") == "1" {
@@ -99,9 +101,13 @@ func newAppMode(cfg Config,sqlPrimary bool) (*App,error) {
 	var s *Storage
 	defer func() {
 		if !initialized {
-			if s!=nil {
-				if s.primary!=nil{_ = s.primary.close()}
-				if s.shadow!=nil{_ = s.shadow.meta.close()}
+			if s != nil {
+				if s.primary != nil {
+					_ = s.primary.close()
+				}
+				if s.shadow != nil {
+					_ = s.shadow.meta.close()
+				}
 			}
 			_ = dataDirLock.Close()
 		}
@@ -118,50 +124,54 @@ func newAppMode(cfg Config,sqlPrimary bool) (*App,error) {
 		return nil, fmt.Errorf("небезопасный выбор хранилища метаданных: %w", err)
 	}
 	if sqlPrimary {
-		if backend!="sqlite"{return nil,errors.New("experimental SQL application requires a durable SQLite selection")}
+		if backend != "sqlite" {
+			return nil, errors.New("experimental SQL application requires a durable SQLite selection")
+		}
 		// The offline migration must have completed legacy token migration.
 		// Never perform unrelated legacy filesystem migrations on SQL startup.
-		if _,err:=os.Lstat(filepath.Join(cfg.DataDir,"boosty-auth.enc"));err==nil {
-			return nil,errors.New("legacy authorization must be migrated before SQL startup")
-		}else if !os.IsNotExist(err){return nil,err}
+		if _, err := os.Lstat(filepath.Join(cfg.DataDir, "boosty-auth.enc")); err == nil {
+			return nil, errors.New("legacy authorization must be migrated before SQL startup")
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	} else {
-	if backend != "json" {
-		return nil, errors.New("SQLite backend is durably selected but active SQL-primary startup is not supported yet")
-	}
-	// A crash may have interrupted the JSON two-file transaction. Resolve the
-	// journal before comparing either JSON file with an offline SQLite export.
-	if err := recoverMetadataPair(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("восстановление метаданных не удалось: %w", err)
-	}
-	// SQL can have committed newer grants before a SIGKILL interrupted the
-	// JSON mirror. Finish or abort that transaction BEFORE serving any ACL.
-	if err := recoverSQLitePrimaryCommitLocked(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("SQL-primary journal requires manual recovery: %w", err)
-	}
-	// Resolve any interrupted archive folder staging BEFORE SQLite preflight
-	// and before exposing archive metadata or bytes to authenticated users.
-	if err := recoverArchivePurgeLocked(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("archive purge journal requires manual recovery: %w", err)
-	}
-	if err := recoverArchiveRestoreLocked(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("archive restore journal requires manual recovery: %w", err)
-	}
-	// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
-	// prepared intent. Cancel it only if the pinned recovery snapshot still
-	// exactly matches JSON, SQL, ACL and media; otherwise fail closed before
-	// account migration, new HTTP access, or background workers can run.
-	if err := recoverSQLiteCutoverRehearsalLocked(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("незавершённое переключение SQLite требует ручной проверки: %w", err)
-	}
-	// Validate against the raw JSON before any legacy migration or default
-	// serialization can rewrite authoritative files. No workers run yet.
-	if os.Getenv("BD_SQLITE_VERIFY") == "1" {
-		if err := verifySQLiteExport(cfg.DataDir); err != nil {
-			return nil, fmt.Errorf("проверка SQLite не пройдена; JSON остаётся основной базой: %w", err)
+		if backend != "json" {
+			return nil, errors.New("SQLite backend is durably selected but active SQL-primary startup is not supported yet")
+		}
+		// A crash may have interrupted the JSON two-file transaction. Resolve the
+		// journal before comparing either JSON file with an offline SQLite export.
+		if err := recoverMetadataPair(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("восстановление метаданных не удалось: %w", err)
+		}
+		// SQL can have committed newer grants before a SIGKILL interrupted the
+		// JSON mirror. Finish or abort that transaction BEFORE serving any ACL.
+		if err := recoverSQLitePrimaryCommitLocked(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("SQL-primary journal requires manual recovery: %w", err)
+		}
+		// Resolve any interrupted archive folder staging BEFORE SQLite preflight
+		// and before exposing archive metadata or bytes to authenticated users.
+		if err := recoverArchivePurgeLocked(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("archive purge journal requires manual recovery: %w", err)
+		}
+		if err := recoverArchiveRestoreLocked(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("archive restore journal requires manual recovery: %w", err)
+		}
+		// A SIGKILL during an offline SQLite cutover rehearsal can leave a durable
+		// prepared intent. Cancel it only if the pinned recovery snapshot still
+		// exactly matches JSON, SQL, ACL and media; otherwise fail closed before
+		// account migration, new HTTP access, or background workers can run.
+		if err := recoverSQLiteCutoverRehearsalLocked(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("незавершённое переключение SQLite требует ручной проверки: %w", err)
+		}
+		// Validate against the raw JSON before any legacy migration or default
+		// serialization can rewrite authoritative files. No workers run yet.
+		if os.Getenv("BD_SQLITE_VERIFY") == "1" {
+			if err := verifySQLiteExport(cfg.DataDir); err != nil {
+				return nil, fmt.Errorf("проверка SQLite не пройдена; JSON остаётся основной базой: %w", err)
+			}
 		}
 	}
-	}
-	s, err = newStorageMode(cfg.DataDir, cfg.SecretKey,sqlPrimary,nil)
+	s, err = newStorageMode(cfg.DataDir, cfg.SecretKey, sqlPrimary, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -173,15 +183,15 @@ func newAppMode(cfg Config,sqlPrimary bool) (*App,error) {
 		return nil, err
 	}
 	if !sqlPrimary {
-	if err = s.migrateLegacyAuth(); err != nil {
-		return nil, err
-	}
-	if err = s.migrateLegacyJobs(); err != nil {
-		return nil, err
-	}
-	if err = s.migrateArchiveTimestamps(); err != nil {
-		return nil, err
-	}
+		if err = s.migrateLegacyAuth(); err != nil {
+			return nil, err
+		}
+		if err = s.migrateLegacyJobs(); err != nil {
+			return nil, err
+		}
+		if err = s.migrateArchiveTimestamps(); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if os.Getenv("BD_SQLITE_SHADOW") == "1" {
@@ -229,7 +239,7 @@ func (a *App) client(owner string) (*boosty.Client, error) {
 // Close stops discovery, streaming downloads and scheduled work. Persisted
 // queued jobs are picked up by the next service process.
 func (a *App) Close() {
-	a.closeOnce.Do(func(){
+	a.closeOnce.Do(func() {
 		a.cancel()
 		a.wg.Wait()
 		// Serialize database closure with any final metadata operation.
@@ -319,13 +329,13 @@ func (a *App) Handler() http.Handler {
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		a.store.mu.Lock()
-		err:=a.store.sqlitePrimaryGuardMutationLocked()
+		err := a.store.sqlitePrimaryGuardMutationLocked()
 		a.store.mu.Unlock()
-		if err!=nil {
-			reply(w,http.StatusServiceUnavailable,map[string]string{"status":"unavailable"})
+		if err != nil {
+			reply(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
-		reply(w,200,map[string]string{"status":"ok"})
+		reply(w, 200, map[string]string{"status": "ok"})
 	})
 	public.HandleFunc("GET /api/public-config", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]bool{"registrationOpen": a.accounts.registration()})

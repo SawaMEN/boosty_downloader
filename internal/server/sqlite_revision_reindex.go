@@ -59,6 +59,7 @@ func ReindexSQLiteRevisionInventory(root, backup string) error {
 		return err
 	}
 	defer lock.Close()
+	if err:=sqliteRequireOfflineJSON(root);err!=nil{return err}
 	if err := VerifySQLiteMetadataBackup(backup); err != nil {
 		return fmt.Errorf("recovery snapshot verification failed: %w", err)
 	}
