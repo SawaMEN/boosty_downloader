@@ -490,8 +490,6 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			}
 		}
 	}
-	type moved struct{ src, dst string }
-	var moves []moved
 	var ids []string
 	folders := map[string]bool{}
 	for key, j := range s.jobs {
