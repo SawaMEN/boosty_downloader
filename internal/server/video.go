@@ -485,12 +485,15 @@ func (a *App) processVideoTask(task VideoTask) {
 		return
 	}
 	folder := a.store.archiveDir(job.OwnerID, job.Author, job.PostID)
-	b, err := os.ReadFile(filepath.Join(folder, "manifest.json"))
-	if err != nil {
+	// Obtain a consistent initial manifest. Do not hold the gate during
+	// FFmpeg: encoding can take minutes and readers must remain responsive.
+	unlock, ready := a.archiveGates.tryRead(job)
+	if !ready {
 		return
 	}
-	var man ArchiveManifest
-	if json.Unmarshal(b, &man) != nil {
+	_, man, err := readArchiveManifestNoFollow(folder)
+	unlock()
+	if err != nil || man.Author != job.Author || man.PostID != job.PostID {
 		return
 	}
 	for _, original := range man.Assets {
@@ -505,6 +508,10 @@ func (a *App) processVideoTask(task VideoTask) {
 		}
 		key := task.JobID + "/" + original.Filename
 		targetName := original.Filename + "." + policy.Codec + ".mp4"
+		if !safeArchivePart(targetName) || original.SHA256 == "" || original.Size <= 0 {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "skipped", Message: "Исходное видео не имеет проверяемой SHA-256 или безопасного имени"})
+			continue
+		}
 		dest := filepath.Join(folder, "media", targetName)
 		matched := false
 		for _, asset := range man.Assets {
@@ -523,84 +530,57 @@ func (a *App) processVideoTask(task VideoTask) {
 			continue
 		}
 		source := filepath.Join(folder, "media", original.Filename)
-		if info, err := os.Stat(source); err != nil || !info.Mode().IsRegular() {
-			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: "Исходное медиа отсутствует"})
+		stat, statErr := os.Lstat(source)
+		if statErr != nil || !stat.Mode().IsRegular() {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: "Исходное медиа отсутствует или небезопасно"})
 			a.videoMarkFailure(key)
 			continue
 		}
 		storagePolicy := a.accounts.policy()
 		quotaCtx := withStorageBudget(a.ctx, a.store.root, job.OwnerID, storagePolicy.MinFreeGiB, storagePolicy.MaxUserGiB)
-		stat, statErr := os.Stat(source)
-		if statErr != nil {
-			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: "Невозможно прочитать исходное видео"})
-			continue
-		}
 		if err := checkStorageBudget(quotaCtx, stat.Size()); err != nil {
 			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "skipped", Message: err.Error()})
 			continue
 		}
+		// FFmpeg never writes into the published live archive. A refresh or
+		// restore may happen while it encodes: only a matching generation can
+		// later receive the completed rendition.
+		stageDir, err := os.MkdirTemp(a.store.root, ".video-stage-")
+		if err != nil {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: err.Error()})
+			continue
+		}
+		staged := filepath.Join(stageDir, "rendition.mp4")
 		a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "running"})
-		backend, err := transcodeVideo(a.ctx, policy, source, dest)
-		if err != nil {
-			status := "failed"
-			if errors.Is(err, errVideoNotSmaller) {
-				status = "skipped"
+		backend, encodeErr := transcodeVideo(a.ctx, policy, source, staged)
+		if encodeErr != nil {
+			_ = os.RemoveAll(stageDir)
+			state := "failed"
+			if errors.Is(encodeErr, errVideoNotSmaller) {
+				state = "skipped"
 			}
-			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: status, Backend: backend, Message: err.Error()})
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: state, Backend: backend, Message: encodeErr.Error()})
 			a.videoMarkFailure(key)
 			continue
 		}
-		size, digest, err := fileDigest(dest)
-		if err != nil {
-			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: err.Error()})
+		size, digest, digestErr := fileDigest(staged)
+		if digestErr != nil {
+			_ = os.RemoveAll(stageDir)
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: digestErr.Error()})
 			a.videoMarkFailure(key)
 			continue
 		}
-		// Another archive refresh can occur while FFmpeg is running. Never attach a
-		// rendition to a different revision or overwrite a concurrently saved manifest.
-		currentJob, exists := a.store.get(job.ID)
-		if !exists || currentJob.State == "running" || currentJob.State == "queued" {
-			_ = os.Remove(dest)
+		published, publishErr := a.publishVideoRendition(job, man.CapturedAt, original, targetName, staged, size, digest)
+		_ = os.RemoveAll(stageDir)
+		if publishErr != nil {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Backend: backend, Message: publishErr.Error()})
+			a.videoMarkFailure(key)
 			continue
 		}
-		latest, err := os.ReadFile(filepath.Join(folder, "manifest.json"))
-		if err != nil {
+		if !published {
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "skipped", Backend: backend, Message: "Архив обновился или занят; результат кодирования не опубликован"})
 			continue
 		}
-		var updated ArchiveManifest
-		if json.Unmarshal(latest, &updated) != nil {
-			continue
-		}
-		stillCurrent := false
-		for _, asset := range updated.Assets {
-			if asset.Filename == original.Filename && asset.SHA256 == original.SHA256 {
-				stillCurrent = true
-				break
-			}
-		}
-		if !stillCurrent {
-			_ = os.Remove(dest)
-			continue
-		}
-		filtered := make([]ArchiveAsset, 0, len(updated.Assets)+1)
-		for _, asset := range updated.Assets {
-			if asset.Type == "transcoded_video" && asset.SourceFile == original.Filename {
-				continue
-			}
-			filtered = append(filtered, asset)
-		}
-		filtered = append(filtered, ArchiveAsset{Filename: targetName, Type: "transcoded_video", Title: original.Title, Size: size, SHA256: digest, SourceFile: original.Filename, SourceSHA256: original.SHA256})
-		updated.Assets = filtered
-		// The content changed outside the ordinary archiver. Never leave an
-		// old digest that could incorrectly suppress the next revision.
-		updated.ContentSHA256 = ""
-		if err = writeJSON(filepath.Join(folder, "manifest.json"), updated); err != nil {
-			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: err.Error()})
-			continue
-		}
-		// The original remains accessible even if rebuilding the presentation fails.
-		_ = rebuildVideoArchiveHTML(folder, updated)
-		a.store.notifySQLiteMedia()
 		a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "done", Backend: backend, Message: "Сохранена дополнительная версия; исходник не изменён"})
 	}
 }
@@ -659,12 +639,12 @@ func readSavedJSON(base string, dst any) error {
 	}
 	return json.Unmarshal(b, dst)
 }
-func rebuildVideoArchiveHTML(folder string, man ArchiveManifest) error {
+func renderVideoArchiveHTML(folder string, man ArchiveManifest) ([]byte, error) {
 	var p struct {
 		Data []json.RawMessage `json:"data"`
 	}
 	if err := readSavedJSON(filepath.Join(folder, "post.json"), &p); err != nil {
-		return err
+		return nil, err
 	}
 	// Source content blocks only need Data; tokens are never passed to the HTML renderer.
 	post := &boosty.Post{Data: p.Data}
@@ -674,9 +654,17 @@ func rebuildVideoArchiveHTML(folder string, man ArchiveManifest) error {
 	appendComments(&cv, comments.Comments, 0)
 	var out bytes.Buffer
 	if err := pageTemplate.Execute(&out, renderData{ArchiveManifest: man, Blocks: archiveContentBlocks(post, man.Assets), Comments: cv}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func rebuildVideoArchiveHTML(folder string, man ArchiveManifest) error {
+	html, err := renderVideoArchiveHTML(folder, man)
+	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(folder, "index.html"), out.Bytes())
+	return writeAtomic(filepath.Join(folder, "index.html"), html)
 }
 
 // The inventory is administrator-only, capped to keep the settings page fast.
