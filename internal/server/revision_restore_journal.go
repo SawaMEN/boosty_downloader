@@ -19,17 +19,17 @@ import (
 const revisionRestoreJournalName = ".archive-restore-transaction.json"
 
 type revisionRestoreJournal struct {
-	Version      int    `json:"version"`
-	JobID        string `json:"jobId"`
-	Owner        string `json:"owner"`
-	Author       string `json:"author"`
-	Post         string `json:"post"`
-	Revision     string `json:"revision"`
-	Nonce        string `json:"nonce"`
-	BeforeHash   string `json:"beforeHash"`
-	AfterHash    string `json:"afterHash"`
-	OldManifest  string `json:"oldManifest"`
-	NewManifest  string `json:"newManifest"`
+	Version     int    `json:"version"`
+	JobID       string `json:"jobId"`
+	Owner       string `json:"owner"`
+	Author      string `json:"author"`
+	Post        string `json:"post"`
+	Revision    string `json:"revision"`
+	Nonce       string `json:"nonce"`
+	BeforeHash  string `json:"beforeHash"`
+	AfterHash   string `json:"afterHash"`
+	OldManifest string `json:"oldManifest"`
+	NewManifest string `json:"newManifest"`
 }
 
 func revisionRestorePaths(root string, journal revisionRestoreJournal) (string, string, string, error) {
