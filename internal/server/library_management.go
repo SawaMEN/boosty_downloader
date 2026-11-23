@@ -531,10 +531,24 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 	// Stage physical folders only after a durable journal pins BEFORE and
 	// AFTER jobs.json generations. A crash before metadata publication rolls
 	// back every staged rename; after publication it completes removal.
-	diskJobs, err := sqliteShadowReadJobs(filepath.Join(s.root, "jobs.json"))
+	// A legacy JSON deployment may predate SQL-required timestamps. The
+	// purge journal needs an exact JSON/memory generation match, not an SQL
+	// migration validator that would refuse safe deletion of older archives.
+	before, err := os.ReadFile(filepath.Join(s.root, "jobs.json"))
 	if err != nil {
 		s.mu.Unlock()
 		return 0, err
+	}
+	var diskJobs map[string]Job
+	if err := json.Unmarshal(before, &diskJobs); err != nil || diskJobs == nil {
+		s.mu.Unlock()
+		return 0, errors.New("invalid JSON archive generation before physical purge")
+	}
+	for id, job := range diskJobs {
+		if id != job.ID {
+			s.mu.Unlock()
+			return 0, errors.New("archive identity does not match JSON key")
+		}
 	}
 	currentJobs := make(map[string]Job, len(s.jobs))
 	for key, job := range s.jobs {
@@ -547,11 +561,6 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 	if !sqliteShadowEqual(currentJobs, diskJobs) {
 		s.mu.Unlock()
 		return 0, errors.New("archive purge blocked: in-memory jobs differ from jobs.json")
-	}
-	before, err := os.ReadFile(filepath.Join(s.root, "jobs.json"))
-	if err != nil {
-		s.mu.Unlock()
-		return 0, err
 	}
 	afterJobs := make(map[string]Job, len(currentJobs)-len(ids))
 	for key, job := range currentJobs {
