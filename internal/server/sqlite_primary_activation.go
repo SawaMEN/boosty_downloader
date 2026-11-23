@@ -31,8 +31,12 @@ func sqliteRequireOfflineJSON(root string) error {
 // journal is unnecessary. Both recovery points are mandatory and must
 // describe the exact stopped installation. The atomic, fsynced selector
 // replacement is the commit point; prior to it JSON remains selected.
-// This internal entry point is exercised by crash tests, not exposed by the
-// public CLI until the rollback and deployment gates are completed.
+// ActivateSQLitePrimaryExperimental selects SQLite only while the service is
+// stopped. The server still requires BD_SQLITE_PRIMARY=1 on every start.
+func ActivateSQLitePrimaryExperimental(root, backup, snapshot string) error {
+	return activateSQLPrimaryOffline(root, backup, snapshot, nil)
+}
+
 func activateSQLPrimaryOffline(root, backup, snapshot string, checkpoint func(string) error) error {
 	if root == "" || backup == "" || snapshot == "" {
 		return errors.New("live data, verified metadata backup and full snapshot are required")
@@ -77,25 +81,8 @@ func activateSQLPrimaryOffline(root, backup, snapshot string, checkpoint func(st
 	}
 	// Account state remains in its existing store. Never enable an archive
 	// backend which would silently bootstrap a replacement admin account.
-	raw, err := videoPublicationReadFile(root, "accounts.json", 64<<20)
-	if err != nil {
-		return fmt.Errorf("SQL activation requires existing account metadata: %w", err)
-	}
-	var accounts accountFile
-	if err := json.Unmarshal(raw, &accounts); err != nil {
+	if err := verifySQLPrimaryAccounts(root); err != nil {
 		return err
-	}
-	admin := false
-	for id, account := range accounts.Accounts {
-		if id != account.ID || !safeArchivePart(id) || account.Password == "" {
-			return errors.New("invalid existing account identity")
-		}
-		if account.Admin {
-			admin = true
-		}
-	}
-	if !admin {
-		return errors.New("SQL activation requires an existing administrator")
 	}
 	if checkpoint != nil {
 		if err := checkpoint("validated"); err != nil {
@@ -119,6 +106,31 @@ func activateSQLPrimaryOffline(root, backup, snapshot string, checkpoint func(st
 		if err := checkpoint("selected"); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Validate before newAccounts can bootstrap an empty or absent account file.
+func verifySQLPrimaryAccounts(root string) error {
+	raw, err := videoPublicationReadFile(root, "accounts.json", 64<<20)
+	if err != nil {
+		return fmt.Errorf("SQL activation requires existing account metadata: %w", err)
+	}
+	var accounts accountFile
+	if err := json.Unmarshal(raw, &accounts); err != nil {
+		return err
+	}
+	admin := false
+	for id, account := range accounts.Accounts {
+		if id != account.ID || !safeArchivePart(id) || account.Password == "" {
+			return errors.New("invalid existing account identity")
+		}
+		if account.Admin {
+			admin = true
+		}
+	}
+	if !admin {
+		return errors.New("SQL activation requires an existing administrator")
 	}
 	return nil
 }

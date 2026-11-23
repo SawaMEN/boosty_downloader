@@ -26,6 +26,8 @@ func main() {
 	recoveryDir := flag.String("recovery-dir", "", "required VERIFIED metadata backup used by --reindex-media or --cutover-preflight")
 	cutoverPreflight := flag.Bool("cutover-preflight", false, "read-only preflight of JSON ACLs, SQL media index and an identical recovery backup")
 	cutoverFull := flag.String("cutover-full-snapshot-dir", "", "require a verified exact full data snapshot with --cutover-preflight or --prepare-sqlite-cutover")
+	activatePrimary := flag.Bool("activate-sqlite-primary", false, "EXPERIMENTAL offline activation; requires verified metadata and full data snapshots")
+	confirmPrimary := flag.Bool("confirm-experimental-sqlite", false, "explicitly accept experimental SQL-primary activation")
 	prepareCutover := flag.Bool("prepare-sqlite-cutover", false, "durably stage a VERIFIED offline SQL cutover rehearsal without activating SQL-primary")
 	recoverCutover := flag.Bool("recover-sqlite-cutover", false, "safely cancel a prepared offline cutover intent after validating the pinned recovery point")
 	exportSQL := flag.String("export-sqlite-json-dir", "", "create a NEW detached verified SQL-to-JSON recovery metadata snapshot; does not change live JSON")
@@ -37,12 +39,12 @@ func main() {
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON, *rollbackSQL, *recoverRollback} {
+	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON, *rollbackSQL, *recoverRollback, *activatePrimary} {
 		if enabled {
 			modes++
 		}
 	}
-	needsRecovery := *reindexMedia || *cutoverPreflight || *restoreShadow || *prepareCutover
+	needsRecovery := *reindexMedia || *cutoverPreflight || *restoreShadow || *prepareCutover || *activatePrimary
 	verifiers := 0
 	if *verifyBackup != "" {
 		verifiers++
@@ -58,14 +60,16 @@ func main() {
 	}
 	if flag.NArg() != 0 || verifiers > 1 ||
 		(*rollbackSQL != (*rollbackFull != "")) ||
-		(*cutoverFull != "" && !*cutoverPreflight && !*prepareCutover) ||
+		(*activatePrimary != *confirmPrimary) ||
+		(*activatePrimary && *cutoverFull == "") ||
+		(*cutoverFull != "" && !*cutoverPreflight && !*prepareCutover && !*activatePrimary) ||
 		(*restoreTo != "" && *restoreFullSnapshot == "" && *restoreSQL == "") ||
 		(*restoreFullSnapshot != "" && *restoreTo == "") ||
 		(*restoreSQL != "" && (*fromFull == "" || *restoreTo == "")) ||
 		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend | --rollback-sqlite-to-json --rollback-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-rollback] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --activate-sqlite-primary --confirm-experimental-sqlite --recovery-dir VERIFIED-BACKUP --cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend | --rollback-sqlite-to-json --rollback-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-rollback] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreSQL != "" {
@@ -137,6 +141,15 @@ func main() {
 		}
 		fmt.Println("Private detached SQL/JSON recovery metadata created and verified:", *exportSQL)
 		fmt.Println("Live JSON/SQL, media and backend were NOT modified. This does not activate or roll back SQL-primary.")
+		return
+	}
+	if *activatePrimary {
+		if err := server.ActivateSQLitePrimaryExperimental(*root, *recoveryDir, *cutoverFull); err != nil {
+			fmt.Fprintln(os.Stderr, "Experimental SQLite activation rejected:", err)
+			os.Exit(1)
+		}
+		fmt.Println("EXPERIMENTAL SQLite-primary selected. Start only with BD_SQLITE_PRIMARY=1 and all shadow/verify modes disabled.")
+		fmt.Println("Keep both backups. To return to JSON, stop the server, create a fresh full snapshot and run --rollback-sqlite-to-json; then unset BD_SQLITE_PRIMARY.")
 		return
 	}
 	if *prepareCutover {
