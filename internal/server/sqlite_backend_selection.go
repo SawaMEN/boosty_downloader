@@ -193,7 +193,9 @@ func verifyJSONSQLiteAgreement(root string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openSQLiteReadOnly(sqlPath)
+	// Startup can follow a crash after the SQL transaction journal was
+	// removed. Committed WAL frames remain authoritative until checkpoint.
+	db, err := openSQLiteReadOnlyMode(sqlPath, false)
 	if err != nil {
 		return err
 	}
