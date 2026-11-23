@@ -1,24 +1,22 @@
 name: One-off Go formatting export
 on:
   push:
-    branches:
-      - tooling/gofmt-video-journal-20261123
+    branches: [tooling/gofmt-video-journal-20261123]
 jobs:
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Print base64 of formatted Go files
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format and test whole-archive crash recovery
         shell: bash
         run: |
-          for path in internal/server/video_publication_journal.go internal/server/video_publication.go internal/server/storage.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go internal/server/video_publication_journal_test.go internal/server/sqlite_revision_reindex.go internal/server/video_test.go; do
-            gofmt -w "$path"
+          gofmt -w internal/server/archive_update_transaction.go internal/server/archive_update_transaction_test.go internal/server/archive.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go
+          go test ./internal/server -run '^TestArchiveUpdate' -count=1 -v
+          for path in internal/server/archive_update_transaction.go internal/server/archive_update_transaction_test.go internal/server/archive.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"
           done
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Focused video publication regression tests
-        run: go test ./internal/server -run '^(TestVideoPublication|TestVideoRenditionPublishConsistentFiles|TestVideoWorkerArchivesRendition)' -count=1

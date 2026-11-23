@@ -96,7 +96,7 @@ func PinJSONBackendSelection(root string) error {
 		return errors.New("cannot replace a SQLite-active backend marker with a JSON marker")
 	}
 	path := filepath.Join(absolute, sqliteBackendSelectionName)
-	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, videoPublicationJournalName, "metadata.db-journal", "metadata.db-wal"} {
+	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, videoPublicationJournalName, archiveUpdateJournalName, "metadata.db-journal", "metadata.db-wal"} {
 		if info, err := os.Lstat(filepath.Join(absolute, pending)); err == nil {
 			// A clean, zero-byte SQLite WAL sidecar may remain after a
 			// read-only checkpoint. Only a real pending WAL blocks pinning.

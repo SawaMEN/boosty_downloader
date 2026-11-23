@@ -158,7 +158,7 @@ func TestVideoWorkerArchivesRendition(t *testing.T) {
 	man := ArchiveManifest{
 		Title: "Video", Author: job.Author, PostID: job.PostID,
 		CapturedAt: time.Now().UTC(),
-		Assets: []ArchiveAsset{{Filename: "source.mkv", Type: "ok_video", Size: n, SHA256: digest}},
+		Assets:     []ArchiveAsset{{Filename: "source.mkv", Type: "ok_video", Size: n, SHA256: digest}},
 	}
 	if e = writeJSON(filepath.Join(base, "manifest.json"), man); e != nil {
 		t.Fatal(e)
