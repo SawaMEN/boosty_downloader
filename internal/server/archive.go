@@ -331,9 +331,8 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	}
 	j.Title = p.Title
 	j.RequiredTier = boosty.ParsePostRequirement(p.Raw)
-	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
-	// Capture last completed copy before modifying raw JSON, comments or
-	// media, so refresh failures never destroy the previous version.
+	// Capture the previous complete copy before staging the new archive.
+	// Failed downloads will not affect the still-published directory.
 	// Revalidate the SQL-first ACL/memory generation before touching archive
 	// files; a later progress checkpoint alone cannot undo file writes.
 	if err := a.store.guardArchiveFileMutation(*j); err != nil {
@@ -343,6 +342,18 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if e != nil {
 		return fmt.Errorf("не удалось сохранить прошлую версию: %w", e)
 	}
+	stage, e := a.store.beginArchiveUpdate(*j)
+	if e != nil {
+		return fmt.Errorf("не удалось подготовить новую версию архива: %w", e)
+	}
+	defer func() {
+		// Never discard the stage while a prepared journal may need it for
+		// recovery. Otherwise drop all interrupted, unpublished downloads.
+		if _, pending, err := archiveUpdateReadJournal(a.store.root); err == nil && !pending {
+			_ = os.RemoveAll(stage.Path)
+		}
+	}()
+	folder := stage.Path
 	mediaFolder := filepath.Join(folder, "media")
 	if e = os.MkdirAll(mediaFolder, 0700); e != nil {
 		return e
@@ -460,11 +471,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 				fmt.Fprintf(os.Stderr, "dedup: %v\n", err)
 			}
 		}
-		// A replaced video can leave its previous content-addressed object
-		// without any post references. Release that old object immediately.
-		if previous, known := prior[name]; known && previous.SHA256 != "" {
-			_ = a.store.discardBlobIfUnreferenced(previous.SHA256)
-		}
+		// Old blobs remain untouched until the new directory commits.
 		j.DoneFiles++
 		if err := a.store.upsert(*j); err != nil {
 			return fmt.Errorf("cannot persist downloaded media progress: %w", err)
@@ -498,6 +505,22 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	}
 	if e = writeAtomic(filepath.Join(folder, "index.html"), html.Bytes()); e != nil {
 		return e
+	}
+	if err := a.store.guardArchiveFileMutation(*j); err != nil {
+		return fmt.Errorf("unsafe archive generation before directory publication: %w", err)
+	}
+	published, err := a.store.publishArchiveUpdate(*j, stage)
+	if err != nil {
+		return fmt.Errorf("не удалось атомарно опубликовать архив: %w", err)
+	}
+	if !published {
+		return errors.New("публикация архива была отменена")
+	}
+	// Only now can previous content-addressed objects be released.
+	for _, previous := range prior {
+		if previous.SHA256 != "" {
+			_ = a.store.discardBlobIfUnreferenced(previous.SHA256)
+		}
 	}
 	j.ArchiveUpdatedAt = man.CapturedAt
 	if len(man.Failures) == 0 && !j.CommentsPartial {
