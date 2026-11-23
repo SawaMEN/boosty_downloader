@@ -273,7 +273,14 @@ func (a *App) runJob(id string) {
 	job.Error = ""
 	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Hour)
 	defer cancel()
+	previousCapture := job.ArchiveUpdatedAt
 	err := a.archive(ctx, &job)
+	// The directory transaction has already persisted the final job and
+	// notified the shadow. Do not reapply stale grants or reset a committed
+	// archive to queued just because shutdown arrived after its commit.
+	if !job.ArchiveUpdatedAt.Equal(previousCapture) {
+		return
+	}
 	if a.ctx.Err() != nil {
 		job.State = "queued"
 		job.Error = ""

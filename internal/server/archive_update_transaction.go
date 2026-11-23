@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const archiveUpdateJournalName = ".archive-update-transaction.json"
@@ -30,6 +31,8 @@ type archiveUpdateJournal struct {
 	NewDevice   uint64 `json:"newDevice"`
 	NewInode    uint64 `json:"newInode"`
 	NewManifest string `json:"newManifest"`
+	BeforeJobs  string `json:"beforeJobs,omitempty"`
+	AfterJobs   string `json:"afterJobs,omitempty"`
 }
 
 type archiveUpdateStage struct {
@@ -39,7 +42,9 @@ type archiveUpdateStage struct {
 }
 
 func archiveUpdatePaths(root string, j archiveUpdateJournal) (live, stage, backup string, err error) {
-	if j.Version != 1 || (j.Phase != "prepared" && j.Phase != "committed" && j.Phase != "aborting") ||
+	if (j.Version != 1 && j.Version != 2) || (j.Phase != "prepared" && j.Phase != "committed" && j.Phase != "aborting") ||
+		(j.Version == 1 && (j.BeforeJobs != "" || j.AfterJobs != "")) ||
+		(j.Version == 2 && (!purgeValidHex(j.BeforeJobs) || !purgeValidHex(j.AfterJobs) || j.BeforeJobs == j.AfterJobs)) ||
 		!validRevisionID(j.Nonce) || !safeArchivePart(j.JobID) ||
 		!safeArchivePart(j.Owner) || !safeArchivePart(j.Author) || !safeArchivePart(j.Post) ||
 		!purgeValidHex(j.NewManifest) || j.NewDevice == 0 || j.NewInode == 0 ||
@@ -186,15 +191,17 @@ func archiveUpdateSyncStage(stage string) error {
 	return syncMetadataDirectory(filepath.Dir(stage))
 }
 
-func (s *Storage) archiveUpdatePrepare(job Job, stage archiveUpdateStage) (archiveUpdateJournal, error) {
+// Caller holds Storage.mu: progress, ACL and unrelated job writes must not
+// change the authoritative JSON generation during the commit window.
+func (s *Storage) archiveUpdatePrepare(job Job, stage archiveUpdateStage, beforeJobs, afterJobs string) (archiveUpdateJournal, error) {
 	if !safeArchivePart(job.ID) || !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
 		return archiveUpdateJournal{}, errors.New("unsafe archive update job identity")
 	}
 	if _, existing, err := archiveUpdateReadJournal(s.root); err != nil || existing {
 		return archiveUpdateJournal{}, errors.New("another archive update journal needs recovery")
 	}
-	current, ok := s.get(job.ID)
-	if !ok || current.OwnerID != job.OwnerID || current.Author != job.Author || current.PostID != job.PostID ||
+	current := s.jobs[job.ID]
+	if current == nil || current.OwnerID != job.OwnerID || current.Author != job.Author || current.PostID != job.PostID ||
 		current.DeletedAt != nil || (current.State != "running" && current.State != "done" && current.State != "partial") {
 		return archiveUpdateJournal{}, errors.New("archive update job owner or state changed")
 	}
@@ -213,8 +220,9 @@ func (s *Storage) archiveUpdatePrepare(job Job, stage archiveUpdateStage) (archi
 		return archiveUpdateJournal{}, err
 	}
 	j := archiveUpdateJournal{
-		Version: 1, Phase: "prepared", Nonce: stage.Nonce,
+		Version: 2, Phase: "prepared", Nonce: stage.Nonce,
 		JobID: job.ID, Owner: job.OwnerID, Author: job.Author, Post: job.PostID,
+		BeforeJobs: beforeJobs, AfterJobs: afterJobs,
 		NewDevice: newDevice, NewInode: newInode, NewManifest: metadataDigest(newRaw),
 	}
 	old, err := purgeSafePath(s.root, stage.Live)
@@ -300,10 +308,26 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 		return false, errors.New("archive update job no longer belongs to the journal owner")
 	}
 	prepared := j.Phase != "committed"
+	if j.Version == 2 {
+		switch metadataDigest(jobsFile) {
+		case j.BeforeJobs:
+			if j.Phase == "committed" {
+				return false, errors.New("committed archive update has old jobs metadata")
+			}
+			prepared = true
+		case j.AfterJobs:
+			if j.Phase == "aborting" {
+				return false, errors.New("aborted archive update has new jobs metadata")
+			}
+			prepared = false
+		default:
+			return false, errors.New("archive update found unknown jobs.json generation")
+		}
+	}
 	liveKind, err := archiveUpdateWhich(root, live, j, true)
 	// A rollback may be interrupted while deleting the new directory.
 	// Verify its inode first; its manifest may already be missing.
-	if err != nil && prepared {
+	if err != nil && prepared && (j.Version == 1 || j.Phase == "aborting") {
 		if kind, second := archiveUpdateWhich(root, live, j, false); second == nil && kind == "new" {
 			liveKind, err = kind, nil
 		}
@@ -318,7 +342,7 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	backupKind, err := archiveUpdateWhich(root, backup, j, false)
+	backupKind, err := archiveUpdateWhich(root, backup, j, prepared)
 	if err != nil {
 		return false, err
 	}
@@ -326,6 +350,16 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 		return false, errors.New("archive update stage or backup identity changed")
 	}
 	if prepared {
+		if j.Phase != "aborting" {
+			j.Phase = "aborting"
+			data, err := json.Marshal(j)
+			if err != nil {
+				return false, err
+			}
+			if err := writeSyncedMetadata(root, archiveUpdateJournalName, data); err != nil {
+				return false, err
+			}
+		}
 		if j.OldExists {
 			switch {
 			case backupKind == "old" && (liveKind == "new" || liveKind == ""):
@@ -352,16 +386,7 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 				}
 			}
 		}
-		if j.Phase != "aborting" {
-			j.Phase = "aborting"
-			data, err := json.Marshal(j)
-			if err != nil {
-				return false, err
-			}
-			if err := writeSyncedMetadata(root, archiveUpdateJournalName, data); err != nil {
-				return false, err
-			}
-		}
+
 		if stageKind == "new" {
 			if err := durableRevisionRestoreRemove(root, stage); err != nil {
 				return false, err
@@ -383,82 +408,160 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 	return !prepared, nil
 }
 
+// archiveUpdateFinalJob updates only archive-owned metadata. ACL grants,
+// autosync and user options come from the current job, never a stale worker.
+func archiveUpdateFinalJob(current, worker Job, man ArchiveManifest) Job {
+	current.Title = man.Title
+	current.Subscription = man.Subscription
+	current.RequiredTier = man.RequiredTier
+	current.ArchiveUpdatedAt = man.CapturedAt
+	current.DoneFiles = 0
+	for _, asset := range man.Assets {
+		if asset.Type != "transcoded_video" {
+			current.DoneFiles++
+		}
+	}
+	current.TotalFiles = worker.TotalFiles
+	if current.TotalFiles < current.DoneFiles {
+		current.TotalFiles = current.DoneFiles
+	}
+	current.CommentsPartial = len(man.Failures) > 0 || man.CommentsStatus == "частично"
+	current.State = "done"
+	current.Error = ""
+	if current.CommentsPartial {
+		current.State = "partial"
+		if len(man.Failures) > 0 {
+			current.Error = fmt.Sprintf("архив частичный: %d ошибок; подробности в manifest.json", len(man.Failures))
+		}
+	}
+	current.UpdatedAt = time.Now().UTC()
+	return current
+}
+
 // Serialize brief commit windows across all job writers. Network transfers
 // remain independent, and publishing one archive cannot overwrite another
 // archive's data-root journal.
 func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool, error) {
 	s.archiveUpdateMu.Lock()
 	defer s.archiveUpdateMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return false, err
+	}
+	if s.primary != nil {
+		return false, errors.New("whole-archive publication requires JSON-authoritative storage until SQL cutover")
+	}
 	checkpoint := func(phase string) error {
 		if s.archiveUpdateCheckpoint != nil {
 			return s.archiveUpdateCheckpoint(phase)
 		}
 		return nil
 	}
-	j, err := s.archiveUpdatePrepare(job, stage)
+	if err := recoverMetadataPair(s.root); err != nil {
+		return false, err
+	}
+	if _, pending, err := archiveUpdateReadJournal(s.root); err != nil || pending {
+		return false, errors.New("archive update requires journal recovery before new publication")
+	}
+	before, err := videoPublicationReadFile(s.root, "jobs.json", 64<<20)
 	if err != nil {
-		// A directory fsync error can occur after the journal rename.
-		// Keep the stage when the journal is present for startup recovery.
-		if _, found, readErr := archiveUpdateReadJournal(s.root); found && readErr == nil {
-			if _, recoveryErr := recoverArchiveUpdateJournal(s.root); recoveryErr != nil {
-				s.mu.Lock()
-				s.primaryFatal = recoveryErr
-				s.mu.Unlock()
-				return false, recoveryErr
+		return false, err
+	}
+	var diskJobs map[string]Job
+	if err := json.Unmarshal(before, &diskJobs); err != nil || !sqliteShadowEqual(s.jobs, diskJobs) {
+		return false, errors.New("archive publication jobs.json does not match in-memory generation")
+	}
+	current := s.jobs[job.ID]
+	if current == nil || current.OwnerID != job.OwnerID || current.Author != job.Author ||
+		current.PostID != job.PostID || current.DeletedAt != nil {
+		return false, errors.New("archive publication job identity changed")
+	}
+	_, man, err := readArchiveManifestNoFollow(stage.Path)
+	if err != nil {
+		return false, err
+	}
+	next := archiveUpdateFinalJob(*current, job, man)
+	diskJobs[job.ID] = next
+	after, err := json.MarshalIndent(diskJobs, "", "  ")
+	if err != nil || len(after) > 64<<20 {
+		return false, errors.New("archive publication cannot encode bounded jobs metadata")
+	}
+	beforeHash, afterHash := metadataDigest(before), metadataDigest(after)
+	reconcile := func(cause error) (bool, error) {
+		if _, err := recoverArchiveUpdateJournal(s.root); err != nil {
+			s.primaryFatal = fmt.Errorf("archive update recovery failed: %w (initial error: %v)", err, cause)
+			return false, s.primaryFatal
+		}
+		actual, err := videoPublicationReadFile(s.root, "jobs.json", 64<<20)
+		if err != nil {
+			s.primaryFatal = fmt.Errorf("archive update metadata cannot be classified: %w", err)
+			return false, s.primaryFatal
+		}
+		switch metadataDigest(actual) {
+		case afterHash:
+			s.jobs[job.ID] = &next
+			s.notifySQLiteShadowLocked()
+			s.notifySQLiteMedia()
+			return true, nil
+		case beforeHash:
+			if cause == nil {
+				cause = errors.New("archive publication was rolled back")
 			}
+			return false, cause
+		default:
+			s.primaryFatal = errors.New("archive publication ended with unknown jobs metadata")
+			return false, s.primaryFatal
+		}
+	}
+	j, err := s.archiveUpdatePrepare(job, stage, beforeHash, afterHash)
+	if err != nil {
+		if _, found, readErr := archiveUpdateReadJournal(s.root); found || readErr != nil {
+			return reconcile(err)
 		}
 		return false, err
 	}
-	abort := func(cause error) (bool, error) {
-		committed, recoveryErr := recoverArchiveUpdateJournal(s.root)
-		if recoveryErr != nil {
-			s.mu.Lock()
-			s.primaryFatal = recoveryErr
-			s.mu.Unlock()
-			return false, fmt.Errorf("archive update recovery failed: %w (initial error: %v)", recoveryErr, cause)
-		}
-		if committed {
-			return true, nil
-		}
-		return false, cause
-	}
 	if err := checkpoint("journal"); err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	live, stagePath, backup, err := archiveUpdatePaths(s.root, j)
 	if err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	if j.OldExists {
 		if err := durableRevisionRestoreRename(s.root, live, backup); err != nil {
-			return abort(err)
+			return reconcile(err)
 		}
 	}
 	if err := checkpoint("old-moved"); err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	if err := durableRevisionRestoreRename(s.root, stagePath, live); err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	if err := checkpoint("new-moved"); err != nil {
-		return abort(err)
+		return reconcile(err)
+	}
+	// The exact jobs.json generation is the commit point. A crash or fsync
+	// error after rename is classified by the bytes on disk, not intent.
+	if err := writeSyncedMetadata(s.root, "jobs.json", after); err != nil {
+		return reconcile(err)
+	}
+	if err := checkpoint("metadata"); err != nil {
+		return reconcile(err)
 	}
 	j.Phase = "committed"
 	journalBytes, err := json.Marshal(j)
 	if err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	if err := writeSyncedMetadata(s.root, archiveUpdateJournalName, journalBytes); err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
 	if err := checkpoint("committed"); err != nil {
-		return abort(err)
+		return reconcile(err)
 	}
-	committed, err := recoverArchiveUpdateJournal(s.root)
-	if err != nil {
-		return false, err
-	}
-	return committed, nil
+	return reconcile(nil)
 }
 
 func archiveUpdateStageName(name string) bool {

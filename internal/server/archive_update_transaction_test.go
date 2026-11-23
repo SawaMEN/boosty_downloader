@@ -25,7 +25,8 @@ func archiveUpdateFixture(t *testing.T, old bool) (string, string, Job, string) 
 		t.Fatal(err)
 	}
 	job := Job{ID: strings.Repeat("b", 24), OwnerID: "admin", Author: "creator",
-		PostID: "post-a", State: "done", Title: "Old"}
+		PostID: "post-a", State: "done", Title: "Old", SharedForAll: true,
+		SharedWith: []string{"member"}, AutoSync: true}
 	if err := s.upsert(job); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 			label = "existing-post"
 		}
 		t.Run(label, func(t *testing.T) {
-			for _, phase := range []string{"journal", "old-moved", "new-moved", "committed"} {
+			for _, phase := range []string{"journal", "old-moved", "new-moved", "metadata", "committed"} {
 				t.Run(phase, func(t *testing.T) {
 					root, key, job, live := archiveUpdateFixture(t, old)
 					archiveUpdateKill(t, root, key, phase)
@@ -155,7 +156,19 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 					if _, err := os.Lstat(filepath.Join(root, archiveUpdateJournalName)); !os.IsNotExist(err) {
 						t.Fatal("archive update journal was not finalized")
 					}
-					expectedNew := phase == "committed"
+					expectedNew := phase == "metadata" || phase == "committed"
+					actual := recovered.jobs[job.ID]
+					if !actual.SharedForAll || !actual.AutoSync || len(actual.SharedWith) != 1 || actual.SharedWith[0] != "member" {
+						t.Fatal("archive publication recovery changed sharing or autosync")
+					}
+					if expectedNew {
+						if actual.Title != "New" || actual.State != "done" || actual.DoneFiles != 1 ||
+							actual.TotalFiles != 1 || !actual.ArchiveUpdatedAt.Equal(time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)) {
+							t.Fatalf("new directory and job metadata differ: %+v", actual)
+						}
+					} else if actual.Title != "Old" || !actual.ArchiveUpdatedAt.IsZero() {
+						t.Fatalf("rollback overwrote old job metadata: %+v", actual)
+					}
 					if !expectedNew && !old {
 						if _, err := os.Lstat(live); !os.IsNotExist(err) {
 							t.Fatalf("uncommitted first archive became visible: %v", err)
@@ -255,5 +268,26 @@ func TestArchiveUpdateOfflineReindexBlocked(t *testing.T) {
 	archiveUpdateKill(t, root, key, "journal")
 	if err := sqliteReindexNoWAL(root); err == nil {
 		t.Fatal("offline SQLite reindex accepted pending archive update")
+	}
+}
+
+func TestArchiveUpdateRefusesUnknownJobsGeneration(t *testing.T) {
+	root, key, _, live := archiveUpdateFixture(t, true)
+	archiveUpdateKill(t, root, key, "new-moved")
+	data, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(root, "jobs.json"), append(data, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStorage(root, key); err == nil {
+		t.Fatal("startup guessed the result of a transaction with unknown jobs metadata")
+	}
+	if _, err := os.Lstat(filepath.Join(root, archiveUpdateJournalName)); err != nil {
+		t.Fatal("unknown journal was removed", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(live, "index.html")); err != nil || string(raw) != "new archive HTML" {
+		t.Fatalf("failed recovery modified live directory: %q %v", raw, err)
 	}
 }
