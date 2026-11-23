@@ -1,21 +1,21 @@
-name: One-off Go formatting export
+name: Archive metadata transaction verification
 on:
   push:
     branches: [tooling/gofmt-video-journal-20261123]
 jobs:
-  format:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Format and test whole-archive crash recovery
+      - name: Format and verify archive journal
         shell: bash
         run: |
-          gofmt -w internal/server/archive_update_transaction.go internal/server/archive_update_transaction_test.go internal/server/archive.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go
+          gofmt -w internal/server/archive_update_transaction.go internal/server/archive.go internal/server/archive_update_transaction_test.go
           go test ./internal/server -run '^TestArchiveUpdate' -count=1 -v
-          for path in internal/server/archive_update_transaction.go internal/server/archive_update_transaction_test.go internal/server/archive.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go; do
+          for path in internal/server/archive_update_transaction.go internal/server/archive.go internal/server/archive_update_transaction_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"
