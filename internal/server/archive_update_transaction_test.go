@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	archiveUpdateCrashRoot = "BOOSTY_ARCHIVE_UPDATE_CRASH_ROOT"
-	archiveUpdateCrashKey = "BOOSTY_ARCHIVE_UPDATE_CRASH_KEY"
+	archiveUpdateCrashRoot  = "BOOSTY_ARCHIVE_UPDATE_CRASH_ROOT"
+	archiveUpdateCrashKey   = "BOOSTY_ARCHIVE_UPDATE_CRASH_KEY"
 	archiveUpdateCrashPhase = "BOOSTY_ARCHIVE_UPDATE_CRASH_PHASE"
 )
 
@@ -21,21 +21,35 @@ func archiveUpdateFixture(t *testing.T, old bool) (string, string, Job, string) 
 	t.Helper()
 	root, key := t.TempDir(), testKey(t)
 	s, err := newStorage(root, key)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	job := Job{ID: strings.Repeat("b", 24), OwnerID: "admin", Author: "creator",
 		PostID: "post-a", State: "done", Title: "Old"}
-	if err := s.upsert(job); err != nil { t.Fatal(err) }
+	if err := s.upsert(job); err != nil {
+		t.Fatal(err)
+	}
 	live := s.archiveDir(job.OwnerID, job.Author, job.PostID)
 	if old {
-		if err := os.MkdirAll(filepath.Join(live, "media"), 0700); err != nil { t.Fatal(err) }
-		if err := os.WriteFile(filepath.Join(live, "media", "photo.jpg"), []byte("old media bytes"), 0600); err != nil { t.Fatal(err) }
+		if err := os.MkdirAll(filepath.Join(live, "media"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(live, "media", "photo.jpg"), []byte("old media bytes"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		oldMediaSize, oldMediaHash, err := fileDigest(filepath.Join(live, "media", "photo.jpg"))
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		man := ArchiveManifest{Title: "Old", Author: job.Author, PostID: job.PostID,
 			CapturedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
-			Assets: []ArchiveAsset{{Filename: "photo.jpg", Type: "image", Size: oldMediaSize, SHA256: oldMediaHash}}}
-		if err := writeJSON(filepath.Join(live, "manifest.json"), man); err != nil { t.Fatal(err) }
-		if err := writeAtomic(filepath.Join(live, "index.html"), []byte("old archive HTML")); err != nil { t.Fatal(err) }
+			Assets:     []ArchiveAsset{{Filename: "photo.jpg", Type: "image", Size: oldMediaSize, SHA256: oldMediaHash}}}
+		if err := writeJSON(filepath.Join(live, "manifest.json"), man); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomic(filepath.Join(live, "index.html"), []byte("old archive HTML")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return root, key, job, live
 }
@@ -43,31 +57,53 @@ func archiveUpdateFixture(t *testing.T, old bool) (string, string, Job, string) 
 func archiveUpdateWriteStage(t *testing.T, s *Storage, job Job) archiveUpdateStage {
 	t.Helper()
 	stage, err := s.beginArchiveUpdate(job)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	media := filepath.Join(stage.Path, "media")
-	if err := os.MkdirAll(media, 0700); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(media, 0700); err != nil {
+		t.Fatal(err)
+	}
 	newMedia := filepath.Join(media, "photo.jpg")
-	if err := writeAtomic(newMedia, []byte("new media bytes")); err != nil { t.Fatal(err) }
+	if err := writeAtomic(newMedia, []byte("new media bytes")); err != nil {
+		t.Fatal(err)
+	}
 	size, sha, err := fileDigest(newMedia)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	man := ArchiveManifest{Title: "New", Author: job.Author, PostID: job.PostID,
 		CapturedAt: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC),
-		Assets: []ArchiveAsset{{Filename: "photo.jpg", Type: "image", Size: size, SHA256: sha}}}
-	if err := writeJSON(filepath.Join(stage.Path, "manifest.json"), man); err != nil { t.Fatal(err) }
-	if err := writeAtomic(filepath.Join(stage.Path, "index.html"), []byte("new archive HTML")); err != nil { t.Fatal(err) }
-	if err := writeAtomic(filepath.Join(stage.Path, "post.json"), []byte(`{"data":[]}`)); err != nil { t.Fatal(err) }
+		Assets:     []ArchiveAsset{{Filename: "photo.jpg", Type: "image", Size: size, SHA256: sha}}}
+	if err := writeJSON(filepath.Join(stage.Path, "manifest.json"), man); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(stage.Path, "index.html"), []byte("new archive HTML")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(stage.Path, "post.json"), []byte(`{"data":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 	// Even if a CDN left partial bytes, never publish them as valid media.
-	if err := os.WriteFile(filepath.Join(media, "photo.jpg.part"), []byte("unfinished"), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(media, "photo.jpg.part"), []byte("unfinished"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	return stage
 }
 
 func TestArchiveUpdateRealSIGKILLWorker(t *testing.T) {
 	root := os.Getenv(archiveUpdateCrashRoot)
-	if root == "" { return }
+	if root == "" {
+		return
+	}
 	s, err := newStorage(root, os.Getenv(archiveUpdateCrashKey))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	job, ok := s.get(strings.Repeat("b", 24))
-	if !ok { t.Fatal("missing synthetic job") }
+	if !ok {
+		t.Fatal("missing synthetic job")
+	}
 	stage := archiveUpdateWriteStage(t, s, job)
 	s.archiveUpdateCheckpoint = func(phase string) error {
 		if phase == os.Getenv(archiveUpdateCrashPhase) {
@@ -98,7 +134,9 @@ func archiveUpdateKill(t *testing.T, root, key, phase string) {
 func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 	for _, old := range []bool{false, true} {
 		label := "new-post"
-		if old { label = "existing-post" }
+		if old {
+			label = "existing-post"
+		}
 		t.Run(label, func(t *testing.T) {
 			for _, phase := range []string{"journal", "old-moved", "new-moved", "committed"} {
 				t.Run(phase, func(t *testing.T) {
@@ -108,7 +146,9 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 						t.Fatalf("crash checkpoint failed to persist journal: %v", err)
 					}
 					recovered, err := newStorage(root, key)
-					if err != nil { t.Fatalf("startup journal recovery failed: %v", err) }
+					if err != nil {
+						t.Fatalf("startup journal recovery failed: %v", err)
+					}
 					if recovered.jobs[job.ID] == nil || recovered.jobs[job.ID].OwnerID != job.OwnerID {
 						t.Fatal("recovery changed owner or removed job")
 					}
@@ -123,19 +163,25 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 					} else {
 						html, err := os.ReadFile(filepath.Join(live, "index.html"))
 						want := "old archive HTML"
-						if expectedNew { want = "new archive HTML" }
+						if expectedNew {
+							want = "new archive HTML"
+						}
 						if err != nil || string(html) != want {
 							t.Fatalf("wrong published archive after %s: %q %v", phase, html, err)
 						}
 						media, err := os.ReadFile(filepath.Join(live, "media", "photo.jpg"))
 						wantMedia := "old media bytes"
-						if expectedNew { wantMedia = "new media bytes" }
+						if expectedNew {
+							wantMedia = "new media bytes"
+						}
 						if err != nil || string(media) != wantMedia {
 							t.Fatalf("wrong media after %s: %q %v", phase, media, err)
 						}
 						_, man, err := readArchiveManifestNoFollow(live)
 						wantTitle := "Old"
-						if expectedNew { wantTitle = "New" }
+						if expectedNew {
+							wantTitle = "New"
+						}
 						if err != nil || man.Title != wantTitle {
 							t.Fatalf("wrong manifest after %s: %+v %v", phase, man, err)
 						}
@@ -144,7 +190,9 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 						}
 					}
 					entries, err := os.ReadDir(filepath.Dir(live))
-					if err != nil { t.Fatal(err) }
+					if err != nil {
+						t.Fatal(err)
+					}
 					for _, entry := range entries {
 						if strings.HasPrefix(entry.Name(), archiveUpdateStagePrefix) ||
 							strings.HasPrefix(entry.Name(), archiveUpdateBackupPrefix) {
@@ -160,14 +208,20 @@ func TestArchiveUpdateRecoversRealSIGKILL(t *testing.T) {
 func TestArchiveUpdateRollsBackOrdinaryFailure(t *testing.T) {
 	root, key, job, live := archiveUpdateFixture(t, true)
 	s, err := newStorage(root, key)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	stage := archiveUpdateWriteStage(t, s, job)
 	s.archiveUpdateCheckpoint = func(phase string) error {
-		if phase == "new-moved" { return syscall.ENOSPC }
+		if phase == "new-moved" {
+			return syscall.ENOSPC
+		}
 		return nil
 	}
 	published, err := s.publishArchiveUpdate(job, stage)
-	if err == nil || published { t.Fatalf("ENOSPC incorrectly committed archive: %v %v", published, err) }
+	if err == nil || published {
+		t.Fatalf("ENOSPC incorrectly committed archive: %v %v", published, err)
+	}
 	html, err := os.ReadFile(filepath.Join(live, "index.html"))
 	if err != nil || string(html) != "old archive HTML" {
 		t.Fatalf("failed publication overwrote live archive: %q %v", html, err)
@@ -181,9 +235,13 @@ func TestArchiveUpdateRefusesTamperedStage(t *testing.T) {
 	root, key, _, live := archiveUpdateFixture(t, true)
 	archiveUpdateKill(t, root, key, "journal")
 	j, found, err := archiveUpdateReadJournal(root)
-	if err != nil || !found { t.Fatal("no prepared journal", err) }
+	if err != nil || !found {
+		t.Fatal("no prepared journal", err)
+	}
 	stage := filepath.Join(filepath.Dir(live), archiveUpdateStagePrefix+j.Nonce)
-	if err := os.WriteFile(filepath.Join(stage, "manifest.json"), []byte("{}"), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(stage, "manifest.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := newStorage(root, key); err == nil {
 		t.Fatal("startup trusted tampered archive update stage")
 	}

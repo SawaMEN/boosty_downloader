@@ -16,25 +16,25 @@ const archiveUpdateStagePrefix = ".update-stage-"
 const archiveUpdateBackupPrefix = ".update-previous-"
 
 type archiveUpdateJournal struct {
-	Version int    `json:"version"`
-	Phase string   `json:"phase"`
-	Nonce string   `json:"nonce"`
-	JobID string   `json:"jobId"`
-	Owner string   `json:"owner"`
-	Author string  `json:"author"`
-	Post string    `json:"post"`
-	OldExists bool `json:"oldExists"`
-	OldDevice uint64 `json:"oldDevice"`
-	OldInode uint64 `json:"oldInode"`
+	Version     int    `json:"version"`
+	Phase       string `json:"phase"`
+	Nonce       string `json:"nonce"`
+	JobID       string `json:"jobId"`
+	Owner       string `json:"owner"`
+	Author      string `json:"author"`
+	Post        string `json:"post"`
+	OldExists   bool   `json:"oldExists"`
+	OldDevice   uint64 `json:"oldDevice"`
+	OldInode    uint64 `json:"oldInode"`
 	OldManifest string `json:"oldManifest"`
-	NewDevice uint64 `json:"newDevice"`
-	NewInode uint64 `json:"newInode"`
+	NewDevice   uint64 `json:"newDevice"`
+	NewInode    uint64 `json:"newInode"`
 	NewManifest string `json:"newManifest"`
 }
 
 type archiveUpdateStage struct {
-	Live string
-	Path string
+	Live  string
+	Path  string
 	Nonce string
 }
 
@@ -315,9 +315,13 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 	// committed into the journal. Only an explicitly durable aborting phase
 	// permits partially removed stage files on repeated-crash cleanup.
 	stageKind, err := archiveUpdateWhich(root, stage, j, j.Phase == "prepared")
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	backupKind, err := archiveUpdateWhich(root, backup, j, false)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	if stageKind != "" && stageKind != "new" || backupKind != "" && backupKind != "old" {
 		return false, errors.New("archive update stage or backup identity changed")
 	}
@@ -326,9 +330,13 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 			switch {
 			case backupKind == "old" && (liveKind == "new" || liveKind == ""):
 				if liveKind == "new" {
-					if err := durableRevisionRestoreRemove(root, live); err != nil { return false, err }
+					if err := durableRevisionRestoreRemove(root, live); err != nil {
+						return false, err
+					}
 				}
-				if err := durableRevisionRestoreRename(root, backup, live); err != nil { return false, err }
+				if err := durableRevisionRestoreRename(root, backup, live); err != nil {
+					return false, err
+				}
 			case backupKind == "" && liveKind == "old":
 				// No swap happened, or interrupted rollback finished.
 			default:
@@ -339,26 +347,34 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 				return false, errors.New("new archive rollback found a foreign backup")
 			}
 			if liveKind == "new" {
-				if err := durableRevisionRestoreRemove(root, live); err != nil { return false, err }
+				if err := durableRevisionRestoreRemove(root, live); err != nil {
+					return false, err
+				}
 			}
 		}
 		if j.Phase != "aborting" {
 			j.Phase = "aborting"
 			data, err := json.Marshal(j)
-			if err != nil { return false, err }
+			if err != nil {
+				return false, err
+			}
 			if err := writeSyncedMetadata(root, archiveUpdateJournalName, data); err != nil {
 				return false, err
 			}
 		}
 		if stageKind == "new" {
-			if err := durableRevisionRestoreRemove(root, stage); err != nil { return false, err }
+			if err := durableRevisionRestoreRemove(root, stage); err != nil {
+				return false, err
+			}
 		}
 	} else {
 		if liveKind != "new" || stageKind != "" {
 			return false, errors.New("committed archive update has no verified new version")
 		}
 		if backupKind == "old" {
-			if err := durableRevisionRestoreRemove(root, backup); err != nil { return false, err }
+			if err := durableRevisionRestoreRemove(root, backup); err != nil {
+				return false, err
+			}
 		}
 	}
 	if err := removeSyncedMetadata(root, archiveUpdateJournalName); err != nil {
@@ -374,7 +390,9 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 	s.archiveUpdateMu.Lock()
 	defer s.archiveUpdateMu.Unlock()
 	checkpoint := func(phase string) error {
-		if s.archiveUpdateCheckpoint != nil { return s.archiveUpdateCheckpoint(phase) }
+		if s.archiveUpdateCheckpoint != nil {
+			return s.archiveUpdateCheckpoint(phase)
+		}
 		return nil
 	}
 	j, err := s.archiveUpdatePrepare(job, stage)
@@ -399,25 +417,43 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 			s.mu.Unlock()
 			return false, fmt.Errorf("archive update recovery failed: %w (initial error: %v)", recoveryErr, cause)
 		}
-		if committed { return true, nil }
+		if committed {
+			return true, nil
+		}
 		return false, cause
 	}
-	if err := checkpoint("journal"); err != nil { return abort(err) }
-	live, stagePath, backup, err := archiveUpdatePaths(s.root, j)
-	if err != nil { return abort(err) }
-	if j.OldExists {
-		if err := durableRevisionRestoreRename(s.root, live, backup); err != nil { return abort(err) }
+	if err := checkpoint("journal"); err != nil {
+		return abort(err)
 	}
-	if err := checkpoint("old-moved"); err != nil { return abort(err) }
-	if err := durableRevisionRestoreRename(s.root, stagePath, live); err != nil { return abort(err) }
-	if err := checkpoint("new-moved"); err != nil { return abort(err) }
+	live, stagePath, backup, err := archiveUpdatePaths(s.root, j)
+	if err != nil {
+		return abort(err)
+	}
+	if j.OldExists {
+		if err := durableRevisionRestoreRename(s.root, live, backup); err != nil {
+			return abort(err)
+		}
+	}
+	if err := checkpoint("old-moved"); err != nil {
+		return abort(err)
+	}
+	if err := durableRevisionRestoreRename(s.root, stagePath, live); err != nil {
+		return abort(err)
+	}
+	if err := checkpoint("new-moved"); err != nil {
+		return abort(err)
+	}
 	j.Phase = "committed"
 	journalBytes, err := json.Marshal(j)
-	if err != nil { return abort(err) }
+	if err != nil {
+		return abort(err)
+	}
 	if err := writeSyncedMetadata(s.root, archiveUpdateJournalName, journalBytes); err != nil {
 		return abort(err)
 	}
-	if err := checkpoint("committed"); err != nil { return abort(err) }
+	if err := checkpoint("committed"); err != nil {
+		return abort(err)
+	}
 	committed, err := recoverArchiveUpdateJournal(s.root)
 	if err != nil {
 		return false, err
@@ -426,7 +462,9 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 }
 
 func archiveUpdateStageName(name string) bool {
-	if !strings.HasPrefix(name, archiveUpdateStagePrefix) { return false }
+	if !strings.HasPrefix(name, archiveUpdateStagePrefix) {
+		return false
+	}
 	return validRevisionID(strings.TrimPrefix(name, archiveUpdateStagePrefix))
 }
 
@@ -440,23 +478,33 @@ func cleanupAbandonedArchiveUpdates(root string) error {
 	}
 	library := filepath.Join(root, "library")
 	owners, err := os.ReadDir(library)
-	if os.IsNotExist(err) { return nil }
-	if err != nil { return err }
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	for _, owner := range owners {
 		if !safeArchivePart(owner.Name()) || !owner.IsDir() {
 			return errors.New("unsafe archive update owner directory")
 		}
 		authors, err := os.ReadDir(filepath.Join(library, owner.Name()))
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		for _, author := range authors {
 			if !safeArchivePart(author.Name()) || !author.IsDir() {
 				return errors.New("unsafe archive update author directory")
 			}
 			parent := filepath.Join(library, owner.Name(), author.Name())
 			entries, err := os.ReadDir(parent)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			for _, entry := range entries {
-				if !strings.HasPrefix(entry.Name(), archiveUpdateStagePrefix) { continue }
+				if !strings.HasPrefix(entry.Name(), archiveUpdateStagePrefix) {
+					continue
+				}
 				if !archiveUpdateStageName(entry.Name()) || !entry.IsDir() {
 					return errors.New("unsafe orphaned archive update staging directory")
 				}
@@ -464,8 +512,12 @@ func cleanupAbandonedArchiveUpdates(root string) error {
 				if info, err := purgeSafePath(root, path); err != nil || info == nil {
 					return errors.New("unsafe archive update staging path")
 				}
-				if err := os.RemoveAll(path); err != nil { return err }
-				if err := syncMetadataDirectory(parent); err != nil { return err }
+				if err := os.RemoveAll(path); err != nil {
+					return err
+				}
+				if err := syncMetadataDirectory(parent); err != nil {
+					return err
+				}
 			}
 		}
 	}
