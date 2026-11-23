@@ -87,3 +87,25 @@ func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
 	_, _, err := s.sqlitePrimaryReadSnapshotLocked()
 	return err
 }
+
+// guardArchiveFileMutation checks the internal SQL-primary snapshot and job
+// identity immediately before archive file writes. A successful job claim
+// alone is not enough: external drift could occur during a Boosty request.
+// Call without Storage.mu; JSON-primary has no extra SQL read path.
+func (s *Storage) guardArchiveFileMutation(job Job) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+		return err
+	}
+	if s.primary == nil {
+		return nil
+	}
+	current := s.jobs[job.ID]
+	if current == nil || current.OwnerID != job.OwnerID ||
+		current.Author != job.Author || current.PostID != job.PostID ||
+		current.State != "running" || current.DeletedAt != nil {
+		return s.sqlitePrimaryQuarantineLocked(errors.New("archive generation changed before physical write"))
+	}
+	return nil
+}

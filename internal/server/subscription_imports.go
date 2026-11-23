@@ -568,7 +568,9 @@ func (a *App) importWorker() {
 				v.State = "queued"
 				v.Error = ""
 			}
-			_ = a.store.updateImport(v)
+			if err := a.store.updateImport(v); err != nil && !errors.Is(err, errImportCanceled) {
+				fmt.Fprintf(os.Stderr, "cannot persist import completion: %v\n", err)
+			}
 		}
 	}
 }

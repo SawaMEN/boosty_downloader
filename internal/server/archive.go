@@ -264,7 +264,9 @@ func (a *App) runJob(id string) {
 		if feature.requested && !a.accounts.allowed(job.OwnerID, feature.key) {
 			job.State = "failed"
 			job.Error = "загрузка запрещена администратором: " + feature.key
-			_ = a.store.upsert(job)
+			if err := a.store.upsert(job); err != nil {
+				fmt.Fprintf(os.Stderr, "cannot persist archive policy rejection: %v\n", err)
+			}
 			return
 		}
 	}
@@ -332,6 +334,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	folder := a.store.archiveDir(j.OwnerID, j.Author, j.PostID)
 	// Capture last completed copy before modifying raw JSON, comments or
 	// media, so refresh failures never destroy the previous version.
+	// Revalidate the SQL-first ACL/memory generation before touching archive
+	// files; a later progress checkpoint alone cannot undo file writes.
+	if err := a.store.guardArchiveFileMutation(*j); err != nil {
+		return fmt.Errorf("unsafe archive generation before file changes: %w", err)
+	}
 	revisionID, e := a.store.saveArchiveRevision(*j)
 	if e != nil {
 		return fmt.Errorf("не удалось сохранить прошлую версию: %w", e)
@@ -389,7 +396,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		}
 		j.TotalFiles++
 	}
-	_ = a.store.upsert(*j)
+	if err := a.store.upsert(*j); err != nil {
+		return fmt.Errorf("cannot persist archive media inventory: %w", err)
+	}
 	for i, m := range rawMedia {
 		if m.Type == "file" && !j.IncludeFiles || m.Type == "ok_video" && !j.IncludeVideos || m.Type == "audio_file" && !j.IncludeAudio {
 			continue
@@ -398,6 +407,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+		if err := a.store.guardArchiveFileMutation(*j); err != nil {
+			return fmt.Errorf("unsafe archive generation before media write: %w", err)
 		}
 		name := boosty.MediaName(m, i)
 		dest := filepath.Join(mediaFolder, name)
@@ -414,7 +426,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 					_ = a.store.deduplicateAsset(dest, previous.SHA256, previous.Size)
 				}
 				j.DoneFiles++
-				_ = a.store.upsert(*j)
+				if err := a.store.upsert(*j); err != nil {
+					return fmt.Errorf("cannot persist reused media progress: %w", err)
+				}
 				continue
 			}
 		}
@@ -452,7 +466,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			_ = a.store.discardBlobIfUnreferenced(previous.SHA256)
 		}
 		j.DoneFiles++
-		_ = a.store.upsert(*j)
+		if err := a.store.upsert(*j); err != nil {
+			return fmt.Errorf("cannot persist downloaded media progress: %w", err)
+		}
 	}
 	// Keep completed encodes only when the original SHA-256 still matches.
 	// This prevents a refresh from losing an Immich-style derivative copy.
@@ -469,6 +485,9 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	man.ContentSHA256, e = archiveContentFingerprint(man, blocks, cv)
 	if e != nil {
 		return e
+	}
+	if err := a.store.guardArchiveFileMutation(*j); err != nil {
+		return fmt.Errorf("unsafe archive generation before publishing manifest: %w", err)
 	}
 	if e = writeJSON(filepath.Join(folder, "manifest.json"), man); e != nil {
 		return e
