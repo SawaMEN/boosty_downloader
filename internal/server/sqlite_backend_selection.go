@@ -96,7 +96,7 @@ func PinJSONBackendSelection(root string) error {
 		return errors.New("cannot replace a SQLite-active backend marker with a JSON marker")
 	}
 	path := filepath.Join(absolute, sqliteBackendSelectionName)
-	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName, sqliteRollbackJournalName, sqliteHistoryJournalName, "metadata.db-journal", "metadata.db-wal"} {
+	for _, pending := range []string{metadataJournalName, sqlitePrimaryTransactionName, sqliteCutoverIntentName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName, sqliteRollbackJournalName, sqliteHistoryJournalName, sqliteHistoryDeleteJournalName, "metadata.db-journal", "metadata.db-wal"} {
 		if info, err := os.Lstat(filepath.Join(absolute, pending)); err == nil {
 			// A clean, zero-byte SQLite WAL sidecar may remain after a
 			// read-only checkpoint. Only a real pending WAL blocks pinning.
@@ -193,7 +193,9 @@ func verifyJSONSQLiteAgreement(root string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openSQLiteReadOnly(sqlPath)
+	// Startup can follow a crash after the SQL transaction journal was
+	// removed. Committed WAL frames remain authoritative until checkpoint.
+	db, err := openSQLiteReadOnlyMode(sqlPath, false)
 	if err != nil {
 		return err
 	}

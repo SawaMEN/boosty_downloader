@@ -188,12 +188,25 @@ func backupFileDigest(dir, name string) (string, int64, error) {
 }
 
 func openSQLiteReadOnly(path string) (*sql.DB, error) {
+	return openSQLiteReadOnlyMode(path, true)
+}
+
+// For startup parity the database may have a committed WAL even when no
+// application journal remains. Immutable mode would silently ignore it.
+// Detached/offline callers keep the original immutable reader and WAL guards.
+func openSQLiteReadOnlyMode(path string, immutable bool) (*sql.DB, error) {
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("invalid SQLite backup file: %w", err)
 	}
 	// Append a URL escaped path so spaces and special characters cannot
 	// change query options. Read-only connection never creates a new file.
-	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1&_pragma=query_only(1)"}).String()
+	query := "mode=ro&_pragma=query_only(1)"
+	if immutable {
+		query += "&immutable=1"
+	} else {
+		query += "&_pragma=busy_timeout(5000)"
+	}
+	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: query}).String()
 	db, err := sql.Open("sqlite", uri)
 	if err != nil {
 		return nil, err

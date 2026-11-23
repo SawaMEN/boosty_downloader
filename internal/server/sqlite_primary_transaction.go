@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,9 @@ type sqlitePrimaryTransaction struct {
 
 type sqlitePrimaryCommitHooks struct {
 	checkpoint func(string) error
+	// Internal archive publication may update the current revision index
+	// inside the same SQL commit. This never runs after COMMIT.
+	reconcileExtra func(context.Context, *sql.Tx) error
 }
 
 // sqlitePrimaryCommitMetadata is a candidate SQL-authoritative commit
@@ -99,7 +103,11 @@ func sqlitePrimaryCommitMetadata(root string, m *sqliteMetadata, jobs map[string
 			return err
 		}
 	}
-	if err := m.reconcile(context.Background(), jobs, imports); err != nil {
+	var extra func(context.Context, *sql.Tx) error
+	if hooks != nil {
+		extra = hooks.reconcileExtra
+	}
+	if err := m.reconcileWithExtra(context.Background(), jobs, imports, extra); err != nil {
 		return err
 	}
 	if hooks != nil && hooks.checkpoint != nil {
