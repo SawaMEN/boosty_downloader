@@ -534,12 +534,14 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
 	}
 	// Reclaim only after the current revision and history retention commit.
-	digests:=make([]string,0,len(prior))
-	for _,previous:=range prior{
-		if previous.SHA256!=""{digests=append(digests,previous.SHA256)}
+	digests := make([]string, 0, len(prior))
+	for _, previous := range prior {
+		if previous.SHA256 != "" {
+			digests = append(digests, previous.SHA256)
+		}
 	}
-	if err:=a.store.discardBlobsIfUnreferenced(digests);err!=nil{
-		fmt.Fprintf(os.Stderr,"CAS cleanup: %v\n",err)
+	if err := a.store.discardBlobsIfUnreferenced(digests); err != nil {
+		fmt.Fprintf(os.Stderr, "CAS cleanup: %v\n", err)
 	}
 	if len(man.Failures) > 0 {
 		j.CommentsPartial = true

@@ -88,7 +88,9 @@ func (s *Storage) discardBlobIfUnreferenced(digest string) error {
 
 // Batch the old archive's media digests so SQL validation runs only once.
 func (s *Storage) discardBlobsIfUnreferenced(digests []string) error {
-	if len(digests)==0 {return nil}
+	if len(digests) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.primary != nil {
@@ -96,8 +98,10 @@ func (s *Storage) discardBlobsIfUnreferenced(digests []string) error {
 	}
 	s.blobMu.Lock()
 	defer s.blobMu.Unlock()
-	for _,digest:=range digests{
-		if err:=s.discardJSONBlobLocked(digest);err!=nil{return err}
+	for _, digest := range digests {
+		if err := s.discardJSONBlobLocked(digest); err != nil {
+			return err
+		}
 	}
 	return nil
 }

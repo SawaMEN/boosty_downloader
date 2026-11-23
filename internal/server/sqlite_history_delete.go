@@ -186,15 +186,15 @@ func (s *Storage) deleteSQLHistoryLocked(job Job, id string) error {
 	if err := recoverSQLHistoryDeleteLocked(s.root, s.sqliteHistoryDeleteCheckpoint); err != nil {
 		return s.sqlitePrimaryQuarantineLocked(err)
 	}
-	digests := make([]string,0,len(man.Assets))
+	digests := make([]string, 0, len(man.Assets))
 	for _, asset := range man.Assets {
 		if sqliteReindexDigestValid(asset.SHA256) {
-			digests=append(digests,asset.SHA256)
+			digests = append(digests, asset.SHA256)
 		}
 	}
-	if len(digests)>0 {
-		if err:=s.sqliteCollectUnusedBlobsLocked(digests);err!=nil{
-			return fmt.Errorf("history deletion committed, CAS cleanup failed: %w",err)
+	if len(digests) > 0 {
+		if err := s.sqliteCollectUnusedBlobsLocked(digests); err != nil {
+			return fmt.Errorf("history deletion committed, CAS cleanup failed: %w", err)
 		}
 	}
 	return nil

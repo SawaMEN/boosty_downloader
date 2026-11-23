@@ -40,7 +40,7 @@ func readSQLiteBackendSelection(root string) (string, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() == 0 || info.Size() > 256 {
 		return "", errors.New("unsafe metadata backend selector")
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return "", fmt.Errorf("cannot safely open backend selector: %w", err)
 	}
@@ -51,9 +51,12 @@ func readSQLiteBackendSelection(root string) (string, error) {
 		opened.Mode().Perm()&0077 != 0 || opened.Size() == 0 || opened.Size() > 256 {
 		return "", errors.New("backend selector was replaced or is unsafe")
 	}
-	raw, err := io.ReadAll(file)
+	raw, err := io.ReadAll(io.LimitReader(file,257))
 	if err != nil {
 		return "", err
+	}
+	if len(raw)>256 || int64(len(raw))!=opened.Size(){
+		return "",errors.New("backend selector size changed during read")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
