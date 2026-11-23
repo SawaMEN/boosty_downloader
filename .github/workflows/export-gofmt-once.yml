@@ -1,0 +1,19 @@
+name: One-off Go formatting export
+on:
+  push:
+    branches:
+      - tooling/gofmt-video-journal-20261123
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print base64 of formatted Go files
+        shell: bash
+        run: |
+          for path in internal/server/video_publication_journal.go internal/server/video_publication.go internal/server/storage.go internal/server/sqlite_backup.go internal/server/sqlite_backend_selection.go; do
+            gofmt -w "$path"
+            printf 'FORMATTED_BEGIN:%s\n' "$path"
+            base64 -w0 "$path"
+            printf '\nFORMATTED_END:%s\n' "$path"
+          done
