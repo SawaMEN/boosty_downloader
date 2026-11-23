@@ -104,6 +104,8 @@ func (s *Storage) guardArchiveFileMutation(job Job) error {
 	current := s.jobs[job.ID]
 	if current == nil || current.OwnerID != job.OwnerID ||
 		current.Author != job.Author || current.PostID != job.PostID ||
+		!current.CreatedAt.Equal(job.CreatedAt) ||
+		job.State != "running" || job.DeletedAt != nil ||
 		current.State != "running" || current.DeletedAt != nil {
 		return s.sqlitePrimaryQuarantineLocked(errors.New("archive generation changed before physical write"))
 	}
