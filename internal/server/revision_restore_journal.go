@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -30,6 +31,10 @@ type revisionRestoreJournal struct {
 	AfterHash   string `json:"afterHash"`
 	OldManifest string `json:"oldManifest"`
 	NewManifest string `json:"newManifest"`
+	OldDevice   uint64 `json:"oldDevice"`
+	OldInode    uint64 `json:"oldInode"`
+	NewDevice   uint64 `json:"newDevice"`
+	NewInode    uint64 `json:"newInode"`
 }
 
 func revisionRestorePaths(root string, journal revisionRestoreJournal) (string, string, string, error) {
@@ -47,19 +52,46 @@ func revisionRestorePaths(root string, journal revisionRestoreJournal) (string, 
 func validateRevisionRestoreJournal(j revisionRestoreJournal) error {
 	if j.Version != 1 || !purgeValidHex(j.BeforeHash) ||
 		!purgeValidHex(j.AfterHash) || j.BeforeHash == j.AfterHash ||
-		!purgeValidHex(j.OldManifest) || !purgeValidHex(j.NewManifest) {
+		!purgeValidHex(j.OldManifest) || !purgeValidHex(j.NewManifest) ||
+		j.OldDevice == 0 || j.OldInode == 0 || j.NewDevice == 0 || j.NewInode == 0 {
 		return errors.New("invalid archive restore generation or checksum")
 	}
 	return nil
 }
 
-// Check the identity before removing a directory as part of crash recovery.
-// The manifest is read without following a symlink, as are all ancestors.
-// A missing directory is distinct from an invalid directory.
-func revisionRestoreDirectory(root, dir, expected, author, post string) (bool, error) {
+// Rename preserves device/inode. Pin the original and the staged directory
+// identities so that a partially removed stage/backup can be safely cleaned
+// after another SIGKILL, even when its manifest was already unlinked.
+// A substituted directory with identical files but a different inode fails.
+func revisionRestoreIdentity(root, dir string) (uint64, uint64, error) {
+	info, err := purgeSafePath(root, dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	if info == nil {
+		return 0, 0, errors.New("archive restore folder does not exist")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		return 0, 0, errors.New("archive restore cannot pin directory inode")
+	}
+	return uint64(stat.Dev), stat.Ino, nil
+}
+
+// requireManifest is false only for directories which will be deleted by
+// this very recovery step. Original/live bytes being preserved must always
+// have the expected manifest. Inode checks always apply, even during cleanup.
+func revisionRestoreDirectory(root, dir, expected, author, post string, device, inode uint64, requireManifest bool) (bool, error) {
 	info, err := purgeSafePath(root, dir)
 	if err != nil || info == nil {
 		return false, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Dev) != device || stat.Ino != inode {
+		return true, errors.New("archive restore directory was replaced")
+	}
+	if !requireManifest {
+		return true, nil
 	}
 	manifestPath := filepath.Join(dir, "manifest.json")
 	file, err := os.Lstat(manifestPath)
@@ -69,15 +101,15 @@ func revisionRestoreDirectory(root, dir, expected, author, post string) (bool, e
 	if !file.Mode().IsRegular() {
 		return true, errors.New("archive restore manifest is not a regular file")
 	}
-	bytes, err := os.ReadFile(manifestPath)
+	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return true, err
 	}
-	if metadataDigest(bytes) != expected {
+	if metadataDigest(raw) != expected {
 		return true, fmt.Errorf("archive restore directory manifest changed: %s", dir)
 	}
 	var man ArchiveManifest
-	if err := json.Unmarshal(bytes, &man); err != nil || man.Author != author || man.PostID != post {
+	if err := json.Unmarshal(raw, &man); err != nil || man.Author != author || man.PostID != post {
 		return true, errors.New("archive restore directory belongs to a different post")
 	}
 	return true, nil
@@ -189,21 +221,29 @@ func recoverArchiveRestoreLocked(root string) error {
 		(current.State != "done" && current.State != "partial") {
 		return errors.New("archive restore metadata does not match the owner and post")
 	}
-	// Validate EVERY existing path before mutating any of them. In particular,
-	// reject symlinks and a replaced backup before deleting a live directory.
-	liveExists, liveErr := revisionRestoreDirectory(root, live, j.OldManifest, j.Author, j.Post)
-	stageExists, stageErr := revisionRestoreDirectory(root, stage, j.NewManifest, j.Author, j.Post)
-	backupExists, backupErr := revisionRestoreDirectory(root, backup, j.OldManifest, j.Author, j.Post)
+	// Validate every current path before mutating any of them. Stage and
+	// backup directories may already be half-removed by a previous recovery,
+	// so their pinned device/inode is the safe deletion identity.
+	stageExists, stageErr := revisionRestoreDirectory(root, stage, j.NewManifest, j.Author, j.Post,
+		j.NewDevice, j.NewInode, false)
+	backupExists, backupErr := revisionRestoreDirectory(root, backup, j.OldManifest, j.Author, j.Post,
+		j.OldDevice, j.OldInode, before)
 	if stageErr != nil || backupErr != nil {
 		return fmt.Errorf("unsafe archive restore stage or backup: %w", errors.Join(stageErr, backupErr))
 	}
-	if liveExists {
-		want := j.OldManifest
-		if backupExists || after {
-			want = j.NewManifest
+	liveHash, liveDevice, liveInode := j.OldManifest, j.OldDevice, j.OldInode
+	requireLiveManifest := true
+	if backupExists || after {
+		liveHash, liveDevice, liveInode = j.NewManifest, j.NewDevice, j.NewInode
+		// Before metadata commits, the replacement live directory is about
+		// to be discarded; it might already be partially deleted by a
+		// previous interrupted rollback.
+		if before {
+			requireLiveManifest = false
 		}
-		liveExists, liveErr = revisionRestoreDirectory(root, live, want, j.Author, j.Post)
 	}
+	liveExists, liveErr := revisionRestoreDirectory(root, live, liveHash, j.Author, j.Post,
+		liveDevice, liveInode, requireLiveManifest)
 	if liveErr != nil {
 		return liveErr
 	}

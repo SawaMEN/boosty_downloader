@@ -313,6 +313,16 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		_ = os.RemoveAll(stage)
 		return Job{}, err
 	}
+	journal.OldDevice, journal.OldInode, err = revisionRestoreIdentity(s.root, live)
+	if err != nil {
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	}
+	journal.NewDevice, journal.NewInode, err = revisionRestoreIdentity(s.root, stage)
+	if err != nil {
+		_ = os.RemoveAll(stage)
+		return Job{}, err
+	}
 	// Persist the stage hardlinks and its new directory entries before a
 	// journal could ever authorize metadata to point at the new live folder.
 	if media, err := purgeSafePath(s.root, filepath.Join(stage, "media")); err != nil {
