@@ -93,23 +93,14 @@ func revisionRestoreDirectory(root, dir, expected, author, post string, device, 
 	if !requireManifest {
 		return true, nil
 	}
-	manifestPath := filepath.Join(dir, "manifest.json")
-	file, err := os.Lstat(manifestPath)
+	raw, man, err := readArchiveManifestNoFollow(dir)
 	if err != nil {
-		return true, err
-	}
-	if !file.Mode().IsRegular() {
-		return true, errors.New("archive restore manifest is not a regular file")
-	}
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return true, err
+		return true, fmt.Errorf("archive restore manifest is missing or unsafe: %w", err)
 	}
 	if metadataDigest(raw) != expected {
 		return true, fmt.Errorf("archive restore directory manifest changed: %s", dir)
 	}
-	var man ArchiveManifest
-	if err := json.Unmarshal(raw, &man); err != nil || man.Author != author || man.PostID != post {
+	if man.Author != author || man.PostID != post {
 		return true, errors.New("archive restore directory belongs to a different post")
 	}
 	return true, nil

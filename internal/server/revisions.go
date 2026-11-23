@@ -85,22 +85,39 @@ func linkArchiveSnapshot(src, dst string) (ArchiveManifest, error) {
 	}
 	for _, rel := range files {
 		source := filepath.Join(src, rel)
-		info, err := os.Lstat(source)
+		// Pin a regular source file using openat(O_NOFOLLOW), including
+		// every parent component, before hard-linking it into history.
+		opened, err := openArchiveRegular(src, filepath.ToSlash(rel))
 		if os.IsNotExist(err) && rel != "manifest.json" && rel != "index.html" && !strings.HasPrefix(rel, "media"+string(os.PathSeparator)) {
 			continue
 		}
 		if err != nil {
 			return man, err
 		}
-		if !info.Mode().IsRegular() {
-			return man, errors.New("архив содержит неподдерживаемый тип файла")
+		sourceInfo, err := opened.Stat()
+		if err != nil {
+			opened.Close()
+			return man, err
 		}
 		target := filepath.Join(dst, rel)
 		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			opened.Close()
 			return man, err
 		}
 		if err := os.Link(source, target); err != nil {
+			opened.Close()
 			return man, fmt.Errorf("невозможно безопасно создать версию: нужны hardlinks того же тома: %w", err)
+		}
+		// Linking still resolves a pathname. Ensure it resolved to the
+		// exact inode opened safely above, not a swapped file or parent.
+		linkedInfo, linkErr := os.Lstat(target)
+		if linkErr != nil || !linkedInfo.Mode().IsRegular() || !os.SameFile(sourceInfo, linkedInfo) {
+			_ = os.Remove(target)
+			opened.Close()
+			return man, errors.New("archive source changed while linking a revision")
+		}
+		if err := opened.Close(); err != nil {
+			return man, err
 		}
 	}
 	return man, nil
@@ -428,17 +445,11 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 }
 
 func revisionRestoreManifestDigest(dir, author, post string) (string, error) {
-	manifest := filepath.Join(dir, "manifest.json")
-	info, err := os.Lstat(manifest)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("manifest of version restore is missing or unsafe")
-	}
-	data, err := os.ReadFile(manifest)
+	data, man, err := readArchiveManifestNoFollow(dir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("manifest of version restore is missing or unsafe: %w", err)
 	}
-	var man ArchiveManifest
-	if err := json.Unmarshal(data, &man); err != nil || man.Author != author || man.PostID != post {
+	if man.Author != author || man.PostID != post {
 		return "", errors.New("manifest of restored version belongs to another post")
 	}
 	return metadataDigest(data), nil
