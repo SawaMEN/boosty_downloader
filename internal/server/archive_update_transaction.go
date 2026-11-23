@@ -299,7 +299,7 @@ func recoverArchiveUpdateJournal(root string) (bool, error) {
 	if !exists || job.OwnerID != j.Owner || job.Author != j.Author || job.PostID != j.Post || job.DeletedAt != nil {
 		return false, errors.New("archive update job no longer belongs to the journal owner")
 	}
-	prepared := j.Phase == "prepared"
+	prepared := j.Phase != "committed"
 	liveKind, err := archiveUpdateWhich(root, live, j, true)
 	// A rollback may be interrupted while deleting the new directory.
 	// Verify its inode first; its manifest may already be missing.
