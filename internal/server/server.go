@@ -88,6 +88,11 @@ func New(cfg Config) (*App, error) {
 			_ = dataDirLock.Close()
 		}
 	}()
+	// An explicit offline SQL rollback can be interrupted before the JSON
+	// selector changes. Finish only its verified roll-forward intent.
+	if err := recoverSQLiteRollbackLocked(cfg.DataDir, nil); err != nil {
+		return nil, fmt.Errorf("SQLite rollback requires recovery: %w", err)
+	}
 	// Fail closed on a corrupt/unsupported durable selection before even
 	// replaying the legacy JSON transaction journal.
 	backend, err := readSQLiteBackendSelection(cfg.DataDir)
