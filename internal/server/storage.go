@@ -17,24 +17,25 @@ import (
 )
 
 type Storage struct {
-	mu                      sync.Mutex
-	blobMu                  sync.Mutex
-	videoPublicationMu      sync.Mutex
-	archiveUpdateMu         sync.Mutex
-	root                    string
-	key                     []byte
-	jobs                    map[string]*Job
-	authors                 map[string][]string
-	imports                 map[string]*AuthorImport
-	shadow                  *sqliteShadow
-	primary                 *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
-	primaryFatal            error              // no further writes after unresolvable SQL/JSON divergence
-	purgeCheckpoint         func(string) error // crash/failure injection in tests only
-	restoreCheckpoint       func(string) error // crash/failure injection in tests only
-	videoCheckpoint         func(string) error // video journal crash/failure injection
-	archiveUpdateCheckpoint func(string) error // whole-archive crash/failure injection
-	sqliteHistoryCheckpoint func(string) error
-	gates                   *archiveGates
+	mu                            sync.Mutex
+	blobMu                        sync.Mutex
+	videoPublicationMu            sync.Mutex
+	archiveUpdateMu               sync.Mutex
+	root                          string
+	key                           []byte
+	jobs                          map[string]*Job
+	authors                       map[string][]string
+	imports                       map[string]*AuthorImport
+	shadow                        *sqliteShadow
+	primary                       *sqliteMetadata    // internal SQL-first adapter; never enabled by production configuration
+	primaryFatal                  error              // no further writes after unresolvable SQL/JSON divergence
+	purgeCheckpoint               func(string) error // crash/failure injection in tests only
+	restoreCheckpoint             func(string) error // crash/failure injection in tests only
+	videoCheckpoint               func(string) error // video journal crash/failure injection
+	archiveUpdateCheckpoint       func(string) error // whole-archive crash/failure injection
+	sqliteHistoryCheckpoint       func(string) error
+	sqliteHistoryDeleteCheckpoint func(string) error
+	gates                         *archiveGates
 }
 
 // CapturedSubscription is a snapshot of the owner's Boosty subscription
@@ -112,6 +113,9 @@ func newStorage(root, keyString string) (*Storage, error) {
 	}
 	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
 		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
+	}
+	if e = recoverSQLHistoryDeleteLocked(root, nil); e != nil {
+		return nil, fmt.Errorf("SQL history deletion recovery failed: %w", e)
 	}
 	if e = recoverSQLHistoryLocked(root, nil); e != nil {
 		return nil, fmt.Errorf("SQL history journal recovery failed: %w", e)

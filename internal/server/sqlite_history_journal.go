@@ -74,7 +74,7 @@ func sqliteHistoryFilesHash(base string) (string, error) {
 }
 
 func (s *Storage) publishSQLHistoryLocked(job Job, id, stage string) error {
-	for _, pending := range []string{sqliteHistoryJournalName, sqlitePrimaryTransactionName, metadataJournalName,
+	for _, pending := range []string{sqliteHistoryJournalName, sqliteHistoryDeleteJournalName, sqlitePrimaryTransactionName, metadataJournalName,
 		sqliteRollbackJournalName, sqliteCutoverIntentName, purgeJournalName, revisionRestoreJournalName, archiveUpdateJournalName, videoPublicationJournalName} {
 		if _, err := os.Lstat(filepath.Join(s.root, pending)); err == nil {
 			return errors.New("history publication blocked by pending transaction: " + pending)
@@ -162,7 +162,7 @@ func recoverSQLHistoryLocked(root string, checkpoint func(string) error) error {
 	if err != nil {
 		return err
 	}
-	for _, pending := range []string{sqlitePrimaryTransactionName, metadataJournalName, sqliteRollbackJournalName,
+	for _, pending := range []string{sqliteHistoryDeleteJournalName, sqlitePrimaryTransactionName, metadataJournalName, sqliteRollbackJournalName,
 		sqliteCutoverIntentName, purgeJournalName, revisionRestoreJournalName, archiveUpdateJournalName, videoPublicationJournalName} {
 		if _, err := os.Lstat(filepath.Join(root, pending)); err == nil {
 			return errors.New("conflicting history transaction: " + pending)

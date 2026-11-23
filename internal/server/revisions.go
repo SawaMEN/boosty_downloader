@@ -261,11 +261,6 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 }
 
 func (s *Storage) pruneArchiveRevisions(job Job) error {
-	// Until a SQL history deletion journal exists, retain historical
-	// snapshots rather than silently remove files still indexed in SQL.
-	if s.primary != nil {
-		return nil
-	}
 	list, err := s.listArchiveRevisions(job)
 	if err != nil {
 		return err
@@ -274,6 +269,12 @@ func (s *Storage) pruneArchiveRevisions(job Job) error {
 		return nil
 	}
 	for _, version := range list[maxArchiveRevisions:] {
+		if s.primary != nil {
+			if err := s.deleteSQLHistory(job, version.ID); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(s.revisionsDir(job), version.ID)); err != nil {
 			return err
 		}

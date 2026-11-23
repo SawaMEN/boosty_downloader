@@ -380,7 +380,7 @@ func sqliteReindexNoWAL(root string) error {
 }
 
 func sqliteReindexNoWALExceptRollback(root string, recovering bool) error {
-	for _, name := range []string{metadataJournalName, sqlitePrimaryTransactionName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName, sqliteRollbackJournalName, sqliteHistoryJournalName, "metadata.db-journal", "metadata.db-wal"} {
+	for _, name := range []string{metadataJournalName, sqlitePrimaryTransactionName, purgeJournalName, revisionRestoreJournalName, videoPublicationJournalName, archiveUpdateJournalName, sqliteRollbackJournalName, sqliteHistoryJournalName, sqliteHistoryDeleteJournalName, "metadata.db-journal", "metadata.db-wal"} {
 		if recovering && name == sqliteRollbackJournalName {
 			continue
 		}
