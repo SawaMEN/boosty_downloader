@@ -29,6 +29,13 @@ func VerifySQLiteSnapshotInventory(root string) error {
 }
 
 func verifySQLiteSnapshotInventory(root string) error {
+	return verifySQLiteSnapshotInventoryFile(root, "metadata.db")
+}
+
+func verifySQLiteSnapshotInventoryFile(root, name string) error {
+	if !safeArchivePart(name) {
+		return errors.New("unsafe SQL audit filename")
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
@@ -37,7 +44,7 @@ func verifySQLiteSnapshotInventory(root string) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("snapshot audit needs an existing real data directory")
 	}
-	dbFile := filepath.Join(root, "metadata.db")
+	dbFile := filepath.Join(root, name)
 	info, err = os.Lstat(dbFile)
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("snapshot audit needs a regular SQLite file: %w", err)

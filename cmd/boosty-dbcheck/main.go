@@ -110,7 +110,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Offline SQLite rollback rejected or interrupted:", err)
 			os.Exit(1)
 		}
-		fmt.Println("Verified latest SQL jobs/imports published to JSON; JSON backend selected. SQLite and media were not replaced.")
+		fmt.Println("Verified latest SQL jobs/imports published to JSON; JSON backend selected. SQLite preserved under its retired SHA-256 filename; media unchanged.")
 		return
 	}
 	if *recoverRollback {

@@ -73,7 +73,10 @@ func assertSQLiteRollback(t *testing.T, root, sqlHash string) {
 	if err != nil || imports[strings.Repeat("a", 24)].State != "canceled" {
 		t.Fatal("new SQL import lost", err)
 	}
-	actual, _, err := backupFileDigest(root, "metadata.db")
+	actual, _, err := backupFileDigest(root, "metadata.retired-"+sqlHash+".db")
+	if _, err := os.Lstat(filepath.Join(root, "metadata.db")); !os.IsNotExist(err) {
+		t.Fatal("old SQLite remains active", err)
+	}
 	if err != nil || actual != sqlHash {
 		t.Fatal("rollback changed SQL bytes", err)
 	}
@@ -111,7 +114,7 @@ func TestSQLiteRollbackSIGKILLWorker(t *testing.T) {
 }
 
 func TestSQLiteRollbackRecoversSIGKILL(t *testing.T) {
-	for _, phase := range []string{"prepared", "jobs", "imports", "selector"} {
+	for _, phase := range []string{"prepared", "jobs", "imports", "selector", "sidecars", "retired"} {
 		t.Run(phase, func(t *testing.T) {
 			root, full, hash := sqliteRollbackFixture(t)
 			cmd := exec.Command(os.Args[0], "-test.run=^TestSQLiteRollbackSIGKILLWorker$")
@@ -171,5 +174,138 @@ func TestSQLiteRollbackRejectsStaleSnapshot(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(root, sqliteRollbackJournalName)); !os.IsNotExist(err) {
 		t.Fatal("failed preflight left journal")
+	}
+}
+
+func TestSQLiteRollbackRecoveryRejectsUnrelatedPrivateDataChange(t *testing.T) {
+	root, full, _ := sqliteRollbackFixture(t)
+	if err := rollbackSQLiteToJSON(root, full, func(phase string) error {
+		if phase == "jobs" {
+			return syscall.ENOSPC
+		}
+		return nil
+	}); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatal("stage rollback", err)
+	}
+	extra := filepath.Join(root, "private-token-new")
+	if err := os.WriteFile(extra, []byte("new private token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverSQLiteRollback(root); err == nil {
+		t.Fatal("recovery accepted changed private data")
+	}
+	if _, err := os.Stat(filepath.Join(root, sqliteRollbackJournalName)); err != nil {
+		t.Fatal("journal lost", err)
+	}
+	if err := os.Remove(extra); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverSQLiteRollback(root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteRollbackRoundTripJSONWritesSurviveRestart(t *testing.T) {
+	cfg, backup, snapshot := sqlActivationFixture(t)
+	if err := activateSQLPrimaryOffline(cfg.DataDir, backup, snapshot, nil); err != nil {
+		t.Fatal(err)
+	}
+	app, err := newAppMode(cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("d", 24)
+	job, ok := app.store.get(id)
+	if !ok {
+		t.Fatal("missing archive")
+	}
+	job.Title = "new SQL generation"
+	if err := app.store.upsert(job); err != nil {
+		t.Fatal(err)
+	}
+	app.Close()
+	full := filepath.Join(t.TempDir(), "rollback-full")
+	if err := PrepareFullDataSnapshot(cfg.DataDir, full); err != nil {
+		t.Fatal(err)
+	}
+	if err := RollbackSQLiteToJSON(cfg.DataDir, full); err != nil {
+		t.Fatal(err)
+	}
+	app, err = New(cfg)
+	if err != nil {
+		t.Fatal("JSON restart after rollback", err)
+	}
+	job, ok = app.store.get(id)
+	if !ok || job.Title != "new SQL generation" {
+		t.Fatal("SQL write lost", job)
+	}
+	job.Title = "new JSON generation"
+	if err := app.store.upsert(job); err != nil {
+		t.Fatal(err)
+	}
+	app.Close()
+	app, err = New(cfg)
+	if err != nil {
+		t.Fatal("second JSON restart after new writes", err)
+	}
+	defer app.Close()
+	job, ok = app.store.get(id)
+	if !ok || job.Title != "new JSON generation" {
+		t.Fatal("new JSON write lost", job)
+	}
+	if app.store.primary != nil {
+		t.Fatal("rollback silently opened SQL")
+	}
+}
+
+func TestSQLiteRollbackCheckpointedSidecars(t *testing.T) {
+	for _, scenario := range []string{"empty-wal", "nonempty-wal", "symlink-shm"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, _, hash := sqliteRollbackFixture(t)
+			wal := filepath.Join(root, "metadata.db-wal")
+			shm := filepath.Join(root, "metadata.db-shm")
+			if err := os.WriteFile(wal, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(shm, []byte("private checkpoint cache"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			full := filepath.Join(t.TempDir(), "snapshot")
+			if err := PrepareFullDataSnapshot(root, full); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "nonempty-wal":
+				if err := os.WriteFile(wal, []byte("uncheckpointed pages"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink-shm":
+				if err := os.Remove(shm); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(root, "jobs.json"), shm); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := RollbackSQLiteToJSON(root, full)
+			if scenario != "empty-wal" {
+				if err == nil {
+					t.Fatal("unsafe rollback accepted")
+				}
+				if mode, e := readSQLiteBackendSelection(root); e != nil || mode != "sqlite" {
+					t.Fatal("unsafe rollback changed selector", mode, e)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSQLiteRollback(t, root, hash)
+			for _, name := range []string{wal, shm} {
+				if _, err := os.Lstat(name); !os.IsNotExist(err) {
+					t.Fatal("stale sidecar", name, err)
+				}
+			}
+		})
 	}
 }
