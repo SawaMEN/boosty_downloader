@@ -266,7 +266,7 @@ func TestRevisionRestoreJournalBlocksOfflineReindex(t *testing.T) {
 
 func TestRevisionRestoreRecoversInterruptedCleanupInStages(t *testing.T) {
 	for _, tc := range []struct {
-		phase string
+		phase  string
 		folder string
 	}{
 		{phase: "journal", folder: "stage"},
