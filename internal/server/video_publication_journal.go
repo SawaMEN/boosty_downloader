@@ -569,4 +569,3 @@ func cleanupAbandonedVideoPublicationStages(root string) error {
 	}
 	return syncMetadataDirectory(root)
 }
-
