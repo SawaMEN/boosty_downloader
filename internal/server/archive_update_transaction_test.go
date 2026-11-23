@@ -193,7 +193,7 @@ func TestArchiveUpdateRefusesTamperedStage(t *testing.T) {
 }
 
 func TestArchiveUpdateOfflineReindexBlocked(t *testing.T) {
-	root, _, _, _ := archiveUpdateFixture(t, false)
+	root, key, _, _ := archiveUpdateFixture(t, false)
 	archiveUpdateKill(t, root, key, "journal")
 	if err := sqliteReindexNoWAL(root); err == nil {
 		t.Fatal("offline SQLite reindex accepted pending archive update")
