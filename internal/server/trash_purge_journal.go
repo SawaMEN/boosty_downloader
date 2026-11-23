@@ -23,18 +23,18 @@ import (
 const purgeJournalName = ".archive-purge-transaction.json"
 
 type purgeMove struct {
-	Kind string `json:"kind"`
-	Owner string `json:"owner"`
+	Kind   string `json:"kind"`
+	Owner  string `json:"owner"`
 	Author string `json:"author"`
-	Post string `json:"post"`
-	Slot string `json:"slot"`
+	Post   string `json:"post"`
+	Slot   string `json:"slot"`
 }
 
 type purgeJournal struct {
-	Version int `json:"version"`
-	BeforeHash string `json:"beforeHash"`
-	AfterHash string `json:"afterHash"`
-	Moves []purgeMove `json:"moves"`
+	Version    int         `json:"version"`
+	BeforeHash string      `json:"beforeHash"`
+	AfterHash  string      `json:"afterHash"`
+	Moves      []purgeMove `json:"moves"`
 }
 
 func purgeValidHex(value string) bool {
@@ -250,8 +250,8 @@ func recoverArchivePurgeLocked(root string) error {
 		return errors.New("archive purge recovery found unknown metadata generation")
 	}
 	type pending struct {
-		src string
-		dst string
+		src    string
+		dst    string
 		staged bool
 	}
 	pendingMoves := make([]pending, 0, len(journal.Moves))
@@ -281,7 +281,7 @@ func recoverArchivePurgeLocked(root string) error {
 	// Two-pass validation ensures no unrelated path is changed when a later
 	// journal entry is invalid. An interrupted rollback remains idempotent.
 	if before {
-		for i := len(pendingMoves)-1; i >= 0; i-- {
+		for i := len(pendingMoves) - 1; i >= 0; i-- {
 			m := pendingMoves[i]
 			if !m.staged {
 				continue
