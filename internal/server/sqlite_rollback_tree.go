@@ -17,9 +17,15 @@ func sqliteRollbackRetiredName(j sqliteRollbackJournal)string{
 
 func sqliteRollbackRequireClosedDB(root string)error{
 	for _,name:=range []string{"metadata.db-wal","metadata.db-shm","metadata.db-journal"}{
-		if _,err:=os.Lstat(filepath.Join(root,name));err==nil{
-			return fmt.Errorf("rollback requires closed SQLite without sidecars: %s",name)
-		}else if !os.IsNotExist(err){return err}
+		info,err:=os.Lstat(filepath.Join(root,name))
+		if os.IsNotExist(err){continue}
+		if err!=nil{return err}
+		if !info.Mode().IsRegular()||info.Mode().Perm()&0077!=0||
+			name=="metadata.db-journal"||(name=="metadata.db-wal"&&info.Size()!=0){
+			return fmt.Errorf("rollback refuses unsafe or uncheckpointed SQLite sidecar: %s",name)
+		}
+		// A stopped SQLite can leave an empty WAL and a private SHM
+		// cache. Neither contains committed pages when the WAL is empty.
 	}
 	return nil
 }
@@ -33,6 +39,9 @@ func sqliteRollbackSQLName(root string,j sqliteRollbackJournal)(string,error){
 	for _,err:=range []error{activeErr,retiredErr}{if err!=nil&&!os.IsNotExist(err){return "",err}}
 	if (activeInfo==nil)==(retiredInfo==nil){return "",errors.New("rollback requires exactly one pinned SQL database")}
 	if activeInfo!=nil{return "metadata.db",nil}
+	for _,name:=range []string{"metadata.db-wal","metadata.db-shm"}{
+		if _,err:=os.Lstat(filepath.Join(root,name));err==nil{return "",errors.New("retired SQL still has active sidecars")}else if !os.IsNotExist(err){return "",err}
+	}
 	return retired,nil
 }
 
@@ -87,6 +96,16 @@ func sqliteRollbackVerifyLiveTree(root,snapshot string,j sqliteRollbackJournal,s
 		return nil
 	})
 	if err!=nil{return err}
+	// Only after the durable JSON selector may recovery remove sidecars
+	// from the pinned full snapshot. Present sidecars must match exactly.
+	if j.Version==2{
+		mode,err:=readSQLiteBackendSelection(root)
+		if err!=nil{return err}
+		if mode=="json"{
+			delete(expected,"metadata.db-wal")
+			delete(expected,"metadata.db-shm")
+		}
+	}
 	if len(expected)!=0{return errors.New("rollback live entries disappeared")}
 	return nil
 }

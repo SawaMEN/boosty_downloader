@@ -112,7 +112,7 @@ func TestSQLiteRollbackSIGKILLWorker(t *testing.T) {
 }
 
 func TestSQLiteRollbackRecoversSIGKILL(t *testing.T) {
-	for _, phase := range []string{"prepared", "jobs", "imports", "selector","retired"} {
+	for _, phase := range []string{"prepared", "jobs", "imports", "selector","sidecars","retired"} {
 		t.Run(phase, func(t *testing.T) {
 			root, full, hash := sqliteRollbackFixture(t)
 			cmd := exec.Command(os.Args[0], "-test.run=^TestSQLiteRollbackSIGKILLWorker$")
@@ -214,4 +214,37 @@ func TestSQLiteRollbackRoundTripJSONWritesSurviveRestart(t *testing.T){
 	job,ok=app.store.get(id)
 	if !ok||job.Title!="new JSON generation"{t.Fatal("new JSON write lost",job)}
 	if app.store.primary!=nil{t.Fatal("rollback silently opened SQL")}
+}
+
+
+func TestSQLiteRollbackCheckpointedSidecars(t *testing.T){
+	for _,scenario:=range []string{"empty-wal","nonempty-wal","symlink-shm"}{
+		t.Run(scenario,func(t *testing.T){
+			root,_,hash:=sqliteRollbackFixture(t)
+			wal:=filepath.Join(root,"metadata.db-wal")
+			shm:=filepath.Join(root,"metadata.db-shm")
+			if err:=os.WriteFile(wal,nil,0600);err!=nil{t.Fatal(err)}
+			if err:=os.WriteFile(shm,[]byte("private checkpoint cache"),0600);err!=nil{t.Fatal(err)}
+			full:=filepath.Join(t.TempDir(),"snapshot")
+			if err:=PrepareFullDataSnapshot(root,full);err!=nil{t.Fatal(err)}
+			switch scenario{
+			case "nonempty-wal":
+				if err:=os.WriteFile(wal,[]byte("uncheckpointed pages"),0600);err!=nil{t.Fatal(err)}
+			case "symlink-shm":
+				if err:=os.Remove(shm);err!=nil{t.Fatal(err)}
+				if err:=os.Symlink(filepath.Join(root,"jobs.json"),shm);err!=nil{t.Fatal(err)}
+			}
+			err:=RollbackSQLiteToJSON(root,full)
+			if scenario!="empty-wal"{
+				if err==nil{t.Fatal("unsafe rollback accepted")}
+				if mode,e:=readSQLiteBackendSelection(root);e!=nil||mode!="sqlite"{t.Fatal("unsafe rollback changed selector",mode,e)}
+				return
+			}
+			if err!=nil{t.Fatal(err)}
+			assertSQLiteRollback(t,root,hash)
+			for _,name:=range []string{wal,shm}{
+				if _,err:=os.Lstat(name);!os.IsNotExist(err){t.Fatal("stale sidecar",name,err)}
+			}
+		})
+	}
 }

@@ -351,9 +351,14 @@ func recoverSQLiteRollbackLocked(root string, checkpoint func(string) error) err
 	}
 	sqlName,err:=sqliteRollbackSQLName(root,j)
 	if err!=nil{return err}
-	if sqlName=="metadata.db" {
-		if err := verifyJSONSQLiteAgreement(root); err != nil {return err}
+	// Compare the replayed images directly with their pinned hashes and
+	// use the immutable audit. Opening a regular read-only WAL connection
+	// here can create new SHM/WAL files outside the recovery snapshot.
+	for _,target:=range []struct{name string;img metadataImage}{{"jobs.json",j.Jobs},{"imports.json",j.Imports}}{
+		hash,_,err:=backupFileDigest(root,target.name)
+		if err!=nil||hash!=target.img.NewHash{return errors.New("rollback mirror replay differs from SQL")}
 	}
+	if err:=sqliteRollbackValidate(root,j);err!=nil{return err}
 	if err := replayMetadataImage(root, sqliteBackendSelectionName, j.Selector, true); err != nil {
 		return err
 	}
@@ -365,6 +370,12 @@ func recoverSQLiteRollbackLocked(root string, checkpoint func(string) error) err
 	if j.Version==2 {
 		if err:=sqliteRollbackRequireClosedDB(root);err!=nil{return err}
 		if sqlName=="metadata.db"{
+			// The previous full-tree audit pinned both optional sidecars.
+			// Remove only checkpointed, private files before renaming SQL.
+			for _,name:=range []string{"metadata.db-wal","metadata.db-shm"}{
+				if err:=removeSyncedMetadata(root,name);err!=nil{return err}
+			}
+			if checkpoint!=nil{if err:=checkpoint("sidecars");err!=nil{return err}}
 			if err:=unix.Renameat2(unix.AT_FDCWD,filepath.Join(root,sqlName),unix.AT_FDCWD,filepath.Join(root,sqliteRollbackRetiredName(j)),unix.RENAME_NOREPLACE);err!=nil{return err}
 		}
 		// Also fsync on retry if a prior rename succeeded before fsync.
