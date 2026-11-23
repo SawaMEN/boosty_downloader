@@ -394,3 +394,16 @@ Video journal v2 фиксирует хеши jobs/imports. Поскольку п
 После публикации проверенных SQL jobs/imports и выбора JSON, rollback v2 атомарно переносит старую metadata.db в metadata.retired-<SHA256>.db без изменения её байтов. Это устраняет ложную проверку паритета с устаревшей базой после новых JSON-записей. Для операции требуется остановленная SQLite без неподтверждённых WAL-данных и rollback journal; пустой WAL и приватный SHM проверяются по снимку и удаляются после выбора JSON и свежий полный снимок; конфликт имени retirement блокирует операцию. Recovery проверяет все live файлы, разрешая только закреплённые before/after images и SQL rename. V1 journal остаётся поддержанным без retirement. Снимок и retired SQL не удаляются автоматически. Публичная активация пока отключена.
 
 Rollback v2: повторная проверка выполняется immutable-соединением, чтобы не создавать новые WAL/SHM после фиксации полного снимка. Пустые sidecars удаляются с fsync перед retirement; восстановление допускает их отсутствие только после выбора JSON.
+
+
+## Экспериментальный SQL-primary (12.4.18)
+
+**Не включать по умолчанию.** Сначала проверьте на отдельной копии установки. Остановите сервис и обновляющий timer; используйте пользователя сервиса для файлов данных. Требуется точная SQLite-проекция JSON (экспорт/переиндексация), checkpoint WAL, внешняя проверенная копия метаданных и полный свежий snapshot каталога данных. Резервируйте также внешний /etc, TLS, ключ шифрования и бинарники отдельно.
+
+```sh
+boosty-dbcheck --data-dir "$DATA" --activate-sqlite-primary \
+  --confirm-experimental-sqlite --recovery-dir "$METADATA_BACKUP" \
+  --cutover-full-snapshot-dir "$FULL_BACKUP"
+```
+
+Для запуска после успешной активации установите BD_SQLITE_PRIMARY=1 в окружении сервиса; отключите BD_SQLITE_SHADOW, BD_SQLITE_VERIFY, BD_SQLITE_MEDIA_SHADOW, BD_SQLITE_CATALOG_READS. Наличие флага без durable SQLite selector не изменяет backend; наличие selector без флага блокирует запуск. При ошибках нет JSON fallback. Аккаунты, сессии, токены и каталог авторов остаются в прежнем формате; миграция касается jobs/imports, ACL и SQL индекса медиа. SIGTERM/SIGINT дренируют HTTP перед закрытием SQL. Откат: остановить сервис, создать новый полный snapshot, выполнить --rollback-sqlite-to-json --rollback-full-snapshot-dir, убрать BD_SQLITE_PRIMARY=1, запустить JSON. Сохранить retired DB и backup. Реальные нагрузочные и VPS-тесты остаются обязательными.

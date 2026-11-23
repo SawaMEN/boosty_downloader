@@ -29,11 +29,13 @@ func VerifySQLiteSnapshotInventory(root string) error {
 }
 
 func verifySQLiteSnapshotInventory(root string) error {
-	return verifySQLiteSnapshotInventoryFile(root,"metadata.db")
+	return verifySQLiteSnapshotInventoryFile(root, "metadata.db")
 }
 
-func verifySQLiteSnapshotInventoryFile(root,name string)error{
-	if !safeArchivePart(name){return errors.New("unsafe SQL audit filename")}
+func verifySQLiteSnapshotInventoryFile(root, name string) error {
+	if !safeArchivePart(name) {
+		return errors.New("unsafe SQL audit filename")
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return err

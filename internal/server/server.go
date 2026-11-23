@@ -60,17 +60,19 @@ type App struct {
 }
 
 func New(cfg Config) (*App, error) {
-	return newAppMode(cfg, false)
+	switch os.Getenv("BD_SQLITE_PRIMARY"){
+	case "", "0":return newAppMode(cfg,false)
+	case "1":return newAppMode(cfg,true)
+	default:return nil,errors.New("BD_SQLITE_PRIMARY must be 0 or 1")
+	}
 }
 
-// SQL-primary lifecycle is exercised through this internal constructor.
-// Public configuration remains disabled until a verified offline activation.
+// SQL-primary requires BOTH the explicit environment opt-in and durable
+// offline selection in production. The internal constructor also supports
+// integration tests without changing process-global configuration.
 func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 	if cfg.AdminUser == "" || len(cfg.AdminPassword) < 12 {
 		return nil, errors.New("задайте BD_ADMIN_USER и пароль BD_ADMIN_PASSWORD от 12 символов")
-	}
-	if primary := os.Getenv("BD_SQLITE_PRIMARY"); primary != "" && primary != "0" {
-		return nil, errors.New("BD_SQLITE_PRIMARY is not available: SQL-primary storage routing and production cutover have not passed verification")
 	}
 	if sqlPrimary {
 		for _, flag := range []string{"BD_SQLITE_SHADOW", "BD_SQLITE_VERIFY", "BD_SQLITE_MEDIA_SHADOW", "BD_SQLITE_CATALOG_READS"} {
@@ -136,7 +138,7 @@ func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 		}
 	} else {
 		if backend != "json" {
-			return nil, errors.New("SQLite backend is durably selected but active SQL-primary startup is not supported yet")
+			return nil, errors.New("SQLite backend is durably selected; explicit BD_SQLITE_PRIMARY=1 is required, or perform a verified offline rollback")
 		}
 		// A crash may have interrupted the JSON two-file transaction. Resolve the
 		// journal before comparing either JSON file with an offline SQLite export.
@@ -174,6 +176,9 @@ func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 	s, err = newStorageMode(cfg.DataDir, cfg.SecretKey, sqlPrimary, nil)
 	if err != nil {
 		return nil, err
+	}
+	if sqlPrimary {
+		if err:=verifySQLPrimaryAccounts(cfg.DataDir);err!=nil{return nil,err}
 	}
 	accounts, err := newAccounts(cfg.DataDir, cfg.AdminUser, cfg.AdminPassword)
 	if err != nil {

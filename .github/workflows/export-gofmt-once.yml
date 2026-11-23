@@ -1,4 +1,4 @@
-name: SQL rollback retirement and roundtrip verification
+name: SQL primary experimental public mode verification
 on:
   push:
     branches: [tooling/sqlite-history-journal-20261124]
@@ -11,13 +11,27 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Format and verify rollback roundtrip
+      - name: Format and verify public experimental mode
         shell: bash
         run: |
-          gofmt -w internal/server/sqlite_backend_rollback.go internal/server/sqlite_backend_rollback_test.go internal/server/sqlite_snapshot_audit.go internal/server/sqlite_backup_verify.go cmd/boosty-dbcheck/main.go internal/server/sqlite_rollback_tree.go
-          go test ./internal/server -run '^(TestSQLiteRollback|TestSQLPrimaryActivation|TestSQLPrimaryApp|TestSQLPrimaryStartup|TestPinJSON|TestSQLiteCutover|TestFullData|TestSQLiteBackup)' -count=1 -v -timeout=120s
-          go test ./cmd/boosty-dbcheck
-          for path in internal/server/sqlite_backend_rollback.go internal/server/sqlite_backend_rollback_test.go internal/server/sqlite_snapshot_audit.go internal/server/sqlite_backup_verify.go cmd/boosty-dbcheck/main.go internal/server/sqlite_rollback_tree.go; do
+          gofmt -w internal/server/server.go internal/server/sqlite_primary_activation.go cmd/boosty-dbcheck/main.go cmd/boosty-downloader/main.go internal/server/sqlite_primary_experimental_test.go
+          go test ./internal/server -run '^(TestSQLPrimaryExperimental|TestSQLPrimaryActivation|TestSQLPrimaryApp|TestSQLPrimaryStartup|TestSQLFirst|TestSQLiteRollback|TestSQLiteActiveBackend|TestPinJSON)' -count=1 -v -timeout=120s
+          go test ./cmd/...
+          go build -o /tmp/boosty-dbcheck ./cmd/boosty-dbcheck
+          mkdir -m 700 /tmp/activation-empty
+          reject() {
+            set +e
+            /tmp/boosty-dbcheck "$@"
+            code=$?
+            set -e
+            test "$code" = 2
+          }
+          reject --data-dir /tmp/activation-empty --activate-sqlite-primary
+          reject --data-dir /tmp/activation-empty --confirm-experimental-sqlite
+          reject --data-dir /tmp/activation-empty --activate-sqlite-primary --confirm-experimental-sqlite --recovery-dir /tmp/no-backup
+          reject --data-dir /tmp/activation-empty --activate-sqlite-primary --confirm-experimental-sqlite --recovery-dir /tmp/no-backup --cutover-full-snapshot-dir /tmp/no-full --pin-json-backend
+          test -z "$(ls -A /tmp/activation-empty)"
+          for path in internal/server/server.go internal/server/sqlite_primary_activation.go cmd/boosty-dbcheck/main.go cmd/boosty-downloader/main.go internal/server/sqlite_primary_experimental_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"

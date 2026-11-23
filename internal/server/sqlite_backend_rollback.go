@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
-	"golang.org/x/sys/unix"
 )
 
 const sqliteRollbackJournalName = ".sqlite-rollback-transaction.json"
@@ -192,10 +192,14 @@ func rollbackSQLiteToJSON(root, snapshot string, checkpoint func(string) error) 
 		return errors.New("SQLite rollback journal exceeds its size limit")
 	}
 	// Recheck the pinned backup and SQL before authorizing any replay.
-	if err:=sqliteRollbackRequireClosedDB(abs);err!=nil{return err}
-	if _,err:=os.Lstat(filepath.Join(abs,sqliteRollbackRetiredName(j)));err==nil{
+	if err := sqliteRollbackRequireClosedDB(abs); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(abs, sqliteRollbackRetiredName(j))); err == nil {
 		return errors.New("retired SQL destination already exists")
-	}else if !os.IsNotExist(err){return err}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	if err := sqliteRollbackValidate(abs, j); err != nil {
 		return err
 	}
@@ -256,18 +260,26 @@ func sqliteRollbackValidate(root string, j sqliteRollbackJournal) error {
 			return err
 		}
 	}
-	sqlName,err:=sqliteRollbackSQLName(root,j)
-	if err!=nil{return err}
-	for _,source:=range []struct{dir,name string}{{root,sqlName},{filepath.Join(snapshot,fullSnapshotDataDirName),"metadata.db"}}{
-		actual,_,err:=backupFileDigest(source.dir,source.name)
-		if err!=nil||actual!=j.SQLHash{return errors.New("SQLite changed after rollback recovery point")}
+	sqlName, err := sqliteRollbackSQLName(root, j)
+	if err != nil {
+		return err
 	}
-	if err:=sqliteRollbackVerifyLiveTree(root,snapshot,j,sqlName);err!=nil{return err}
+	for _, source := range []struct{ dir, name string }{{root, sqlName}, {filepath.Join(snapshot, fullSnapshotDataDirName), "metadata.db"}} {
+		actual, _, err := backupFileDigest(source.dir, source.name)
+		if err != nil || actual != j.SQLHash {
+			return errors.New("SQLite changed after rollback recovery point")
+		}
+	}
+	if err := sqliteRollbackVerifyLiveTree(root, snapshot, j, sqlName); err != nil {
+		return err
+	}
 	mode, err := readSQLiteBackendSelection(root)
 	if err != nil {
 		return err
 	}
-	if sqlName!="metadata.db"&&mode!="json"{return errors.New("SQL retired before JSON selection")}
+	if sqlName != "metadata.db" && mode != "json" {
+		return errors.New("SQL retired before JSON selection")
+	}
 	if mode == "json" {
 		for _, target := range []struct {
 			name string
@@ -281,7 +293,7 @@ func sqliteRollbackValidate(root string, j sqliteRollbackJournal) error {
 			}
 		}
 	}
-	if err := verifySQLiteSnapshotInventoryFile(root,sqlName); err != nil {
+	if err := verifySQLiteSnapshotInventoryFile(root, sqlName); err != nil {
 		return err
 	}
 	jobs, imports, err := sqlitePrimaryDecodeImages(j.Jobs.After, j.Imports.After)
@@ -306,7 +318,9 @@ func sqliteRollbackValidate(root string, j sqliteRollbackJournal) error {
 // RecoverSQLiteRollback resumes a durable offline rollback; never creates
 // an intent or overwrites unrelated metadata.
 func RecoverSQLiteRollback(root string) error {
-	if root==""{return errors.New("data directory is required")}
+	if root == "" {
+		return errors.New("data directory is required")
+	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return err
@@ -349,16 +363,25 @@ func recoverSQLiteRollbackLocked(root string, checkpoint func(string) error) err
 			}
 		}
 	}
-	sqlName,err:=sqliteRollbackSQLName(root,j)
-	if err!=nil{return err}
+	sqlName, err := sqliteRollbackSQLName(root, j)
+	if err != nil {
+		return err
+	}
 	// Compare the replayed images directly with their pinned hashes and
 	// use the immutable audit. Opening a regular read-only WAL connection
 	// here can create new SHM/WAL files outside the recovery snapshot.
-	for _,target:=range []struct{name string;img metadataImage}{{"jobs.json",j.Jobs},{"imports.json",j.Imports}}{
-		hash,_,err:=backupFileDigest(root,target.name)
-		if err!=nil||hash!=target.img.NewHash{return errors.New("rollback mirror replay differs from SQL")}
+	for _, target := range []struct {
+		name string
+		img  metadataImage
+	}{{"jobs.json", j.Jobs}, {"imports.json", j.Imports}} {
+		hash, _, err := backupFileDigest(root, target.name)
+		if err != nil || hash != target.img.NewHash {
+			return errors.New("rollback mirror replay differs from SQL")
+		}
 	}
-	if err:=sqliteRollbackValidate(root,j);err!=nil{return err}
+	if err := sqliteRollbackValidate(root, j); err != nil {
+		return err
+	}
 	if err := replayMetadataImage(root, sqliteBackendSelectionName, j.Selector, true); err != nil {
 		return err
 	}
@@ -367,23 +390,43 @@ func recoverSQLiteRollbackLocked(root string, checkpoint func(string) error) err
 			return err
 		}
 	}
-	if j.Version==2 {
-		if err:=sqliteRollbackRequireClosedDB(root);err!=nil{return err}
-		if sqlName=="metadata.db"{
+	if j.Version == 2 {
+		if err := sqliteRollbackRequireClosedDB(root); err != nil {
+			return err
+		}
+		if sqlName == "metadata.db" {
 			// The previous full-tree audit pinned both optional sidecars.
 			// Remove only checkpointed, private files before renaming SQL.
-			for _,name:=range []string{"metadata.db-wal","metadata.db-shm"}{
-				if err:=removeSyncedMetadata(root,name);err!=nil{return err}
+			for _, name := range []string{"metadata.db-wal", "metadata.db-shm"} {
+				if err := removeSyncedMetadata(root, name); err != nil {
+					return err
+				}
 			}
-			if checkpoint!=nil{if err:=checkpoint("sidecars");err!=nil{return err}}
-			if err:=unix.Renameat2(unix.AT_FDCWD,filepath.Join(root,sqlName),unix.AT_FDCWD,filepath.Join(root,sqliteRollbackRetiredName(j)),unix.RENAME_NOREPLACE);err!=nil{return err}
+			if checkpoint != nil {
+				if err := checkpoint("sidecars"); err != nil {
+					return err
+				}
+			}
+			if err := unix.Renameat2(unix.AT_FDCWD, filepath.Join(root, sqlName), unix.AT_FDCWD, filepath.Join(root, sqliteRollbackRetiredName(j)), unix.RENAME_NOREPLACE); err != nil {
+				return err
+			}
 		}
 		// Also fsync on retry if a prior rename succeeded before fsync.
-		if err:=syncMetadataDirectory(root);err!=nil{return err}
-		if checkpoint!=nil{if err:=checkpoint("retired");err!=nil{return err}}
+		if err := syncMetadataDirectory(root); err != nil {
+			return err
+		}
+		if checkpoint != nil {
+			if err := checkpoint("retired"); err != nil {
+				return err
+			}
+		}
 	}
-	if err:=sqliteRollbackValidate(root,j);err!=nil{return err}
-	current,found,err:=sqliteRollbackReadJournal(root)
-	if err!=nil||!found||!sqliteShadowEqual(current,j){return errors.New("rollback intent changed during replay")}
+	if err := sqliteRollbackValidate(root, j); err != nil {
+		return err
+	}
+	current, found, err := sqliteRollbackReadJournal(root)
+	if err != nil || !found || !sqliteShadowEqual(current, j) {
+		return errors.New("rollback intent changed during replay")
+	}
 	return removeSyncedMetadata(root, sqliteRollbackJournalName)
 }

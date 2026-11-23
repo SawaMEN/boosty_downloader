@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"time"
-	"golang.org/x/sys/unix"
 )
 
 // VerifySQLiteMetadataBackup verifies a previously exported, PRIVATE metadata
@@ -140,28 +140,36 @@ func backupReadPrivateFile(dir, name string) ([]byte, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("unsafe backup metadata file permissions or type: %s", name)
 	}
-	limit:=info.Size()
-	switch name{
-	case "backup-manifest.json":limit=1<<20
-	case fullSnapshotManifestName:limit=fullSnapshotManifestMaxBytes
+	limit := info.Size()
+	switch name {
+	case "backup-manifest.json":
+		limit = 1 << 20
+	case fullSnapshotManifestName:
+		limit = fullSnapshotManifestMaxBytes
 	}
-	if info.Size()>limit{return nil,errors.New("backup metadata exceeds read limit")}
-	path:=filepath.Join(dir,name)
-	fd,err:=unix.Open(path,unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK,0)
+	if info.Size() > limit {
+		return nil, errors.New("backup metadata exceeds read limit")
+	}
+	path := filepath.Join(dir, name)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
-	file:=os.NewFile(uintptr(fd),path)
+	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	openInfo, err := file.Stat()
-	if err != nil || !os.SameFile(info, openInfo)||!openInfo.Mode().IsRegular()||openInfo.Mode().Perm()&0077!=0||openInfo.Size()!=info.Size() {
+	if err != nil || !os.SameFile(info, openInfo) || !openInfo.Mode().IsRegular() || openInfo.Mode().Perm()&0077 != 0 || openInfo.Size() != info.Size() {
 		return nil, errors.New("backup entry changed while opening")
 	}
-	raw,err:=io.ReadAll(io.LimitReader(file,limit+1))
-	if err!=nil{return nil,err}
-	after,err:=os.Lstat(path)
-	if err!=nil||!os.SameFile(openInfo,after)||int64(len(raw))!=openInfo.Size()||!after.ModTime().Equal(openInfo.ModTime()){return nil,errors.New("backup entry changed during read")}
-	return raw,nil
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(openInfo, after) || int64(len(raw)) != openInfo.Size() || !after.ModTime().Equal(openInfo.ModTime()) {
+		return nil, errors.New("backup entry changed during read")
+	}
+	return raw, nil
 }
 
 func backupFileDigest(dir, name string) (string, int64, error) {
