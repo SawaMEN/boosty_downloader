@@ -10,12 +10,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
       - name: Format and test SQL archive publication
         shell: bash
         run: |
-          gofmt -w internal/server/archive_update_transaction.go internal/server/sqlite_primary_transaction.go internal/server/sqlite_shadow.go internal/server/sqlite_archive_publication.go internal/server/sqlite_archive_publication_test.go
-          go test ./internal/server -run '^(TestSQLArchivePublication|TestArchiveUpdate|TestSQLPrimaryJournal|TestSQLFirstStorage)' -count=1 -v
-          for path in internal/server/archive_update_transaction.go internal/server/sqlite_primary_transaction.go internal/server/sqlite_shadow.go internal/server/sqlite_archive_publication.go internal/server/sqlite_archive_publication_test.go; do
+          gofmt -w internal/server/archive_update_transaction.go internal/server/sqlite_primary_transaction.go internal/server/sqlite_shadow.go internal/server/sqlite_archive_publication.go internal/server/sqlite_archive_publication_test.go internal/server/sqlite_backup_verify.go internal/server/sqlite_backend_selection.go internal/server/sqlite_backend_selection_test.go
+          go test ./internal/server -run '^(TestSQLArchivePublication|TestArchiveUpdate|TestSQLPrimaryJournal|TestSQLFirstStorage|TestPinJSON|TestSQLiteActiveBackendMarker)' -count=1 -v
+          for path in internal/server/archive_update_transaction.go internal/server/sqlite_primary_transaction.go internal/server/sqlite_shadow.go internal/server/sqlite_archive_publication.go internal/server/sqlite_archive_publication_test.go internal/server/sqlite_backup_verify.go internal/server/sqlite_backend_selection.go internal/server/sqlite_backend_selection_test.go; do
             printf 'FORMATTED_BEGIN:%s\n' "$path"
             base64 -w0 "$path"
             printf '\nFORMATTED_END:%s\n' "$path"

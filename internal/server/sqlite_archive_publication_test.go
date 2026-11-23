@@ -65,8 +65,17 @@ func TestSQLArchivePublicationRecoversSIGKILL(t *testing.T) {
 			} else if job.Title!=before[id].Title { t.Fatal("uncommitted job changed",job) }
 			if !sqliteShadowEqual(job.SharedWith,before[id].SharedWith)||job.SharedForAll!=before[id].SharedForAll { t.Fatal("ACL changed",job) }
 			if err:=verifyJSONSQLiteAgreement(root);err!=nil { t.Fatal("SQL and JSON diverged",err) }
-			if err:=verifySQLiteSnapshotInventory(root);err!=nil { t.Fatal("SQL current revision index and files diverged",err) }
+			// Offline inventory intentionally uses an immutable checkpointed
+			// database. Confirm startup parity first with WAL, then checkpoint
+			// SQLite before the separate full media audit.
 			meta,err:=openSQLiteMetadata(filepath.Join(root,"metadata.db"))
+			if err!=nil { t.Fatal(err) }
+			var busy, logFrames, checkpointed int
+			err = meta.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy,&logFrames,&checkpointed)
+			closeErr := meta.close()
+			if err != nil || closeErr != nil || busy != 0 { t.Fatal("cannot checkpoint recovered SQL",err,closeErr,busy) }
+			if err:=verifySQLiteSnapshotInventory(root);err!=nil { t.Fatal("SQL current revision index and files diverged",err) }
+			meta,err=openSQLiteMetadata(filepath.Join(root,"metadata.db"))
 			if err!=nil { t.Fatal(err) }
 			defer meta.close()
 			var count int

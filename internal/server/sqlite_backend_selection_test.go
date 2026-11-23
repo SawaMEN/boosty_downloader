@@ -371,3 +371,54 @@ func TestPinnedJSONStartupRefusesSQLOnlyChangesAfterPin(t *testing.T) {
 		t.Fatal("rejected JSON startup rewrote live jobs")
 	}
 }
+
+
+func TestPinJSONBackendStartupReadsCommittedWAL(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	if err := PinJSONBackendSelection(root); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.close()
+	var journalMode string
+	if err := meta.db.QueryRow("PRAGMA journal_mode=WAL").Scan(&journalMode); err != nil || journalMode != "wal" {
+		t.Fatal("cannot establish WAL fixture", journalMode, err)
+	}
+	if _, err := meta.db.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := sqliteShadowReadJobs(filepath.Join(root, "jobs.json"))
+	if err != nil { t.Fatal(err) }
+	imports, err := sqliteShadowReadImports(filepath.Join(root, "imports.json"))
+	if err != nil { t.Fatal(err) }
+	id := strings.Repeat("1",24)
+	job := jobs[id]
+	job.Title = "committed WAL generation"
+	job.SharedWith = []string{"wal-member"}
+	job.UpdatedAt = job.UpdatedAt.Add(time.Minute)
+	jobs[id] = job
+	if err := sqlitePrimaryCommitMetadata(root, meta, jobs, imports, nil); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := os.Stat(filepath.Join(root, "metadata.db-wal"))
+	if err != nil || wal.Size() == 0 { t.Fatal("fixture lost committed WAL", err) }
+	if err := verifyJSONSQLiteAgreement(root); err != nil {
+		t.Fatal("startup parity ignored committed WAL", err)
+	}
+	if _, err := newStorage(root,testKey(t)); err != nil {
+		t.Fatal("pinned JSON startup refused matching committed WAL", err)
+	}
+	// SQL-only ACL changes in the WAL must also prevent fallback to stale JSON.
+	next := job
+	next.SharedWith = []string{"different-member"}
+	next.UpdatedAt = next.UpdatedAt.Add(time.Minute)
+	if err := meta.apply(context.Background(),[]sqliteArchiveChange{{Before:&job,After:next}},nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStorage(root,testKey(t)); err == nil {
+		t.Fatal("startup accepted stale JSON despite newer SQL WAL grants")
+	}
+}
