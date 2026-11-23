@@ -69,6 +69,9 @@ func validContentFingerprint(digest string) bool {
 // Legacy snapshots without fingerprints remain untouched. Hardlinked media
 // stay available through the current archive and every other owner/version.
 func (s *Storage) discardIdenticalRevision(job Job, revisionID string) (bool, error) {
+	if s.primary != nil {
+		return false, nil // SQL history deletion requires its own journal.
+	}
 	if revisionID == "" {
 		return false, nil
 	}

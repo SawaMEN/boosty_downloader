@@ -1,0 +1,23 @@
+name: SQL history crash verification
+on:
+  push:
+    branches: [tooling/sqlite-history-journal-20261124]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Format and verify history publication
+        shell: bash
+        run: |
+          gofmt -w internal/server/revisions.go internal/server/revision_fingerprint.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backend_selection.go internal/server/sqlite_backup.go internal/server/sqlite_history_journal.go internal/server/sqlite_history_journal_test.go
+          go test ./internal/server -run '^(TestSQLHistoryJournal|TestArchiveRevision|TestRevision|TestSQLiteRollback|TestSQLiteCutover|TestPinJSON)' -count=1 -v
+          for path in internal/server/revisions.go internal/server/revision_fingerprint.go internal/server/storage.go internal/server/sqlite_revision_reindex.go internal/server/sqlite_backend_selection.go internal/server/sqlite_backup.go internal/server/sqlite_history_journal.go internal/server/sqlite_history_journal_test.go; do
+            printf 'FORMATTED_BEGIN:%s\n' "$path"
+            base64 -w0 "$path"
+            printf '\nFORMATTED_END:%s\n' "$path"
+          done
