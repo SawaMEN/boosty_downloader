@@ -340,16 +340,7 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 		if readErr != nil || !sqliteShadowEqual(current, *c.Before) {
 			return errSQLiteConflict
 		}
-		var owner, author, postID string
-		err = tx.QueryRowContext(ctx, `SELECT a.owner_id,p.author_slug,p.remote_post_id
-			FROM owner_archives a JOIN source_posts p ON p.post_key=a.post_key
-			WHERE a.archive_id=?`, j.ID).Scan(&owner, &author, &postID)
-		if err != nil {
-			return err
-		}
-		if owner != j.OwnerID || author != j.Author || postID != j.PostID {
-			return errSQLiteConflict
-		}
+		// sqliteReadJobTx has already checked owner, post identity and grants.
 	}
 	if !found {
 		_, err = tx.ExecContext(ctx,
@@ -389,16 +380,15 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM archive_grants WHERE archive_id=?", j.ID); err != nil {
+	// Preserve retained grants and their original creation timestamps.
+	var previous []string
+	if found {
+		previous = c.Before.SharedWith
+	}
+	if err := sqliteApplyGrantDelta(ctx, tx, j.ID, previous, j.SharedWith, sqliteDate(j.UpdatedAt)); err != nil {
 		return err
 	}
-	for _, member := range j.SharedWith {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO archive_grants (archive_id,grantee_owner_id,created_at) VALUES (?,?,?)",
-			j.ID, member, sqliteDate(j.UpdatedAt)); err != nil {
-			return err
-		}
-	}
+
 	action := "metadata_update"
 	if !found {
 		action = "metadata_insert"
@@ -407,6 +397,39 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 		INSERT INTO archive_events (owner_id,archive_id,event_type,created_at)
 		VALUES (?,?,?,?)`, j.OwnerID, j.ID, action, sqliteDate(j.UpdatedAt))
 	return err
+}
+
+func sqliteApplyGrantDelta(ctx context.Context, tx *sql.Tx, id string, before, after []string, created string) error {
+	old := make(map[string]bool, len(before))
+	for _, member := range before {
+		old[member] = true
+	}
+	for _, member := range after {
+		if old[member] {
+			delete(old, member)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO archive_grants (archive_id,grantee_owner_id,created_at) VALUES (?,?,?)", id, member, created); err != nil {
+			return err
+		}
+	}
+	for _, member := range before {
+		if !old[member] {
+			continue
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM archive_grants WHERE archive_id=? AND grantee_owner_id=?", id, member)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errSQLiteConflict
+		}
+	}
+	return nil
 }
 
 func sqliteDeletedAt(t *time.Time) any {

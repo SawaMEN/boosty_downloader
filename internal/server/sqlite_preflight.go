@@ -241,7 +241,13 @@ func sqliteSameJSON(a, b []byte) bool {
 	// json.Decoder.Decode accepts the first value even if junk or a second
 	// JSON document follows it. Never equate such a payload with a valid
 	// authoritative snapshot during migration or recovery verification.
-	if !json.Valid(a) || !json.Valid(b) {
+	if !json.Valid(a) {
+		return false
+	}
+	if bytes.Equal(a, b) {
+		return true
+	}
+	if !json.Valid(b) {
 		return false
 	}
 	var left, right any

@@ -407,3 +407,8 @@ boosty-dbcheck --data-dir "$DATA" --activate-sqlite-primary \
 ```
 
 Для запуска после успешной активации установите BD_SQLITE_PRIMARY=1 в окружении сервиса; отключите BD_SQLITE_SHADOW, BD_SQLITE_VERIFY, BD_SQLITE_MEDIA_SHADOW, BD_SQLITE_CATALOG_READS. Наличие флага без durable SQLite selector не изменяет backend; наличие selector без флага блокирует запуск. При ошибках нет JSON fallback. Аккаунты, сессии, токены и каталог авторов остаются в прежнем формате; миграция касается jobs/imports, ACL и SQL индекса медиа. SIGTERM/SIGINT дренируют HTTP перед закрытием SQL. Откат: остановить сервис, создать новый полный snapshot, выполнить --rollback-sqlite-to-json --rollback-full-snapshot-dir, убрать BD_SQLITE_PRIMARY=1, запустить JSON. Сохранить retired DB и backup. Реальные нагрузочные и VPS-тесты остаются обязательными.
+
+
+## SQL metadata hot path (12.4.19)
+
+Идентичные результаты json.Marshal сравниваются побайтно без повторного декодирования; произвольный raw JSON валидируется и при необходимости сравнивается семантически с UseNumber. Повторный запрос идентичности архива устранён, поскольку sqliteReadJobTx проверяет её и grants внутри той же транзакции. При изменении метаданных сохраняются неизменные archive_grants и их created_at, добавляются/удаляются только изменённые разрешения. Проверки before-image и полная SQL-проекция сохраняются. BenchmarkSQLiteMetadataEqual сравнивает прежний и новый пути с отчётом по allocations.
