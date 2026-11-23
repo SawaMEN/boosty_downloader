@@ -33,6 +33,7 @@ type Storage struct {
 	restoreCheckpoint       func(string) error // crash/failure injection in tests only
 	videoCheckpoint         func(string) error // video journal crash/failure injection
 	archiveUpdateCheckpoint func(string) error // whole-archive crash/failure injection
+	sqliteHistoryCheckpoint func(string) error
 	gates                   *archiveGates
 }
 
@@ -111,6 +112,9 @@ func newStorage(root, keyString string) (*Storage, error) {
 	}
 	if e = recoverSQLitePrimaryCommitLocked(root); e != nil {
 		return nil, fmt.Errorf("SQL-primary transaction recovery failed: %w", e)
+	}
+	if e = recoverSQLHistoryLocked(root, nil); e != nil {
+		return nil, fmt.Errorf("SQL history journal recovery failed: %w", e)
 	}
 	if e = recoverArchivePurgeLocked(root); e != nil {
 		return nil, fmt.Errorf("archive purge journal recovery failed: %w", e)

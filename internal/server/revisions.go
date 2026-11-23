@@ -127,16 +127,36 @@ func linkArchiveSnapshot(src, dst string) (ArchiveManifest, error) {
 // new download must not destroy the last known-good version. All large media
 // remain shared inodes, so a revision does not duplicate physical video data.
 func (s *Storage) saveArchiveRevision(job Job) (string, error) {
+	// SQL-first history staging and its publication journal must share the
+	// metadata writer lock. JSON-only restore already owns this lock.
+	if s.primary != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
+			return "", err
+		}
+		current := s.jobs[job.ID]
+		if current == nil || current.OwnerID != job.OwnerID || current.Author != job.Author ||
+			current.PostID != job.PostID || current.DeletedAt != nil {
+			return "", errors.New("SQL history job identity changed")
+		}
+	}
 	if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
 		return "", errors.New("неверный путь архива")
 	}
 	live := s.archiveDir(job.OwnerID, job.Author, job.PostID)
+	if _, err := purgeSafePath(s.root, live); err != nil {
+		return "", err
+	}
 	if _, err := os.Lstat(filepath.Join(live, "manifest.json")); os.IsNotExist(err) {
 		return "", nil
 	} else if err != nil {
 		return "", err
 	}
 	root := s.revisionsDir(job)
+	if _, err := purgeSafePath(s.root, root); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", err
 	}
@@ -145,7 +165,18 @@ func (s *Storage) saveArchiveRevision(job Job) (string, error) {
 		return "", err
 	}
 	stage := filepath.Join(root, ".incomplete-"+id)
-	defer os.RemoveAll(stage)
+	if err := os.Mkdir(stage, 0700); err != nil {
+		return "", err
+	}
+	defer func() {
+		// A prepared SQL history journal owns its stage until recovery.
+		if s.primary != nil {
+			if _, err := os.Lstat(filepath.Join(s.root, sqliteHistoryJournalName)); !os.IsNotExist(err) {
+				return
+			}
+		}
+		_ = os.RemoveAll(stage)
+	}()
 	man, err := linkArchiveSnapshot(live, stage)
 	if err != nil {
 		return "", err
@@ -170,10 +201,24 @@ func (s *Storage) saveArchiveRevision(job Job) (string, error) {
 	if err := syncMetadataDirectory(root); err != nil {
 		return "", err
 	}
-	if err := os.Rename(stage, filepath.Join(root, id)); err != nil {
-		return "", err
+	// A newly created owner/author/post history path must survive power
+	// loss as well as the stage itself.
+	for dir := root; ; dir = filepath.Dir(dir) {
+		if err := syncMetadataDirectory(dir); err != nil {
+			return "", err
+		}
+		if filepath.Clean(dir) == filepath.Clean(s.root) {
+			break
+		}
+		if filepath.Dir(dir) == dir {
+			return "", errors.New("history path escaped data directory")
+		}
 	}
-	if err := syncMetadataDirectory(root); err != nil {
+	if s.primary != nil {
+		if err := s.publishSQLHistoryLocked(job, id, stage); err != nil {
+			return "", err
+		}
+	} else if err := durableRevisionRestoreRename(s.root, stage, filepath.Join(root, id)); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -216,6 +261,11 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 }
 
 func (s *Storage) pruneArchiveRevisions(job Job) error {
+	// Until a SQL history deletion journal exists, retain historical
+	// snapshots rather than silently remove files still indexed in SQL.
+	if s.primary != nil {
+		return nil
+	}
 	list, err := s.listArchiveRevisions(job)
 	if err != nil {
 		return err
