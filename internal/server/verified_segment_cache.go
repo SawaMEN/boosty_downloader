@@ -88,6 +88,9 @@ func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source stri
 	if _, exists := cache.entries[key]; exists {
 		return
 	}
+	// The cache directory outlives an individual remux attempt. Its
+	// writes must not be credited when that attempt's directory is removed.
+	ctx = withoutMediaStageBudget(ctx)
 	in, err := openArchiveRegular(filepath.Dir(source), filepath.Base(source))
 	if err != nil {
 		return

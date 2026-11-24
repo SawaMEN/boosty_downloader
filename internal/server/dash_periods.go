@@ -200,7 +200,8 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	if err != nil {
 		return 0, "", err
 	}
-	defer os.RemoveAll(dir)
+	ctx = withMediaStageBudget(ctx)
+	defer cleanupMediaStage(ctx, dir)
 	budget := maxArchiveMediaSize
 	var signature []dashProbeStream
 	var list strings.Builder
@@ -278,7 +279,7 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	if err := os.Chmod(output, 0600); err != nil {
 		return 0, "", err
 	}
-	if err := os.Rename(output, dest); err != nil {
+	if err := publishStagedVideo(ctx, output, dest, size); err != nil {
 		return 0, "", err
 	}
 	return size, digest, nil
