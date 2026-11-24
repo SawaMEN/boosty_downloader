@@ -253,6 +253,11 @@ func (a *App) Close() {
 	a.closeOnce.Do(func() {
 		a.cancel()
 		a.wg.Wait()
+		a.clientsMu.Lock()
+		for _, client := range a.clients {
+			client.CloseIdleConnections()
+		}
+		a.clientsMu.Unlock()
 		// Serialize database closure with any final metadata operation.
 		// The caller must stop HTTP admission before closing the app.
 		a.store.mu.Lock()
