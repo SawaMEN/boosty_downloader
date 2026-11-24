@@ -57,7 +57,7 @@ func TestRevisionStageCleanupRefusesPendingJournal(t *testing.T) {
 }
 
 func TestRevisionStageCleanupRejectsUnsafeEntries(t *testing.T) {
-	for _, name := range []string{".incomplete-bad", ".incomplete-"+strings.Repeat("c", 24)} {
+	for _, name := range []string{".incomplete-bad", ".incomplete-" + strings.Repeat("c", 24)} {
 		t.Run(name, func(t *testing.T) {
 			root, outside := t.TempDir(), t.TempDir()
 			parent := filepath.Join(root, "revisions", "owner", "author", "post")
