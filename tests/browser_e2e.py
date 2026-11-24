@@ -29,6 +29,7 @@ ADMIN_PASSWORD = "test-browser-password-123"
 
 ARCHIVE_JOB_ID = "d1d2d3d4d5d6d7d8d9dadbdc"
 ARCHIVE_REVISION_ID = "a1a2a3a4a5a6a7a8a9aaabac"
+SECURITY_JOB_ID = "c1c2c3c4c5c6c7c8c9cacbcc"
 ARCHIVE_MEMBER = "browser-member"
 ARCHIVE_MEMBER_PASSWORD = "browser-member-password-123"
 
@@ -56,7 +57,12 @@ def seed_browser_archive(state):
         "createdAt": created, "updatedAt": updated,
         "archiveUpdatedAt": updated, "doneFiles": 1, "totalFiles": 1,
     }
-    write(state / "jobs.json", json.dumps({ARCHIVE_JOB_ID: job}).encode())
+    security_job = dict(job, id=SECURITY_JOB_ID, postId="security-test",
+                        title="Security fixture", doneFiles=2, totalFiles=2,
+                        url="https://boosty.to/browserfixture/posts/security-test")
+    write(state / "jobs.json", json.dumps({
+        ARCHIVE_JOB_ID: job, SECURITY_JOB_ID: security_job,
+    }).encode())
     base = state / "library" / "admin" / "browserfixture" / "archive-test"
     older = state / "revisions" / "admin" / "browserfixture" / "archive-test" / ARCHIVE_REVISION_ID
 
@@ -88,6 +94,20 @@ def seed_browser_archive(state):
     # Raw API payloads and incomplete media must never enter downloadable ZIPs.
     write(base / "post.json", '{"private":"RAW_BROWSER_CDN_SECRET"}')
     write(base / "media" / "unfinished.part", "PARTIAL_BROWSER_FILE")
+    security = state / "library" / "admin" / "browserfixture" / "security-test"
+    payloads = {
+        "payload.html": b"<script>window.__unsafe_attachment=1</script>",
+        "payload.svg": b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+    }
+    write(security / "manifest.json", json.dumps({
+        "title": security_job["title"], "author": security_job["author"],
+        "postId": security_job["postId"], "capturedAt": updated,
+        "assets": [{"filename": name, "type": "file", "size": len(data)}
+                   for name, data in payloads.items()],
+    }))
+    write(security / "index.html", "<h1>Security fixture</h1>")
+    for name, data in payloads.items():
+        write(security / "media" / name, data)
 
 
 
@@ -211,6 +231,73 @@ class BrowserE2E(unittest.TestCase):
                          "logout must revoke the server session, not just hide the UI")
         page.reload()
         expect(page.locator("#loginScreen")).to_be_visible()
+
+    def test_session_cookie_revocation_and_independent_login(self):
+        self.login()
+        cookies = [c for c in self.context.cookies() if c["name"] == "bd_session"]
+        self.assertEqual(len(cookies), 1)
+        cookie = cookies[0]
+        self.assertTrue(cookie["secure"])
+        self.assertTrue(cookie["httpOnly"])
+        self.assertEqual(cookie["sameSite"], "Strict")
+        self.assertNotIn("bd_session", self.page.evaluate("document.cookie"))
+        replay = self.browser.new_context(ignore_https_errors=True)
+        independent = self.browser.new_context(ignore_https_errors=True)
+        self.addCleanup(replay.close)
+        self.addCleanup(independent.close)
+        replay.add_cookies(cookies)
+        account = self.url + "/api/account"
+        self.assertEqual(replay.request.get(account).status, 200)
+        login = independent.request.post(
+            self.url + "/api/account/login",
+            headers={"X-BD-Request": "1"},
+            data={"username": ADMIN_USER, "password": ADMIN_PASSWORD},
+        )
+        self.assertEqual(login.status, 200)
+        # Browser-style cross-site state change and missing CSRF header fail.
+        for headers in ({}, {"X-BD-Request": "1", "Sec-Fetch-Site": "cross-site"}):
+            self.assertEqual(replay.request.post(
+                self.url + "/api/account/logout", headers=headers,
+            ).status, 403)
+        self.assertEqual(replay.request.get(account).status, 200)
+        self.page.locator("#logout").click()
+        expect(self.page.locator("#loginScreen")).to_be_visible()
+        self.assertEqual(replay.request.get(account).status, 401)
+        self.assertEqual(independent.request.get(account).status, 200)
+        self.assertEqual(independent.request.post(
+            self.url + "/api/account/logout", headers={"X-BD-Request": "1"},
+        ).status, 200)
+
+    def test_unsafe_archive_attachments_download_without_execution(self):
+        self.login()
+        base = self.url + "/library/" + SECURITY_JOB_ID + "/"
+        page = self.page
+        page.goto(base + "index.html")
+        expect(page.locator("h1")).to_have_text("Security fixture")
+        for name in ("payload.html", "payload.svg"):
+            media_url = base + "media/" + name
+            response = self.context.request.get(media_url)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["content-type"], "application/octet-stream")
+            self.assertTrue(response.headers["content-disposition"].startswith("attachment"))
+            self.assertIn("sandbox", response.headers["content-security-policy"])
+            self.assertEqual(response.headers["cross-origin-resource-policy"], "same-origin")
+            self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+            # Clicking a real link must trigger a Chromium download, not
+            # navigate the current origin to attacker-controlled HTML/SVG.
+            page.evaluate("""url => {
+                const a = document.createElement('a');
+                a.id = 'unsafe-fixture'; a.href = url; a.textContent = 'Download';
+                document.body.appendChild(a);
+            }""", media_url)
+            with page.expect_download() as event:
+                page.locator("#unsafe-fixture").click()
+            download = event.value
+            self.assertEqual(download.suggested_filename, name)
+            self.assertEqual(Path(download.path()).read_bytes(), response.body())
+            self.assertEqual(page.url, base + "index.html")
+            self.assertIsNone(page.evaluate("window.__unsafe_attachment || null"))
+            page.locator("#unsafe-fixture").evaluate("node => node.remove()")
 
     def test_post_comments_and_catalog_escape_untrusted_text(self):
         page = self.page

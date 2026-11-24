@@ -61,6 +61,8 @@ jobs:
           go test ./internal/server -run '^TestDASH(FiniteNegativeTimelineRepeat|NegativeTimelineRepeatRejectsUnsafeOrUnbounded|NegativeRepeatStillRejectsDynamicAndDRM|DurationTemplateRejectsSegmentNumberWrap)$' -count=1
       - name: Unit tests and race detector
         run: go test -race ./...
+      - name: Password derivation compatibility benchmark
+        run: go test ./internal/server -run '^$' -bench '^BenchmarkPasswordDerivation$' -benchtime=3x -benchmem -count=1
       - name: SQL metadata scale benchmark
         run: go test ./internal/server -run '^$' -bench '^BenchmarkSQLPrimaryLibraryGuard$' -benchtime=1x -benchmem -count=1
       - name: Docker image build
