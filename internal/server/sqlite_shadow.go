@@ -190,29 +190,14 @@ func (s *Storage) syncSQLiteShadow(ctx context.Context) error {
 }
 
 func (s *Storage) sqliteShadowLoop(ctx context.Context) {
-	// A periodic sweep recovers missed signals and transient SQLite failures.
-	// Signal channel is bounded (one pending item), so a hot download queue
-	// cannot allocate unbounded per-write background tasks.
+	// Keep periodic full audits even when generation counters are unchanged.
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.shadow.wake:
-			// Coalesce rapid progress writes without creating a goroutine per
-			// event; the 1-element wake channel remains bounded.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(200 * time.Millisecond):
-			}
-		case <-ticker.C:
-		}
+	runSQLiteShadowSweeps(ctx, s.shadow.wake, ticker.C, 200*time.Millisecond, func(ctx context.Context) {
 		if err := s.syncSQLiteShadow(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("SQLite shadow degraded (JSON remains authoritative): %v", err)
 		}
-	}
+	})
 }
 
 // enableSQLiteShadow runs BEFORE workers are launched. An already-exported v1
