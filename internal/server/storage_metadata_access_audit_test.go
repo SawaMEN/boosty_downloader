@@ -34,6 +34,7 @@ func TestStorageMetadataDirectAccessInventory(t *testing.T) {
 		// Admin preview reads only copied job identities under Storage.mu and
 		// validates SQL generation before the snapshot; no job pointers escape.
 		"revision_retention_preview.go:adminRevisionPreview",
+		"revision_preview_batch.go:verifyRevisionPreviewBatch",
 		"revisions.go:restoreArchiveRevision",
 		"revisions.go:saveArchiveRevisionLocked",
 		"sqlite_history_delete.go:deleteSQLHistoryLocked",

@@ -123,7 +123,7 @@ func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "метаданные недоступны")
 		return
 	}
-	jobs := make([]Job, 0, len(a.store.jobs))
+	jobs := make([]revisionPreviewIdentity, 0, len(a.store.jobs))
 	seen := make(map[[3]string]bool)
 	for _, job := range a.store.jobs {
 		if job != nil && job.DeletedAt == nil && (job.State == "done" || job.State == "partial") {
@@ -132,36 +132,19 @@ func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[key] = true
-			jobs = append(jobs, Job{ID: job.ID, OwnerID: job.OwnerID, Author: job.Author, PostID: job.PostID})
+			jobs = append(jobs, newRevisionPreviewIdentity(*job))
 		}
 	}
 	a.store.mu.Unlock()
 	result := revisionRetentionPreview{Limit: limit, MaxGiB: maxGiB, Total: len(jobs)}
-	for _, job := range jobs {
+	for start := 0; start < len(jobs); start += revisionPreviewBatchSize {
 		if ctx.Err() != nil {
 			break
 		}
-		unlock, ready := a.archiveGates.tryRead(job)
-		if !ready {
-			continue
-		}
-		current, ok := a.store.get(job.ID)
-		if !ok || current.OwnerID != job.OwnerID || current.Author != job.Author ||
-			current.PostID != job.PostID || (current.State != "done" && current.State != "partial") {
-			unlock()
-			continue
-		}
-		count, size, physical, available, err := a.store.previewRevisionUsage(ctx, job, limit, maxGiB)
-		unlock()
-		if err != nil || ctx.Err() != nil || result.LogicalBytes > math.MaxInt64-size {
-			continue
-		}
-		result.Scanned++
-		result.CandidateCount += count
-		result.LogicalBytes += size
-		if available && result.PhysicalBytes <= math.MaxInt64-physical {
-			result.PhysicalBytes += physical
-			result.PhysicalScanned++
+		batch := jobs[start:min(start+revisionPreviewBatchSize, len(jobs))]
+		if err := a.scanRevisionPreviewBatch(ctx, batch, limit, maxGiB, &result); err != nil {
+			fail(w, 503, "метаданные недоступны")
+			return
 		}
 	}
 	result.Skipped = result.Total - result.Scanned

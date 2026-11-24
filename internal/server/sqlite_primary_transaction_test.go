@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -445,5 +446,87 @@ func TestSQLPrimaryMirrorRejectsDivergentSecondTarget(t *testing.T) {
 	current, err := os.ReadFile(filepath.Join(root, "jobs.json"))
 	if err != nil || !bytes.Equal(current, old) {
 		t.Fatal("first mirror was modified before validating the second")
+	}
+}
+
+// With no changed bytes and no extra effects, even a one-byte journal
+// limit is sufficient: the operation must not create an intent.
+func TestSQLPrimaryNoopCommitSkipsJournal(t *testing.T) {
+	root, _ := sqliteCanaryFixture(t)
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.close()
+	jobs, err := sqliteShadowReadJobs(filepath.Join(root, "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports, err := sqliteShadowReadImports(filepath.Join(root, "imports.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Establish the exact canonical bytes, independent of fixture format.
+	for _, item := range []struct {
+		name  string
+		value any
+	}{
+		{"jobs.json", jobs},
+		{"imports.json", imports},
+	} {
+		raw, err := json.MarshalIndent(item.value, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeSyncedMetadata(root, item.name, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeJobs, err := os.Stat(filepath.Join(root, "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeImports, err := os.Stat(filepath.Join(root, "imports.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlitePrimaryCommitMetadataWithLimit(root, meta, jobs, imports, nil, 1); err != nil {
+		t.Fatal("no-op required a journal:", err)
+	}
+	for _, item := range []struct {
+		name string
+		info os.FileInfo
+	}{
+		{"jobs.json", beforeJobs},
+		{"imports.json", beforeImports},
+	} {
+		after, err := os.Stat(filepath.Join(root, item.name))
+		if err != nil || !os.SameFile(item.info, after) {
+			t.Fatalf("no-op replaced %s: %v", item.name, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, sqlitePrimaryTransactionName)); !os.IsNotExist(err) {
+		t.Fatal("no-op left a journal:", err)
+	}
+	called := false
+	if err := sqlitePrimaryCommitMetadata(root, meta, jobs, imports, &sqlitePrimaryCommitHooks{
+		reconcileExtra: func(context.Context, *sql.Tx) error {
+			called = true
+			return nil
+		},
+	}); err != nil || !called {
+		t.Fatalf("unchanged metadata skipped extra callback: called=%v err=%v", called, err)
+	}
+	// No-op is never permission to accept an unrelated forged SQL row.
+	if _, err := meta.db.Exec("UPDATE owner_archives SET title='forged' WHERE archive_id=?", strings.Repeat("2", 24)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlitePrimaryCommitMetadataWithLimit(root, meta, jobs, imports, nil, 1); err == nil {
+		t.Fatal("no-op accepted SQL drift")
 	}
 }

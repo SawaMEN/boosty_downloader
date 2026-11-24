@@ -186,3 +186,46 @@ func TestSQLPrimaryOrderedGrantScan(t *testing.T) {
 		})
 	}
 }
+
+// Reusing SQL scan destinations and RawBytes must never reuse decoded
+// metadata, especially optional fields and ACL slices across rows.
+func TestSQLPrimaryCursorScanRowsDetached(t *testing.T) {
+	s, _, _ := sqlFirstStorageFixture(t)
+	s.mu.Lock()
+	first, imports, err := s.sqlitePrimaryReadSnapshotLocked()
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) < 2 || len(imports) == 0 {
+		t.Fatal("fixture lacks multiple archives or an import")
+	}
+	id := strings.Repeat("1", 24)
+	otherID := strings.Repeat("2", 24)
+	job, ok := first[id]
+	if !ok || len(job.SharedWith) == 0 {
+		t.Fatal("fixture lacks ACL")
+	}
+	other, ok := first[otherID]
+	if !ok {
+		t.Fatal("missing second archive")
+	}
+	original := cloneStorageJob(job)
+	originalOther := cloneStorageJob(other)
+	job.SharedWith[0] = "changed"
+	if !sqliteShadowEqual(first[otherID], originalOther) {
+		t.Fatal("decoded rows share ACL storage")
+	}
+	s.mu.Lock()
+	second, secondImports, err := s.sqlitePrimaryReadSnapshotLocked()
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sqliteShadowEqual(second[id], original) || !sqliteShadowEqual(second[otherID], originalOther) {
+		t.Fatal("cursor reuse or projection mutation altered later reads")
+	}
+	if !sqliteShadowEqual(imports, secondImports) {
+		t.Fatal("import cursor changed metadata")
+	}
+}

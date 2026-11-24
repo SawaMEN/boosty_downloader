@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"time"
 )
@@ -321,19 +320,12 @@ func (m *sqliteMetadata) reconcileWithExtra(ctx context.Context, jobs map[string
 }
 
 func sqliteShadowEqual(a, b any) bool {
+	if sqliteMetadataEqualValidated(a, b) {
+		return true
+	}
 	left, err := json.Marshal(a)
 	if err != nil {
 		return false
-	}
-	// For these concrete metadata types, deep equality implies the same
-	// deterministic JSON representation. Still marshal once first: equal
-	// invalid timestamps or non-finite prices must not certify parity.
-	// Other types and unequal representations retain the legacy path.
-	switch a.(type) {
-	case Job, AuthorImport:
-		if reflect.DeepEqual(a, b) {
-			return true
-		}
 	}
 	right, err := json.Marshal(b)
 	if err != nil {
@@ -389,17 +381,21 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 	defer rows.Close()
 	previousID := ""
 	visited := 0
+	// Reuse scan destinations within this cursor instead of allocating
+	// their addresses once per row. RawBytes is consumed before Next;
+	// decoded Jobs must still be fresh, detached values on every row.
+	var id, owner, author, post, state, title, created, updated string
+	var autoSync, sharedForAll int
+	var archived, deleted sql.NullString
+	var raw sql.RawBytes
 	for rows.Next() {
-		var id, owner, author, post, state, title, created, updated, raw string
-		var autoSync, sharedForAll int
-		var archived, deleted sql.NullString
 		if err := rows.Scan(&id, &owner, &author, &post, &state, &title,
 			&created, &updated, &archived, &autoSync, &sharedForAll, &deleted, &raw); err != nil {
 			rows.Close()
 			return err
 		}
 		var job Job
-		if err := json.Unmarshal([]byte(raw), &job); err != nil {
+		if err := json.Unmarshal(raw, &job); err != nil {
 			rows.Close()
 			return err
 		}
@@ -424,20 +420,16 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 		if hasGrant && grantID < id {
 			return errors.New("SQLite shadow has grants without owner archives")
 		}
-		permissions := make(map[string]bool, len(job.SharedWith))
-		for _, grantee := range job.SharedWith {
-			permissions[grantee] = true // validSQLiteArchive already rejects duplicates.
-		}
+		permissions := newSQLiteGrantMatcher(job.SharedWith)
 		for hasGrant && grantID == id {
-			if !permissions[grantUser] {
+			if !permissions.consume(grantUser) {
 				return fmt.Errorf("SQLite shadow grant mismatch: %q", id)
 			}
-			delete(permissions, grantUser)
 			if err := advanceGrant(); err != nil {
 				return err
 			}
 		}
-		if len(permissions) != 0 {
+		if !permissions.complete() {
 			return fmt.Errorf("SQLite shadow grant count mismatch: %q", id)
 		}
 		previousID = id
@@ -512,15 +504,16 @@ func sqliteShadowVisitImports(ctx context.Context, tx *sql.Tx, visit func(string
 	defer rows.Close()
 	previousID := ""
 	visited := false
+	var id, owner, author, state, updated string
+	var autoSync int
+	var raw sql.RawBytes
 	for rows.Next() {
-		var id, owner, author, state, updated, raw string
-		var autoSync int
 		if err := rows.Scan(&id, &owner, &author, &state, &autoSync, &updated, &raw); err != nil {
 			rows.Close()
 			return err
 		}
 		var imp AuthorImport
-		if err := json.Unmarshal([]byte(raw), &imp); err != nil {
+		if err := json.Unmarshal(raw, &imp); err != nil {
 			rows.Close()
 			return err
 		}

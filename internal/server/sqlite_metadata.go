@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -134,22 +135,17 @@ func sqliteReadJobTx(ctx context.Context, tx *sql.Tx, owner, id string, includeD
 	if err != nil {
 		return Job{}, err
 	}
-	expected := make(map[string]bool, len(j.SharedWith))
-	for _, grantee := range j.SharedWith {
-		expected[grantee] = true
-	}
-	seen := make(map[string]bool, len(expected))
+	expected := newSQLiteGrantMatcher(j.SharedWith)
 	for rows.Next() {
 		var grantee string
 		if err := rows.Scan(&grantee); err != nil {
 			rows.Close()
 			return Job{}, err
 		}
-		if !expected[grantee] || seen[grantee] {
+		if !expected.consume(grantee) {
 			rows.Close()
 			return Job{}, errors.New("SQLite archive has unexpected access grants")
 		}
-		seen[grantee] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -158,7 +154,7 @@ func sqliteReadJobTx(ctx context.Context, tx *sql.Tx, owner, id string, includeD
 	if err := rows.Close(); err != nil {
 		return Job{}, err
 	}
-	if len(seen) != len(expected) {
+	if !expected.complete() {
 		return Job{}, errors.New("SQLite archive has missing access grants")
 	}
 	return j, nil
@@ -240,14 +236,7 @@ func validSQLiteArchive(j Job) error {
 	if j.DeletedAt != nil && (j.AutoSync || j.SharedForAll || len(j.SharedWith) != 0) {
 		return errors.New("deleted archives cannot retain active sharing or synchronization")
 	}
-	seen := make(map[string]bool, len(j.SharedWith))
-	for _, member := range j.SharedWith {
-		if !safeArchivePart(member) || seen[member] {
-			return errors.New("invalid or duplicate archive grant")
-		}
-		seen[member] = true
-	}
-	return nil
+	return validateSQLiteGrants(j.SharedWith)
 }
 
 func validSQLiteImport(v AuthorImport) error {
@@ -400,6 +389,11 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 }
 
 func sqliteApplyGrantDelta(ctx context.Context, tx *sql.Tx, id string, before, after []string, created string) error {
+	// The persisted ACL was checked in this transaction by the caller.
+	// Progress/title updates normally retain the exact same grants.
+	if slices.Equal(before, after) {
+		return nil
+	}
 	old := make(map[string]bool, len(before))
 	for _, member := range before {
 		old[member] = true
