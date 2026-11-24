@@ -88,10 +88,21 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 	if err != nil {
 		return err
 	}
+	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
+	// A byte-identical pair cannot require recovery of a new generation.
+	// Do not skip an extra callback or checkpoint: they may describe
+	// physical archive side effects even when metadata is unchanged.
+	if hooks == nil && bytes.Equal(jobImage.Before, jobImage.After) && bytes.Equal(importImage.Before, importImage.After) {
+		if err := m.verifyJSONParity(context.Background(), jobs, imports); err != nil {
+			return fmt.Errorf("SQL unchanged image does not match existing JSON: %w", err)
+		}
+		// Reopen and check BOTH mirrors without following symlinks. Since
+		// before and after are identical, this cannot rewrite either file.
+		return publishSQLitePrimaryMirrors(root, journal, nil)
+	}
 	if _, _, err := sqlitePrimaryDecodeImages(afterJobs, afterImports); err != nil {
 		return err
 	}
-	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
 	raw, err := encodeSQLitePrimaryTypedJournal(journal, beforeJobs, beforeImports, jobs, imports, limit)
 	if err != nil {
 		return err

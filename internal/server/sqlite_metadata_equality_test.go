@@ -97,7 +97,7 @@ func TestSQLiteMetadataFastPathSchema(t *testing.T) {
 	var risky []string
 	var inspect func(reflect.Type, string)
 	inspect = func(typ reflect.Type, path string) {
-		if typ == timeType {
+		if typ == timeType || typ == reflect.PointerTo(timeType) {
 			risky = append(risky, path)
 			return
 		}

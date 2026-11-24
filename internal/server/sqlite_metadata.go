@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -388,6 +389,11 @@ func sqliteApplyArchive(ctx context.Context, tx *sql.Tx, c sqliteArchiveChange) 
 }
 
 func sqliteApplyGrantDelta(ctx context.Context, tx *sql.Tx, id string, before, after []string, created string) error {
+	// The persisted ACL was checked in this transaction by the caller.
+	// Progress/title updates normally retain the exact same grants.
+	if slices.Equal(before, after) {
+		return nil
+	}
 	old := make(map[string]bool, len(before))
 	for _, member := range before {
 		old[member] = true

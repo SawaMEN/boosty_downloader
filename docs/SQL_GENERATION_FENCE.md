@@ -126,3 +126,14 @@ matching to avoid quadratic work. Both ordered full scans and point reads
 reject missing, extra, duplicate and malformed grants. The matcher assumes
 payload validation has already succeeded; all call sites enforce this.
 No SQL generation checks, access decisions or mutation guards are cached.
+
+## Exact no-op SQL commit
+
+After recovery and validation of both existing metadata images, an exact
+byte-for-byte unchanged pair with nil hooks requires no new intent or SQL
+write. A fresh complete SQL parity transaction remains mandatory, followed
+by no-follow verification of both unchanged mirror files and directory sync.
+Any extra hook, changed byte, or malformed input retains the ordinary path
+or fails closed. Identical ACL slices skip only construction of the grant
+delta after the existing persisted ACL has been validated. This is not an
+authorization cache, nor a change to recovery or durability of real writes.
