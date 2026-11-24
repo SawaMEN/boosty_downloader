@@ -23,6 +23,7 @@ type Storage struct {
 	archiveUpdateMu               sync.Mutex
 	root                          string
 	key                           []byte
+	metadataMutationEpoch         uint64
 	jobs                          map[string]*Job
 	authors                       map[string][]string
 	imports                       map[string]*AuthorImport
@@ -228,6 +229,7 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 func (s *Storage) saveJobsLocked() error {
+	s.invalidateMetadataEpochLocked()
 	if s.primary != nil {
 		return s.saveSQLitePrimaryLocked()
 	}
@@ -250,19 +252,8 @@ func (s *Storage) upsert(job Job) error {
 	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 		return err
 	}
-	previous, exists := s.jobs[job.ID]
-	job = cloneStorageJob(job)
 	job.UpdatedAt = time.Now().UTC()
-	s.jobs[job.ID] = &job
-	if err := s.saveJobsLocked(); err != nil {
-		if exists {
-			s.jobs[job.ID] = previous
-		} else {
-			delete(s.jobs, job.ID)
-		}
-		return err
-	}
-	return nil
+	return s.replaceStorageJobLocked(job)
 }
 func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()

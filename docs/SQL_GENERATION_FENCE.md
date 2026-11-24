@@ -38,3 +38,49 @@ from escaping those methods. SQL reads decoded from a fresh snapshot are
 already detached. Internal in-place writes and archive publication paths
 still need a separate inventory and generation accounting. The probe does
 not authorize a fast path.
+
+## Conservative mutation epoch (12.4.28)
+
+The process-local metadataMutationEpoch is invalidated at ordinary save
+boundaries and before the special archive publication, restore and purge
+intents. The counter never rewinds on rollback and saturates at MaxUint64
+(which must never certify a cached proof). It can advance more than once
+per logical operation and resets on process restart. It counts attempts,
+not committed transactions. Startup initialization has no existing cache.
+It does not detect direct writes bypassing these boundaries; the full
+SQL/ACL parity scan remains required. Do not enable a fast path until
+all such paths and nested object ownership have been audited.
+
+## Direct-access inventory (12.4.29)
+
+A Go AST regression test inventories functions that contain selectors named
+jobs or imports in production server files. The baseline has 42 entries.
+New or stale entries fail the test and require review. Reads are included
+because a pointer may escape through a read. This is deliberately conservative:
+it is not type-aware, does not track aliases, and cannot detect a new mutation
+inside an already listed function. No cached authorization path is enabled.
+
+## Single-job copy-on-write boundary (12.4.30)
+
+Ordinary single-job operations replace the record through
+replaceStorageJobLocked; a failed save restores the exact previous pointer.
+ACL changes no longer leave a newer timestamp behind on rollback. Creation
+rejects an unrelated existing ID rather than overwriting it. Batch operations,
+imports and special physical journals remain separate audit targets. This is
+not a cached parity proof.
+
+## Batch copy-on-write (12.4.31)
+
+Ordinary imports, combined scheduling and group trash now use a single
+batch persistence boundary. Duplicate IDs are rejected before mutation;
+rollback restores the exact previous pointers. Inputs and outputs are
+detached from storage-owned records. Physical archive journals are still
+separate. No cached parity or authorization fast path is enabled.
+
+## Physical journal classification (12.4.32)
+
+Archive publication, restore and purge share the SQL recovery/parity
+sequence. Their final metadata generation is classified by a streaming
+SHA-256 with no-follow file access and size/identity checks. Existing size
+policies are preserved. SQL export refuses a pending SQL-primary intent.
+This does not replace a full parity scan or enable a cached proof.

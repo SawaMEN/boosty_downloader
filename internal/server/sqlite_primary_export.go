@@ -38,7 +38,7 @@ func ExportSQLiteMetadataToJSON(root, output string) (err error) {
 	}
 	defer lock.Close()
 
-	for _, name := range []string{metadataJournalName, sqliteCutoverIntentName} {
+	for _, name := range []string{metadataJournalName, sqliteCutoverIntentName, sqlitePrimaryTransactionName} {
 		if _, statErr := os.Lstat(filepath.Join(root, name)); statErr == nil {
 			return fmt.Errorf("cannot export during pending metadata/backend transition: %s", name)
 		} else if !os.IsNotExist(statErr) {
