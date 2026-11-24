@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Offline DASH support deliberately accepts only finite, unencrypted ISO-BMFF
@@ -474,21 +473,8 @@ func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int
 	}
 	output := filepath.Join(dir, "remux.mp4")
 	args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
-	muxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	if err := checkStorageBudget(ctx, maxArchiveMediaSize-budget); err != nil {
+	if err := runBoundedMediaMux(ctx, ffmpeg, args, output, maxArchiveMediaSize); err != nil {
 		return 0, "", err
-	}
-	stdout, e := exec.CommandContext(muxCtx, ffmpeg, args...).CombinedOutput()
-	if e != nil {
-		if muxCtx.Err() != nil {
-			return 0, "", muxCtx.Err()
-		}
-		msg := strings.TrimSpace(string(stdout))
-		if len(msg) > 350 {
-			msg = msg[:350]
-		}
-		return 0, "", fmt.Errorf("DASH: FFmpeg не смог собрать MP4: %s", msg)
 	}
 	size, digest, err := fileDigest(output)
 	if err != nil {

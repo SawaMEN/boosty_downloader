@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // HLS is resolved through the Boosty HTTP transport, never through FFmpeg's
@@ -373,21 +371,8 @@ func archiveHLS(ctx context.Context, fetch mediaFetcher, raw, dest string) (int6
 	}
 	output := filepath.Join(dir, "remux.mp4")
 	args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
-	remuxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	if err := checkStorageBudget(ctx, total); err != nil {
+	if err := runBoundedMediaMux(ctx, ffmpeg, args, output, maxArchiveMediaSize); err != nil {
 		return 0, "", err
-	}
-	result, err := exec.CommandContext(remuxCtx, ffmpeg, args...).CombinedOutput()
-	if err != nil {
-		if remuxCtx.Err() != nil {
-			return 0, "", remuxCtx.Err()
-		}
-		msg := strings.TrimSpace(string(result))
-		if len(msg) > 350 {
-			msg = msg[:350]
-		}
-		return 0, "", fmt.Errorf("HLS: FFmpeg не смог собрать MP4: %s", msg)
 	}
 	size, digest, err := fileDigest(output)
 	if err != nil {

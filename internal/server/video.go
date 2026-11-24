@@ -484,6 +484,22 @@ func (a *App) processVideoTask(task VideoTask) {
 	if !ok || (job.State != "done" && job.State != "partial") {
 		return
 	}
+	// Do not take an independent quota snapshot while the same owner's
+	// archive worker is writing. Re-read the job after waiting.
+	owner := job.OwnerID
+	unlockOwner, err := a.mediaOwnerGates.acquire(a.ctx, owner)
+	if err != nil {
+		return
+	}
+	defer unlockOwner()
+	job, ok = a.store.get(task.JobID)
+	if !ok || job.OwnerID != owner || job.DeletedAt != nil || (job.State != "done" && job.State != "partial") {
+		return
+	}
+	policy = a.accounts.policy().Video
+	if !policy.Enabled {
+		return
+	}
 	folder := a.store.archiveDir(job.OwnerID, job.Author, job.PostID)
 	// Obtain a consistent initial manifest. Do not hold the gate during
 	// FFmpeg: encoding can take minutes and readers must remain responsive.
@@ -552,7 +568,7 @@ func (a *App) processVideoTask(task VideoTask) {
 		}
 		staged := filepath.Join(stageDir, "rendition.mp4")
 		a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "running"})
-		backend, encodeErr := transcodeVideo(a.ctx, policy, source, staged)
+		backend, encodeErr := transcodeVideo(quotaCtx, policy, source, staged)
 		if encodeErr != nil {
 			_ = os.RemoveAll(stageDir)
 			state := "failed"
@@ -568,6 +584,11 @@ func (a *App) processVideoTask(task VideoTask) {
 			_ = os.RemoveAll(stageDir)
 			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "failed", Message: digestErr.Error()})
 			a.videoMarkFailure(key)
+			continue
+		}
+		if err := checkVideoRenditionBudget(quotaCtx, size); err != nil {
+			_ = os.RemoveAll(stageDir)
+			a.setVideoStatus(key, VideoJobStatus{Filename: original.Filename, State: "skipped", Backend: backend, Message: err.Error()})
 			continue
 		}
 		published, publishErr := a.publishVideoRendition(job, man.CapturedAt, original, targetName, staged, size, digest)
