@@ -13,6 +13,7 @@ import (
 
 type revisionRetentionPreview struct {
 	Limit           int   `json:"limit"`
+	MaxGiB          int   `json:"maxGiB"`
 	Total           int   `json:"total"`
 	Scanned         int   `json:"scanned"`
 	Skipped         int   `json:"skipped"`
@@ -62,20 +63,25 @@ func (s *Storage) previewRevisionCandidates(ctx context.Context, job Job, limit 
 	return count, logical, err
 }
 
-func (s *Storage) previewRevisionUsage(ctx context.Context, job Job, limit int) (int, int64, int64, bool, error) {
-	if !validRevisionLimit(limit) {
+func (s *Storage) previewRevisionUsage(ctx context.Context, job Job, limit int, volume ...int) (int, int64, int64, bool, error) {
+	_, maxBytes, err := revisionRetentionLimits(append([]int{limit}, volume...))
+	if err != nil {
 		return 0, 0, 0, false, errors.New("некорректный лимит истории")
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, 0, 0, false, err
 	}
 	versions, err := s.listArchiveRevisions(job)
-	if err != nil || len(versions) <= limit {
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	keep, err := s.revisionKeepCount(ctx, job, versions, limit, maxBytes)
+	if err != nil || len(versions) <= keep {
 		return 0, 0, 0, err == nil, err
 	}
 	observer := newRevisionBlockEstimate(s.root)
 	var total int64
-	for _, version := range versions[limit:] {
+	for _, version := range versions[keep:] {
 		n, err := revisionCandidateBytes(ctx, s.root, filepath.Join(s.revisionsDir(job), version.ID), observer)
 		if err != nil {
 			return 0, 0, 0, false, err
@@ -86,7 +92,7 @@ func (s *Storage) previewRevisionUsage(ctx context.Context, job Job, limit int) 
 		total += n
 	}
 	physical, available := observer.bytes()
-	return len(versions) - limit, total, physical, available, nil
+	return len(versions) - keep, total, physical, available, nil
 }
 
 func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +104,14 @@ func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !validRevisionLimit(limit) {
 		fail(w, 400, "количество версий: от 1 до 64")
 		return
+	}
+	maxGiB := 0
+	if value := r.URL.Query().Get("maxGiB"); value != "" {
+		maxGiB, err = strconv.Atoi(value)
+		if err != nil || !validRevisionMaxGiB(maxGiB) {
+			fail(w, 400, "объём истории: от 0 до 16384 ГиБ")
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -122,7 +136,7 @@ func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.store.mu.Unlock()
-	result := revisionRetentionPreview{Limit: limit, Total: len(jobs)}
+	result := revisionRetentionPreview{Limit: limit, MaxGiB: maxGiB, Total: len(jobs)}
 	for _, job := range jobs {
 		if ctx.Err() != nil {
 			break
@@ -137,7 +151,7 @@ func (a *App) adminRevisionPreview(w http.ResponseWriter, r *http.Request) {
 			unlock()
 			continue
 		}
-		count, size, physical, available, err := a.store.previewRevisionUsage(ctx, job, limit)
+		count, size, physical, available, err := a.store.previewRevisionUsage(ctx, job, limit, maxGiB)
 		unlock()
 		if err != nil || ctx.Err() != nil || result.LogicalBytes > math.MaxInt64-size {
 			continue

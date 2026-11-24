@@ -23,14 +23,21 @@ func validRevisionLimit(limit int) bool {
 	return limit >= 1 && limit <= maxConfigurableArchiveRevisions
 }
 
-func revisionRetentionLimit(limits []int) (int, error) {
+func revisionRetentionLimits(limits []int) (int, int64, error) {
 	if len(limits) == 0 {
-		return maxArchiveRevisions, nil
+		return maxArchiveRevisions, 0, nil
 	}
-	if len(limits) != 1 || !validRevisionLimit(limits[0]) {
-		return 0, errors.New("некорректный лимит истории")
+	if len(limits) > 2 || !validRevisionLimit(limits[0]) {
+		return 0, 0, errors.New("некорректный лимит истории")
 	}
-	return limits[0], nil
+	var maxBytes int64
+	if len(limits) == 2 {
+		if !validRevisionMaxGiB(limits[1]) {
+			return 0, 0, errors.New("некорректный объём истории")
+		}
+		maxBytes = int64(limits[1]) * gibibyte
+	}
+	return limits[0], maxBytes, nil
 }
 
 type ArchiveRevision struct {
@@ -294,7 +301,7 @@ func (s *Storage) pruneArchiveRevisions(job Job, limits ...int) error {
 }
 
 func (s *Storage) pruneArchiveRevisionsLocked(job Job, limits ...int) error {
-	limit, err := revisionRetentionLimit(limits)
+	limit, maxBytes, err := revisionRetentionLimits(limits)
 	if err != nil {
 		return err
 	}
@@ -302,10 +309,13 @@ func (s *Storage) pruneArchiveRevisionsLocked(job Job, limits ...int) error {
 	if err != nil {
 		return err
 	}
-	if len(list) <= limit {
-		return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	keep, err := s.revisionKeepCount(ctx, job, list, limit, maxBytes)
+	if err != nil {
+		return err
 	}
-	for _, version := range list[limit:] {
+	for _, version := range list[keep:] {
 		if s.primary != nil {
 			if err := s.deleteSQLHistoryLocked(job, version.ID); err != nil {
 				return err
@@ -320,8 +330,7 @@ func (s *Storage) pruneArchiveRevisionsLocked(job Job, limits ...int) error {
 }
 
 func (s *Storage) restoreArchiveRevision(owner, id, rev string, limits ...int) (Job, error) {
-	limit, err := revisionRetentionLimit(limits)
-	if err != nil {
+	if _, _, err := revisionRetentionLimits(limits); err != nil {
 		return Job{}, err
 	}
 	if !validRevisionID(rev) {
@@ -606,7 +615,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string, limits ...int) (
 		s.primaryFatal = fmt.Errorf("restored archive committed, cleanup pending until startup recovery: %w", err)
 		return Job{}, s.primaryFatal
 	}
-	_ = s.pruneArchiveRevisionsLocked(next, limit)
+	_ = s.pruneArchiveRevisionsLocked(next, limits...)
 	s.notifySQLiteMedia()
 	return cloneStorageJob(next), nil
 }
@@ -679,7 +688,8 @@ func (a *App) restoreJobRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
-	job, err := a.store.restoreArchiveRevision(principal(r).ID, r.PathValue("id"), r.PathValue("rev"), a.accounts.policy().RevisionLimit)
+	policy := a.accounts.policy()
+	job, err := a.store.restoreArchiveRevision(principal(r).ID, r.PathValue("id"), r.PathValue("rev"), policy.RevisionLimit, policy.revisionMaxGiB())
 	if err != nil {
 		fail(w, 409, err.Error())
 		return

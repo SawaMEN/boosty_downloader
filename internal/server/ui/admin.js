@@ -77,6 +77,7 @@ async function loadAdminPanel(){
     $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
     $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
     $('adminRevisionLimit').value=String(p.revisionLimit??8);
+    $('adminRevisionMaxGiB').value=String(p.revisionMaxGiB??0);
     loadAdminStorage();
     loadAdminSQLite();
     const trash=p.trash||{};
@@ -135,7 +136,7 @@ async function savePolicy(){
   const data={defaults:currentPolicy.defaults,registrationOpen:$('adminRegistration').checked,
     syncIntervalHours:Number($('adminSyncHours').value),maxScanPosts:Number($('adminMaxScan').value),maxImportPosts:Number($('adminMaxImport').value),
     compressionLevel:Number($('adminCompressionLevel').value),deduplicateMedia:$('adminDeduplicateMedia').checked,
-    minFreeGiB:Number($('adminMinFreeGiB').value),maxUserGiB:Number($('adminMaxUserGiB').value),revisionLimit:Number($('adminRevisionLimit').value),
+    minFreeGiB:Number($('adminMinFreeGiB').value),maxUserGiB:Number($('adminMaxUserGiB').value),revisionLimit:Number($('adminRevisionLimit').value),revisionMaxGiB:Number($('adminRevisionMaxGiB').value),
     video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
       codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
       fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked},
@@ -282,12 +283,16 @@ async function loadRevisionPreview(){
   if(!Number.isInteger(limit)||limit<1||limit>64){
     target.replaceChildren(text('p','Укажите от 1 до 64 версий.','error'));return;
   }
+  const maxGiB=Number($('adminRevisionMaxGiB').value);
+  if(!Number.isInteger(maxGiB)||maxGiB<0||maxGiB>16384){
+    target.replaceChildren(text('p','Укажите объём от 0 до 16384 ГиБ.','error'));return;
+  }
   button.disabled=true;
   target.replaceChildren(text('p','Рассчитываем объём истории без удаления файлов…','muted'));
   try{
-    const result=await api('/api/admin/storage/revision-preview?limit='+encodeURIComponent(String(limit)));
+    const result=await api('/api/admin/storage/revision-preview?limit='+encodeURIComponent(String(limit))+'&maxGiB='+encodeURIComponent(String(maxGiB)));
     const bytes=(Number(result.logicalBytes)/(1024**3)).toFixed(2)+' ГиБ';
-    target.replaceChildren(text('strong','Лимит '+result.limit+': '+result.candidateCount+' версий сверх лимита · '+bytes+' логически'));
+    target.replaceChildren(text('strong','Лимит '+result.limit+' версий'+(result.maxGiB?' / '+result.maxGiB+' ГиБ':'')+': '+result.candidateCount+' версий сверх лимита · '+bytes+' логически'));
     target.append(text('p','Проверено публикаций: '+result.scanned+' из '+result.total+' · пропущено: '+result.skipped,'muted small'));
     if(!result.complete)target.append(text('p','Расчёт неполный: занятые, изменённые или недоступные архивы не учтены.','error'));
     if(result.physicalBytes!=null){

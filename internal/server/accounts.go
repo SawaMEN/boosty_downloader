@@ -53,6 +53,7 @@ type accountFile struct {
 	MinFreeGiB         *int                       `json:"minFreeGiB,omitempty"`
 	MaxUserGiB         *int                       `json:"maxUserGiB,omitempty"`
 	RevisionLimit      *int                       `json:"revisionLimit,omitempty"`
+	RevisionMaxGiB     *int                       `json:"revisionMaxGiB,omitempty"`
 	VideoPolicy        *VideoPolicy               `json:"videoPolicy,omitempty"`
 	AutoUpdatePolicy   *AutoUpdatePolicy          `json:"autoUpdatePolicy,omitempty"`
 	TrashPolicy        *TrashPolicy               `json:"trashPolicy,omitempty"`

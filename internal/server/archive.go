@@ -554,7 +554,8 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			fmt.Fprintf(os.Stderr, "revisions dedup: %v\n", err)
 		}
 	}
-	if err := a.store.pruneArchiveRevisions(*j, a.accounts.policy().RevisionLimit); err != nil {
+	retention := a.accounts.policy()
+	if err := a.store.pruneArchiveRevisions(*j, retention.RevisionLimit, retention.revisionMaxGiB()); err != nil {
 		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
 	}
 	// Reclaim only after the current revision and history retention commit.
