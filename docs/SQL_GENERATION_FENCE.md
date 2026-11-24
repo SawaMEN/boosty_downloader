@@ -85,6 +85,38 @@ SHA-256 with no-follow file access and size/identity checks. Existing size
 policies are preserved. SQL export refuses a pending SQL-primary intent.
 This does not replace a full parity scan or enable a cached proof.
 
+## Bounded revision-preview projection
+
+The administrator-only aggregate report groups at most 32 physical archive
+identities. It obtains nonblocking archive read gates first, then performs a
+full SQL parity audit and matches all identities under Storage.mu. A second
+full audit and identity check precede inclusion of the batch in the report.
+No metadata pointers escape; no authorization or mutation guard is cached.
+Busy and changed identities are omitted, and any parity failure rejects the
+entire response. This is an advisory read-only report, not a deletion plan or
+a consistent global filesystem snapshot. The normal full guard remains
+unchanged for all point reads, grants and mutations.
+
+## Cursor-local scan buffers
+
+Ordered archive and import scans reuse scalar Scan destinations and decode
+payload_json directly from sql.RawBytes before advancing the cursor. The
+Job/AuthorImport value is freshly decoded for every row, including optional
+fields and grants; no RawBytes or mutable record is retained across rows.
+All ordering, ownership, timestamp, ACL, orphan and inventory checks remain
+unchanged. This is an allocation optimization, not a cached parity proof.
+
+## Validated equality without serialization
+
+For exactly deep-equal Job/AuthorImport values, the fast proof validates all
+potentially fallible JSON fields: UTC timestamps with years 0–9999 and
+finite tier/purchase prices. The remaining current schema consists of plain
+strings, booleans, integers, string slices and known optional structures.
+Other values, non-UTC timestamps, differing representations and any failed
+proof use the original two-Marshal JSON comparison. A schema audit test
+requires explicit review of new encoders, types or fallible fields. No
+row, grant, identity or generation check is skipped, and no proof is cached.
+
 ## Small ACL validation and matching
 
 Archive payload validation and SQL grant matching use a bounded linear scan
