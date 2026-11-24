@@ -50,3 +50,12 @@ not committed transactions. Startup initialization has no existing cache.
 It does not detect direct writes bypassing these boundaries; the full
 SQL/ACL parity scan remains required. Do not enable a fast path until
 all such paths and nested object ownership have been audited.
+
+## Direct-access inventory (12.4.29)
+
+A Go AST regression test inventories functions that contain selectors named
+jobs or imports in production server files. The baseline has 42 entries.
+New or stale entries fail the test and require review. Reads are included
+because a pointer may escape through a read. This is deliberately conservative:
+it is not type-aware, does not track aliases, and cannot detect a new mutation
+inside an already listed function. No cached authorization path is enabled.
