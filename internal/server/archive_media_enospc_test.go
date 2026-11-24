@@ -16,7 +16,7 @@ import (
 )
 
 func TestArchiveMediaFatalStorageErrors(t *testing.T) {
-	for _, err := range []error{syscall.ENOSPC, syscall.EDQUOT, context.Canceled, context.DeadlineExceeded} {
+	for _, err := range []error{syscall.ENOSPC, syscall.EDQUOT, context.Canceled, context.DeadlineExceeded, errStorageUserQuota, errStorageFreeReserve, errStorageBudgetProbe, errMediaMuxLimit} {
 		if !fatalArchiveMediaError(fmt.Errorf("wrapped: %w", err)) {
 			t.Fatalf("fatal error treated as missing asset: %v", err)
 		}
@@ -154,5 +154,54 @@ func TestArchiveMediaPhysicalENOSPC(t *testing.T) {
 	got, ok := s.get(job.ID)
 	if !ok || !got.SharedForAll || len(got.SharedWith) != 1 || got.SharedWith[0] != "member" || got.Title != "New" {
 		t.Fatal("retry lost metadata or ACL")
+	}
+}
+
+func TestMediaPolicyQuotaFailureIsFatal(t *testing.T) {
+	root := t.TempDir()
+	ctx := withStorageBudget(context.Background(), root, "owner", 0, 1)
+	b := ctx.Value(storageBudgetKey{}).(*storageBudget)
+	b.initialized, b.used, b.maxUser = true, 3, 3
+	payload := "video"
+	media := boosty.Media{ID: "photo", Type: "image", URL: "https://cdn.example/photo.jpg"}
+	post := recoveryPost(t, media, true)
+	requests := 0
+	fetch := func(context.Context, string, string, string) (*http.Response, error) {
+		requests++
+		return fakeMedia(200, payload, nil, int64(len(payload))), nil
+	}
+	dest := filepath.Join(root, "photo.jpg")
+	_, _, err := downloadMediaWithRecovery(ctx, fetch, nil, post, media, dest, int64(len(payload)))
+	if !errors.Is(err, errStorageUserQuota) || !fatalArchiveMediaError(err) {
+		t.Fatalf("quota failure was not fatal: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("local quota retried as a remote failure: %d", requests)
+	}
+	for _, path := range []string{dest, dest + ".part", dest + ".part.meta"} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("failed media left a file: %s: %v", filepath.Base(path), err)
+		}
+	}
+	if b.used != 3 {
+		t.Fatal("failed copy changed logical accounting")
+	}
+}
+
+func TestMediaReserveAndProbeFailuresAreFatal(t *testing.T) {
+	root := t.TempDir()
+	_, free, err := filesystemBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := withStorageBudget(context.Background(), root, "owner", 1, 0)
+	b := ctx.Value(storageBudgetKey{}).(*storageBudget)
+	b.minFree = free + 1
+	if err := checkStorageBudget(ctx, 0); !errors.Is(err, errStorageFreeReserve) || !fatalArchiveMediaError(err) {
+		t.Fatalf("reserve error not fatal: %v", err)
+	}
+	b.root = filepath.Join(root, "missing")
+	if err := checkStorageBudget(ctx, 0); !errors.Is(err, errStorageBudgetProbe) || !fatalArchiveMediaError(err) {
+		t.Fatalf("disk probe error not fatal: %v", err)
 	}
 }

@@ -1,6 +1,9 @@
 package server
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Called only at quiescent archive boundaries under the owner's gate.
 // There must be no active media stage accounting when the baseline resets.
@@ -19,7 +22,7 @@ func reconcileArchiveStorageBudget(ctx context.Context) error {
 	if b.maxUser > 0 {
 		used, err := ownerStorageTreeBytes(ctx, b.root, "library", b.owner)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errStorageBudgetProbe, err)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

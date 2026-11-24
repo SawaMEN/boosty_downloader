@@ -16,6 +16,12 @@ const gibibyte int64 = 1 << 30
 
 type storageBudgetKey struct{}
 
+var (
+	errStorageUserQuota   = errors.New("превышена квота архива пользователя")
+	errStorageFreeReserve = errors.New("недостаточный резерв свободного места")
+	errStorageBudgetProbe = errors.New("не удалось проверить дисковую квоту")
+)
+
 // storageBudget applies a logical per-user quota to all archive bytes, including
 // temporary files. Each archive worker owns a budget; failed writes never
 // continue after the reserve is breached. No symlinks are followed.
@@ -109,22 +115,22 @@ func (b *storageBudget) checkLocked(extra int64) error {
 		if !b.initialized {
 			used, err := userStoredBytes(b.root, b.owner)
 			if err != nil {
-				return err
+				return fmt.Errorf("%w: %w", errStorageBudgetProbe, err)
 			}
 			b.used = used
 			b.initialized = true
 		}
 		if extra > b.maxUser-b.used {
-			return fmt.Errorf("превышена квота архива пользователя (%d ГиБ)", b.maxUser/gibibyte)
+			return fmt.Errorf("%w (%d ГиБ)", errStorageUserQuota, b.maxUser/gibibyte)
 		}
 	}
 	if b.minFree > 0 {
 		_, free, err := filesystemBytes(b.root)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errStorageBudgetProbe, err)
 		}
 		if extra > free-b.minFree {
-			return fmt.Errorf("на диске должен оставаться резерв %d ГиБ", b.minFree/gibibyte)
+			return fmt.Errorf("%w: на диске должен оставаться резерв %d ГиБ", errStorageFreeReserve, b.minFree/gibibyte)
 		}
 	}
 	return nil
@@ -175,6 +181,14 @@ func (w guardedWriter) Write(p []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
+	// The process-wide gate covers the physical free-space check and the
+	// actual write, including writers whose policy currently has no quota.
+	// Network reads happen outside this gate. Acquire it before budget.mu.
+	release, err := acquireMediaDiskWrite(w.ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	budget, _ := w.ctx.Value(storageBudgetKey{}).(*storageBudget)
 	if budget == nil {
 		return w.out.Write(p)
