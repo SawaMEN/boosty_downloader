@@ -114,9 +114,14 @@ type mediaPostRefresh func(context.Context) (*boosty.Post, error)
 
 // Retry direct files in the same staging directory (Range/If-Range).
 // Segment downloads have their own retries. On authorization failure, renew
-// the post once and start the affected media from scratch, never append bytes
-// from different signed URLs. Already completed sibling assets are untouched.
+// the post once and restart the affected media plan. Only complete segments
+// with unchanged URLs and revalidated strong ETags may be reused.
 func downloadMediaWithRecovery(ctx context.Context, fetch mediaFetcher, refresh mediaPostRefresh, post *boosty.Post, media boosty.Media, dest string, expected int64) (int64, string, error) {
+	if media.Type == "ok_video" {
+		var cleanup func()
+		ctx, cleanup = withVerifiedSegmentCache(ctx, dest)
+		defer cleanup()
+	}
 	raw := boosty.MediaURL(post, media)
 	refreshed := false
 	for attempt := 0; ; attempt++ {

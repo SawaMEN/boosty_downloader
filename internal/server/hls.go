@@ -258,6 +258,9 @@ func fetchHLSBytes(ctx context.Context, fetch mediaFetcher, raw string, max int6
 // of Go heap. Return its verified byte length for the total archive limit.
 func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, budget int64) (int64, error) {
 	return retryMediaSegment(ctx, func() (int64, error) {
+		if n, ok := reuseCachedSegment(ctx, fetch, raw, path, budget); ok {
+			return n, nil
+		}
 		return fetchHLSSegmentOnce(ctx, fetch, raw, path, budget)
 	})
 }
@@ -307,6 +310,7 @@ func fetchHLSSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path stri
 		}
 		return 0, errors.New("HLS: сегмент превышает размер или длина ответа неверна")
 	}
+	rememberCachedSegment(ctx, raw, path, res.Header, n)
 	return n, nil
 }
 
