@@ -84,3 +84,15 @@ sequence. Their final metadata generation is classified by a streaming
 SHA-256 with no-follow file access and size/identity checks. Existing size
 policies are preserved. SQL export refuses a pending SQL-primary intent.
 This does not replace a full parity scan or enable a cached proof.
+
+## Bounded revision-preview projection
+
+The administrator-only aggregate report groups at most 32 physical archive
+identities. It obtains nonblocking archive read gates first, then performs a
+full SQL parity audit and matches all identities under Storage.mu. A second
+full audit and identity check precede inclusion of the batch in the report.
+No metadata pointers escape; no authorization or mutation guard is cached.
+Busy and changed identities are omitted, and any parity failure rejects the
+entire response. This is an advisory read-only report, not a deletion plan or
+a consistent global filesystem snapshot. The normal full guard remains
+unchanged for all point reads, grants and mutations.
