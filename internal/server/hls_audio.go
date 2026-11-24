@@ -207,7 +207,7 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	var playlist strings.Builder
 	playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:36000\n#EXT-X-MEDIA-SEQUENCE:0\n")
 	lastInitKey := ""
-	parallel := os.Getenv("BD_HLS_SEGMENT_WORKERS") == "2"
+	parallel := segmentWorkers(ctx, "BD_HLS_SEGMENT_WORKERS") == 2
 	var batch [2]mediaSegmentTask
 	pending := 0
 	flush := func() error {

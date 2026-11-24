@@ -407,7 +407,7 @@ func fetchDASHTrack(ctx context.Context, fetch mediaFetcher, tr dashTrack, dir, 
 			return "", err
 		}
 		count := 1
-		if os.Getenv("BD_DASH_SEGMENT_WORKERS") == "2" && len(links)-i >= 2 && *budget >= 2*maxHLSSegmentBytes {
+		if segmentWorkers(ctx, "BD_DASH_SEGMENT_WORKERS") == 2 && len(links)-i >= 2 && *budget >= 2*maxHLSSegmentBytes {
 			count = 2
 		}
 		var batch [2]mediaSegmentTask
