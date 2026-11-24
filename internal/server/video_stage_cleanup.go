@@ -25,11 +25,15 @@ func cleanupAbandonedVideoStages(root string) error {
 			continue
 		}
 		suffix := strings.TrimPrefix(name, prefix)
-		if len(suffix) < 6 || len(suffix) > 32 {
+		// os.MkdirTemp appends an unsigned decimal value, which can
+		// rarely have fewer than six digits. Preserve the legacy long
+		// alphanumeric shape, but only allow decimal short suffixes.
+		if len(suffix) == 0 || len(suffix) > 32 {
 			return errors.New("unsafe orphaned video staging name")
 		}
 		for _, r := range suffix {
-			if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			digit := r >= '0' && r <= '9'
+			if !digit && (len(suffix) < 6 || !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')) {
 				return errors.New("unsafe orphaned video staging suffix")
 			}
 		}

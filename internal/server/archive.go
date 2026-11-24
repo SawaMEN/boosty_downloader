@@ -524,6 +524,12 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if err := a.store.guardArchiveFileMutation(*j); err != nil {
 		return fmt.Errorf("unsafe archive generation before directory publication: %w", err)
 	}
+	// Manifest/HTML generation and other workers may have consumed the
+	// physical reserve since the last media write. Do not replace a live
+	// archive after a failed final storage check.
+	if err := checkStorageBudget(ctx, 0); err != nil {
+		return fmt.Errorf("публикация архива прервана: %w", err)
+	}
 	published, err := a.store.publishArchiveUpdate(*j, stage)
 	if err != nil {
 		return fmt.Errorf("не удалось атомарно опубликовать архив: %w", err)
