@@ -258,7 +258,7 @@ func fetchHLSBytes(ctx context.Context, fetch mediaFetcher, raw string, max int6
 // of Go heap. Return its verified byte length for the total archive limit.
 func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, budget int64) (int64, error) {
 	return retryMediaSegment(ctx, func() (int64, error) {
-		if n, ok := reuseCachedSegment(ctx, fetch, raw, path, budget); ok {
+		if n, ok := reuseCachedSegment(ctx, fetch, videoSegmentKey{url: raw}, path, budget); ok {
 			return n, nil
 		}
 		return fetchHLSSegmentOnce(ctx, fetch, raw, path, budget)
@@ -310,7 +310,7 @@ func fetchHLSSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path stri
 		}
 		return 0, errors.New("HLS: сегмент превышает размер или длина ответа неверна")
 	}
-	rememberCachedSegment(ctx, raw, path, res.Header, n)
+	rememberCachedSegment(ctx, videoSegmentKey{url: raw}, path, res, n, n)
 	return n, nil
 }
 
@@ -354,7 +354,8 @@ func archiveHLS(ctx context.Context, fetch mediaFetcher, raw, dest string) (int6
 	if err != nil {
 		return 0, "", err
 	}
-	defer os.RemoveAll(dir)
+	ctx = withMediaStageBudget(ctx)
+	defer cleanupMediaStage(ctx, dir)
 	var total int64
 	videoLocal, err := stageHLSTrack(ctx, fetch, dir, "video", video, &total)
 	if err != nil {
@@ -398,7 +399,7 @@ func archiveHLS(ctx context.Context, fetch mediaFetcher, raw, dest string) (int6
 	if err := os.Chmod(output, 0600); err != nil {
 		return 0, "", err
 	}
-	if err := os.Rename(output, dest); err != nil {
+	if err := publishStagedVideo(ctx, output, dest, size); err != nil {
 		return 0, "", err
 	}
 	return size, digest, nil

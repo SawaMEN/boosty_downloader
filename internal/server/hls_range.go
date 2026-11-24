@@ -44,7 +44,14 @@ func fetchHLSRangeSegment(ctx context.Context, fetch mediaFetcher, raw, path str
 	if length == 0 {
 		return fetchHLSSegment(ctx, fetch, raw, path, budget)
 	}
+	if length < 0 || offset < 0 || length > budget || length > maxHLSSegmentBytes || offset > maxArchiveMediaSize-length {
+		return 0, errors.New("HLS: диапазон превышает лимит")
+	}
+	key := videoSegmentKey{url: raw, offset: offset, length: length}
 	return retryMediaSegment(ctx, func() (int64, error) {
+		if n, ok := reuseCachedSegment(ctx, fetch, key, path, budget); ok {
+			return n, nil
+		}
 		return fetchHLSRangeSegmentOnce(ctx, fetch, raw, path, budget, offset, length)
 	})
 }
@@ -62,7 +69,7 @@ func fetchHLSRangeSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path
 	if res.StatusCode != http.StatusPartialContent {
 		return 0, &mediaHTTPError{status: res.StatusCode}
 	}
-	start, last, _, err := parseByteRange(res.Header.Get("Content-Range"))
+	start, last, total, err := parseByteRange(res.Header.Get("Content-Range"))
 	if err != nil || start != offset || last != end {
 		return 0, errors.New("HLS: неверный Content-Range ответа CDN")
 	}
@@ -95,5 +102,6 @@ func fetchHLSRangeSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path
 		}
 		return 0, errors.New("HLS: слишком длинный BYTERANGE сегмент")
 	}
+	rememberCachedSegment(ctx, videoSegmentKey{url: raw, offset: offset, length: length}, path, res, n, total)
 	return n, nil
 }

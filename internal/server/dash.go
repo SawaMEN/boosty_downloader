@@ -455,7 +455,8 @@ func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int
 	if err != nil {
 		return 0, "", err
 	}
-	defer os.RemoveAll(dir)
+	ctx = withMediaStageBudget(ctx)
+	defer cleanupMediaStage(ctx, dir)
 	budget := maxArchiveMediaSize
 	videoFile, err := fetchDASHTrack(ctx, fetch, video, dir, "video.mp4", &budget)
 	if err != nil {
@@ -499,7 +500,7 @@ func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int
 	if err := os.Chmod(output, 0600); err != nil {
 		return 0, "", err
 	}
-	if err := os.Rename(output, dest); err != nil {
+	if err := publishStagedVideo(ctx, output, dest, size); err != nil {
 		return 0, "", err
 	}
 	return size, digest, nil

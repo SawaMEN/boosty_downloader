@@ -140,6 +140,10 @@ func releaseStorageBudget(ctx context.Context, removed int64) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if scope, _ := ctx.Value(mediaStageBudgetKey{}).(*mediaStageBudget); scope != nil {
+		removed = min(removed, scope.bytes)
+		scope.bytes -= removed
+	}
 	if removed > b.used {
 		b.used = 0
 	} else {
@@ -167,6 +171,9 @@ func (w guardedWriter) Write(p []byte) (int, error) {
 	}
 	n, err := w.out.Write(p)
 	budget.used += int64(n)
+	if scope, _ := w.ctx.Value(mediaStageBudgetKey{}).(*mediaStageBudget); scope != nil {
+		scope.bytes += int64(n)
+	}
 	return n, err
 }
 
