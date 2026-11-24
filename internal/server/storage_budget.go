@@ -177,10 +177,19 @@ func (w guardedWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+const guardedCopyChunkBytes = 256 << 10
+
+// Hide optional WriterTo methods: io.CopyBuffer otherwise lets a source
+// bypass the buffer and issue an arbitrarily large single write.
+type guardedCopyReader struct{ io.Reader }
+
 // guardedCopy checks quotas *before* each bounded write. Unlike a single
 // pre-download check it also protects unknown-length CDN responses.
 func guardedCopy(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
-	return io.CopyBuffer(guardedWriter{ctx: ctx, out: dst}, src, make([]byte, 256<<10))
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return io.CopyBuffer(guardedWriter{ctx: ctx, out: dst}, guardedCopyReader{src}, make([]byte, guardedCopyChunkBytes))
 }
 
 type storageOwnerUsage struct {
