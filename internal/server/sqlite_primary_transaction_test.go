@@ -263,3 +263,111 @@ func TestSQLPrimaryJournalSIGKILLRecoversAcrossPhases(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLPrimaryJournalSizeLimitBeforeCommit(t *testing.T) {
+	root, jobs, imports := sqlPrimaryJournalFixture(t)
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.close()
+	err = sqlitePrimaryCommitMetadataWithLimit(root, meta, jobs, imports, &sqlitePrimaryCommitHooks{
+		checkpoint: func(phase string) error {
+			t.Fatalf("oversized journal reached checkpoint %s", phase)
+			return nil
+		},
+	}, 1)
+	if err == nil || !strings.Contains(err.Error(), "journal exceeds") {
+		t.Fatalf("expected journal size rejection, got %v", err)
+	}
+	sqlPrimaryAssertImages(t, root, false)
+	// A normal retry must remain possible without manual recovery.
+	if err := sqlitePrimaryCommitMetadata(root, meta, jobs, imports, nil); err != nil {
+		t.Fatal(err)
+	}
+	sqlPrimaryAssertImages(t, root, true)
+}
+
+func TestSQLPrimaryJournalEncodedSizeBoundary(t *testing.T) {
+	journal := sqlitePrimaryTransaction{
+		Version: sqlitePrimaryTransactionVersion,
+		Jobs: metadataImage{Before: []byte("{}"), After: []byte("{\"a\":1}")},
+	}
+	raw, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encodeSQLitePrimaryJournal(journal, len(raw)); err != nil {
+		t.Fatalf("exact boundary rejected: %v", err)
+	}
+	if _, err := encodeSQLitePrimaryJournal(journal, len(raw)-1); err == nil {
+		t.Fatal("oversized encoded journal accepted")
+	}
+}
+
+func TestSQLPrimaryJournalUnsafeRecoveryInput(t *testing.T) {
+	for _, scenario := range []string{"oversized", "public", "fifo", "replaced"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, _, _ := sqlPrimaryJournalFixture(t)
+			path := filepath.Join(root, sqlitePrimaryTransactionName)
+			before, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "oversized":
+				file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := file.Truncate(sqlitePrimaryJournalMaxBytes + 1); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			case "public":
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if err := syscall.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "replaced":
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(path, path+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := readSQLitePrimaryJournal(path, info); err == nil {
+					t.Fatal("replaced journal accepted")
+				}
+			}
+			if err := recoverSQLitePrimaryCommitLocked(root); err == nil {
+				t.Fatal("unsafe journal accepted")
+			}
+			after, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("unsafe journal changed jobs mirror")
+			}
+		})
+	}
+}
