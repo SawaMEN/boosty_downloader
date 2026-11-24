@@ -92,7 +92,7 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 		return err
 	}
 	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
-	raw, err := encodeSQLitePrimaryBestJournal(journal, limit)
+	raw, err := encodeSQLitePrimaryTypedJournal(journal, beforeJobs, beforeImports, jobs, imports, limit)
 	if err != nil {
 		return err
 	}
