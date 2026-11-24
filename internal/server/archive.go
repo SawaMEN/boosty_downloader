@@ -458,6 +458,12 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			return c.Post(ctx, j.Author, j.PostID)
 		}, p, m, dest, expectedSize)
 		if downloadErr != nil {
+			// Running out of local storage is not a remote missing asset.
+			// Abort the entire staged refresh, leaving the published archive
+			// intact even when cleanup frees enough space for a manifest.
+			if fatalArchiveMediaError(downloadErr) {
+				return fmt.Errorf("запись медиа прервана: %w", downloadErr)
+			}
 			man.Failures = append(man.Failures, fmt.Sprintf("%s: %s", m.Type, redactNetError(downloadErr)))
 			continue
 		}
