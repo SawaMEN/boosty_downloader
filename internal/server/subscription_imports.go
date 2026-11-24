@@ -228,7 +228,7 @@ func (s *Storage) importsFor(owner string) []AuthorImport {
 	out := make([]AuthorImport, 0)
 	for _, v := range s.imports {
 		if v.OwnerID == owner {
-			out = append(out, *v)
+			out = append(out, cloneStorageImport(*v))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -281,9 +281,9 @@ func (s *Storage) createImports(imports []AuthorImport) ([]AuthorImport, error) 
 			continue
 		}
 		ongoing[v.OwnerID+"/"+v.Author] = true
-		item := v
+		item := cloneStorageImport(v)
 		s.imports[v.ID] = &item
-		added = append(added, v)
+		added = append(added, cloneStorageImport(item))
 	}
 	if len(added) == 0 {
 		return []AuthorImport{}, nil
@@ -517,6 +517,7 @@ func (s *Storage) updateImport(v AuthorImport) error {
 	if previous.State == "canceled" {
 		return errImportCanceled
 	}
+	v = cloneStorageImport(v)
 	v.UpdatedAt = time.Now().UTC()
 	s.imports[v.ID] = &v
 	if err := s.saveImportsLocked(); err != nil {
@@ -542,7 +543,7 @@ func (s *Storage) claimImport(id string) (AuthorImport, bool) {
 		*v = old
 		return AuthorImport{}, false
 	}
-	return *v, true
+	return cloneStorageImport(*v), true
 }
 func (a *App) importWorker() {
 	for {
