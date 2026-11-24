@@ -342,34 +342,42 @@ func sqliteShadowSQLJobs(ctx context.Context, tx *sql.Tx) (map[string]Job, error
 }
 
 func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, Job) error) error {
-	grantRows, err := tx.QueryContext(ctx, "SELECT archive_id,grantee_owner_id FROM archive_grants")
+	grantRows, err := tx.QueryContext(ctx, "SELECT archive_id,grantee_owner_id FROM archive_grants ORDER BY archive_id,grantee_owner_id")
 	if err != nil {
 		return err
 	}
-	grants := make(map[string]map[string]bool)
-	for grantRows.Next() {
-		var id, user string
-		if err := grantRows.Scan(&id, &user); err != nil {
-			grantRows.Close()
+	defer grantRows.Close()
+	// Merge two ordered cursors in one SQLite snapshot. Keep only one
+	// lookahead grant and the current archive's ACL, not all library grants.
+	var grantID, grantUser string
+	var hasGrant bool
+	advanceGrant := func() error {
+		previousID, previousUser := grantID, grantUser
+		hasGrant = grantRows.Next()
+		if !hasGrant {
+			return grantRows.Err()
+		}
+		if err := grantRows.Scan(&grantID, &grantUser); err != nil {
 			return err
 		}
-		if grants[id] == nil {
-			grants[id] = make(map[string]bool)
+		if !safeArchivePart(grantID) || !safeArchivePart(grantUser) ||
+			grantID < previousID || (grantID == previousID && grantUser <= previousUser) {
+			return errors.New("SQLite shadow has invalid or unordered grants")
 		}
-		grants[id][user] = true
+		return nil
 	}
-	if err := grantRows.Err(); err != nil {
-		grantRows.Close()
+	if err := advanceGrant(); err != nil {
 		return err
 	}
-	grantRows.Close()
 	rows, err := tx.QueryContext(ctx, `SELECT a.archive_id,a.owner_id,p.author_slug,p.remote_post_id,
 		a.job_state,a.title,a.created_at,a.updated_at,a.archived_at,a.auto_sync,a.shared_for_all,a.deleted_at,a.payload_json
-		FROM owner_archives a JOIN source_posts p ON a.post_key=p.post_key`)
+		FROM owner_archives a JOIN source_posts p ON a.post_key=p.post_key ORDER BY a.archive_id`)
 	if err != nil {
 		return err
 	}
-	seen := make(map[string]struct{})
+	defer rows.Close()
+	previousID := ""
+	visited := 0
 	for rows.Next() {
 		var id, owner, author, post, state, title, created, updated, raw string
 		var autoSync, sharedForAll int
@@ -388,9 +396,8 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 			rows.Close()
 			return fmt.Errorf("invalid SQL archive %q: %w", id, err)
 		}
-		if _, exists := seen[id]; exists {
-			rows.Close()
-			return fmt.Errorf("duplicate SQL archive: %q", id)
+		if visited != 0 && id <= previousID {
+			return fmt.Errorf("duplicate or unordered SQL archive: %q", id)
 		}
 		if job.ID != id || job.OwnerID != owner || job.Author != author ||
 			job.PostID != post || job.State != state || job.Title != title ||
@@ -403,26 +410,27 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 			rows.Close()
 			return fmt.Errorf("SQLite shadow archive identity or ACL drift: %q", id)
 		}
-		permissions := make(map[string]bool)
+		if hasGrant && grantID < id {
+			return errors.New("SQLite shadow has grants without owner archives")
+		}
+		permissions := make(map[string]bool, len(job.SharedWith))
 		for _, grantee := range job.SharedWith {
-			if permissions[grantee] {
-				rows.Close()
-				return fmt.Errorf("duplicate SQL shadow grant: %q", id)
-			}
-			permissions[grantee] = true
+			permissions[grantee] = true // validSQLiteArchive already rejects duplicates.
 		}
-		if len(permissions) != len(grants[id]) {
-			rows.Close()
-			return fmt.Errorf("SQLite shadow grant count mismatch: %q", id)
-		}
-		for grantee := range permissions {
-			if !grants[id][grantee] {
-				rows.Close()
+		for hasGrant && grantID == id {
+			if !permissions[grantUser] {
 				return fmt.Errorf("SQLite shadow grant mismatch: %q", id)
 			}
+			delete(permissions, grantUser)
+			if err := advanceGrant(); err != nil {
+				return err
+			}
 		}
-		delete(grants, id)
-		seen[id] = struct{}{}
+		if len(permissions) != 0 {
+			return fmt.Errorf("SQLite shadow grant count mismatch: %q", id)
+		}
+		previousID = id
+		visited++
 		if err := visit(id, job); err != nil {
 			rows.Close()
 			return err
@@ -432,16 +440,21 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 		rows.Close()
 		return err
 	}
-	rows.Close()
-	if len(grants) != 0 {
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasGrant {
 		return errors.New("SQLite shadow has grants without owner archives")
+	}
+	if err := grantRows.Close(); err != nil {
+		return err
 	}
 	// A JOIN may hide orphan owner_archives rows. Never certify a partial set.
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM owner_archives").Scan(&count); err != nil {
 		return err
 	}
-	if count != len(seen) {
+	if count != visited {
 		return errors.New("SQLite shadow has owner archives without source posts")
 	}
 	return nil
@@ -481,11 +494,13 @@ func sqliteShadowSQLImports(ctx context.Context, tx *sql.Tx) (map[string]AuthorI
 
 func sqliteShadowVisitImports(ctx context.Context, tx *sql.Tx, visit func(string, AuthorImport) error) error {
 	rows, err := tx.QueryContext(ctx,
-		"SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json FROM author_imports")
+		"SELECT import_id,owner_id,author_slug,job_state,auto_sync,updated_at,payload_json FROM author_imports ORDER BY import_id")
 	if err != nil {
 		return err
 	}
-	seen := make(map[string]struct{})
+	defer rows.Close()
+	previousID := ""
+	visited := false
 	for rows.Next() {
 		var id, owner, author, state, updated, raw string
 		var autoSync int
@@ -502,9 +517,8 @@ func sqliteShadowVisitImports(ctx context.Context, tx *sql.Tx, visit func(string
 			rows.Close()
 			return fmt.Errorf("invalid SQL import %q: %w", id, err)
 		}
-		if _, exists := seen[id]; exists {
-			rows.Close()
-			return fmt.Errorf("duplicate SQL import: %q", id)
+		if visited && id <= previousID {
+			return fmt.Errorf("duplicate or unordered SQL import: %q", id)
 		}
 		if imp.ID != id || imp.OwnerID != owner || imp.Author != author ||
 			imp.State != state || sqliteBool(imp.AutoSync) != autoSync ||
@@ -512,7 +526,8 @@ func sqliteShadowVisitImports(ctx context.Context, tx *sql.Tx, visit func(string
 			rows.Close()
 			return fmt.Errorf("SQLite shadow import identity mismatch: %q", id)
 		}
-		seen[id] = struct{}{}
+		previousID = id
+		visited = true
 		if err := visit(id, imp); err != nil {
 			rows.Close()
 			return err

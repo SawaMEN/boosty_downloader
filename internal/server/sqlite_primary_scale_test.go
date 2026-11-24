@@ -139,3 +139,50 @@ func BenchmarkSQLPrimaryLibraryGuard(b *testing.B) {
 		})
 	}
 }
+
+func TestSQLPrimaryOrderedGrantScan(t *testing.T) {
+	for _, scenario := range []string{"valid", "missing", "extra", "orphan-first", "orphan-last", "orphan-post"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, meta, _ := sqlFirstStorageFixture(t)
+			id := strings.Repeat("1", 24)
+			switch scenario {
+			case "missing":
+				if _, err := meta.db.Exec("DELETE FROM archive_grants WHERE archive_id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			case "extra":
+				if _, err := meta.db.Exec("INSERT INTO archive_grants VALUES(?,?,?)", id, "extra-member", sqliteDate(time.Now())); err != nil {
+					t.Fatal(err)
+				}
+			case "orphan-first", "orphan-last", "orphan-post":
+				if _, err := meta.db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "orphan-post" {
+					if _, err := meta.db.Exec("UPDATE owner_archives SET post_key=-1 WHERE archive_id=?", id); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					orphan := strings.Repeat("0", 24)
+					if scenario == "orphan-last" {
+						orphan = strings.Repeat("z", 24)
+					}
+					if _, err := meta.db.Exec("INSERT INTO archive_grants VALUES(?,?,?)", orphan, "member", sqliteDate(time.Now())); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := meta.db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := s.sqlitePrimaryGuardMutationLocked()
+			if scenario == "valid" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || s.primaryFatal == nil {
+				t.Fatal("ordered scan accepted ACL or identity drift")
+			}
+		})
+	}
+}
