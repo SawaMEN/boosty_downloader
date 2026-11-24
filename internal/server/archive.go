@@ -304,6 +304,13 @@ func (a *App) runJob(id string) {
 	}
 }
 func (a *App) archive(ctx context.Context, j *Job) error {
+	// The archive worker holds its archive gate. The video worker never
+	// blocks on archive gates while holding an owner gate (tryRead/tryWrite).
+	unlockOwner, err := a.mediaOwnerGates.acquire(ctx, j.OwnerID)
+	if err != nil {
+		return err
+	}
+	defer unlockOwner()
 	policy := a.accounts.policy()
 	ctx = withStorageBudget(ctx, a.store.root, j.OwnerID, policy.MinFreeGiB, policy.MaxUserGiB)
 	if err := checkStorageBudget(ctx, 0); err != nil {

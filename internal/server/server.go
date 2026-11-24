@@ -37,6 +37,7 @@ type App struct {
 	dataDirLock        *os.File
 	store              *Storage
 	archiveGates       *archiveGates
+	mediaOwnerGates    mediaOwnerGates
 	catalogSQLReads    bool
 	accounts           *Accounts
 	clients            map[string]*boosty.Client
