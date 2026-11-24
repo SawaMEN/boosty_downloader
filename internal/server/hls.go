@@ -232,7 +232,7 @@ func fetchHLSBytes(ctx context.Context, fetch mediaFetcher, raw string, max int6
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HLS CDN вернул HTTP %d", res.StatusCode)
+		return nil, &mediaHTTPError{status: res.StatusCode}
 	}
 	if res.ContentLength > max {
 		return nil, errors.New("HLS: превышен размер сегмента или плейлиста")
@@ -249,7 +249,7 @@ func fetchHLSBytes(ctx context.Context, fetch mediaFetcher, raw string, max int6
 		return nil, errors.New("HLS: превышен размер сегмента или плейлиста")
 	}
 	if res.ContentLength >= 0 && int64(len(b)) != res.ContentLength {
-		return nil, errors.New("HLS: неполный ответ CDN")
+		return nil, errMediaIncomplete
 	}
 	return b, nil
 }
@@ -257,6 +257,12 @@ func fetchHLSBytes(ctx context.Context, fetch mediaFetcher, raw string, max int6
 // Segments are streamed to disk; even a 512 MiB segment never occupies 512 MiB
 // of Go heap. Return its verified byte length for the total archive limit.
 func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, budget int64) (int64, error) {
+	return retryMediaSegment(ctx, func() (int64, error) {
+		return fetchHLSSegmentOnce(ctx, fetch, raw, path, budget)
+	})
+}
+
+func fetchHLSSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path string, budget int64) (int64, error) {
 	if budget <= 0 {
 		return 0, errors.New("HLS: превышен лимит 10 ГиБ")
 	}
@@ -270,7 +276,7 @@ func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, 
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HLS CDN вернул HTTP %d", res.StatusCode)
+		return 0, &mediaHTTPError{status: res.StatusCode}
 	}
 	ct := strings.ToLower(res.Header.Get("Content-Type"))
 	if strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "application/json") || strings.Contains(ct, "mpegurl") || strings.Contains(ct, "dash+xml") {
@@ -286,14 +292,20 @@ func fetchHLSSegment(ctx context.Context, fetch mediaFetcher, raw, path string, 
 	n, copyErr := guardedCopy(ctx, file, io.LimitReader(res.Body, limit+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil || n == 0 || n > limit || res.ContentLength >= 0 && n != res.ContentLength {
-		_ = os.Remove(path)
+		if err := os.Remove(path); err != nil {
+			return 0, err
+		}
+		releaseStorageBudget(ctx, n)
 		if copyErr != nil {
 			return 0, copyErr
 		}
 		if closeErr != nil {
 			return 0, closeErr
 		}
-		return 0, errors.New("HLS: сегмент пустой, неполный или слишком большой")
+		if n <= limit && (n == 0 || res.ContentLength >= 0 && n < res.ContentLength) {
+			return 0, errMediaIncomplete
+		}
+		return 0, errors.New("HLS: сегмент превышает размер или длина ответа неверна")
 	}
 	return n, nil
 }
