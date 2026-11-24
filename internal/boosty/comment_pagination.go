@@ -98,13 +98,13 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 			break
 		}
 		if truncated || nodes >= MaxCommentTreeNodes {
-			if truncated || commentPageHasMore(page.Extra) {
+			if truncated || commentPageHasMore(page.Extra) || ((len(pages) > 1 || len(page.Data) >= limit) && page.Extra.IsLast == nil) {
 				reason = "Достигнут предел дерева комментариев"
 			}
 			break
 		}
 		if !commentPageHasMore(page.Extra) {
-			if len(page.Data) >= limit && (page.Extra.IsLast == nil || !*page.Extra.IsLast) {
+			if (len(pages) > 1 || len(page.Data) >= limit) && page.Extra.IsLast == nil {
 				reason = "Boosty не подтвердил последнюю страницу комментариев"
 			}
 			break
