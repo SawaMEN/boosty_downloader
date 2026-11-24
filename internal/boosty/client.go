@@ -73,6 +73,7 @@ func validateMediaURL(raw string) error {
 	}
 	return nil
 }
+
 type Tokens struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken,omitempty"`
@@ -211,6 +212,7 @@ var errCredentialsChanged = errors.New("учётные данные Boosty из�
 func New(tokens Tokens, save func(Tokens) error) *Client {
 	return &Client{tokens: tokens, save: save, api: safeMediaClient(), media: safeMediaClient(), apiBase: "https://api.boosty.to"}
 }
+
 // CloseIdleConnections releases both owner-local HTTP pools without
 // interrupting active requests or changing credentials.
 func (c *Client) CloseIdleConnections() {

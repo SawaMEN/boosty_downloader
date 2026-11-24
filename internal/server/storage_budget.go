@@ -218,7 +218,9 @@ func guardedCopy(ctx context.Context, dst io.Writer, src io.Reader) (int64, erro
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	return io.CopyBuffer(guardedWriter{ctx: ctx, out: dst}, guardedCopyReader{src}, make([]byte, guardedCopyChunkBytes))
+	buf := acquireGuardedCopyBuffer()
+	defer releaseGuardedCopyBuffer(buf)
+	return io.CopyBuffer(guardedWriter{ctx: ctx, out: dst}, guardedCopyReader{src}, buf[:])
 }
 
 type storageOwnerUsage struct {
