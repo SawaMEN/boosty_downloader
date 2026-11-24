@@ -117,9 +117,16 @@ type mediaPostRefresh func(context.Context) (*boosty.Post, error)
 // the post once and restart the affected media plan. Only complete segments
 // with unchanged URLs and revalidated strong ETags may be reused.
 func downloadMediaWithRecovery(ctx context.Context, fetch mediaFetcher, refresh mediaPostRefresh, post *boosty.Post, media boosty.Media, dest string, expected int64) (int64, string, error) {
+	// Direct .part writes belong to this media only; nested remux
+	// attempts use their own scope and the segment cache stays separate.
+	ctx = withMediaStageBudget(ctx)
+	defer func() {
+		_ = discardMediaPartial(ctx, dest+".part")
+		_ = os.Remove(dest + ".part.meta")
+	}()
 	if media.Type == "ok_video" {
-		var cleanup func()
-		ctx, cleanup = withVerifiedSegmentCache(ctx, dest)
+		cacheCtx, cleanup := withVerifiedSegmentCache(withoutMediaStageBudget(ctx), dest)
+		ctx = context.WithValue(cacheCtx, mediaStageBudgetKey{}, ctx.Value(mediaStageBudgetKey{}))
 		defer cleanup()
 	}
 	raw := boosty.MediaURL(post, media)
@@ -152,10 +159,11 @@ func downloadMediaWithRecovery(ctx context.Context, fetch mediaFetcher, refresh 
 			if refreshErr != nil {
 				return 0, "", refreshErr
 			}
-			for _, suffix := range []string{".part", ".part.meta"} {
-				if e := os.Remove(dest + suffix); e != nil && !os.IsNotExist(e) {
-					return 0, "", e
-				}
+			if e := discardMediaPartial(ctx, dest+".part"); e != nil {
+				return 0, "", e
+			}
+			if e := os.Remove(dest + ".part.meta"); e != nil && !os.IsNotExist(e) {
+				return 0, "", e
 			}
 			raw = next
 			attempt = -1 // one independent bounded retry budget for the new URL

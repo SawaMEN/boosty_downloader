@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 )
 
@@ -51,12 +53,72 @@ func publishStagedVideo(ctx context.Context, output, dest string, size int64) er
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := b.checkLocked(size); err != nil {
+	if err := checkCompletedMediaOutputLocked(b, size); err != nil {
 		return err
 	}
 	if err := os.Rename(output, dest); err != nil {
 		return err
 	}
 	b.used += size
+	return nil
+}
+
+// A direct download may inherit a partial from a previous process. Credit
+// only this scope's charged bytes, never arbitrary preexisting file sizes.
+func discardMediaPartial(ctx context.Context, path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("необычный тип частичного файла")
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if scope, _ := ctx.Value(mediaStageBudgetKey{}).(*mediaStageBudget); scope != nil {
+		releaseStorageBudget(ctx, info.Size())
+	}
+	return nil
+}
+
+// A completed FFmpeg output already consumes physical disk space. Check
+// actual free reserve and logical quota without counting its bytes twice
+// against physical free space.
+func checkCompletedMediaOutputLocked(b *storageBudget, size int64) error {
+	if size <= 0 {
+		return errors.New("недопустимый размер видео")
+	}
+	if err := b.checkLocked(0); err != nil {
+		return err
+	}
+	if b.maxUser > 0 && size > b.maxUser-b.used {
+		return fmt.Errorf("превышена квота архива пользователя (%d ГиБ)", b.maxUser/gibibyte)
+	}
+	return nil
+}
+
+func chargeIntermediateMediaOutput(ctx context.Context, size int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b, _ := ctx.Value(storageBudgetKey{}).(*storageBudget)
+	if b == nil {
+		return nil
+	}
+	scope, _ := ctx.Value(mediaStageBudgetKey{}).(*mediaStageBudget)
+	if scope == nil {
+		return errors.New("отсутствует учёт временного видео")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := checkCompletedMediaOutputLocked(b, size); err != nil {
+		return err
+	}
+	b.used += size
+	scope.bytes += size
 	return nil
 }
