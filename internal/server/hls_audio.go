@@ -207,7 +207,6 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	var playlist strings.Builder
 	playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:36000\n#EXT-X-MEDIA-SEQUENCE:0\n")
 	lastInitKey := ""
-	parallel := segmentWorkers(ctx, "BD_HLS_SEGMENT_WORKERS") == 2
 	var batch [2]mediaSegmentTask
 	pending := 0
 	flush := func() error {
@@ -229,7 +228,7 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 		pending++
 		// Reserve the maximum possible size for each outstanding request.
 		// Close to the limit, fetch sequentially with the exact remainder.
-		if !parallel || pending == len(batch) || maxArchiveMediaSize-*total < 2*maxHLSSegmentBytes {
+		if segmentWorkers(ctx, "BD_HLS_SEGMENT_WORKERS") != 2 || pending == len(batch) || maxArchiveMediaSize-*total < 2*maxHLSSegmentBytes {
 			return flush()
 		}
 		return nil

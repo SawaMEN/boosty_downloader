@@ -32,6 +32,29 @@ func fetchMediaSegmentBatch(ctx context.Context, fetch mediaFetcher, tasks []med
 	if len(tasks) != 2 || budget < 2*maxHLSSegmentBytes {
 		return sizes, errors.New("недопустимый параллельный пакет медиасегментов")
 	}
+	// At most one extra segment worker across this process. Never wait
+	// for another track: a busy gate falls back to ordered single requests.
+	n, _ := ctx.Value(segmentWorkersKey{}).(int)
+	allow := n != 3 || adaptiveSegmentWorkers() == 2
+	if allow {
+		select {
+		case mediaExtraSegmentGate <- struct{}{}:
+			defer func() { <-mediaExtraSegmentGate }()
+		default:
+			allow = false
+		}
+	}
+	if !allow {
+		for i, task := range tasks {
+			size, err := fetchHLSRangeSegment(ctx, fetch, task.url, task.path, budget, task.offset, task.length)
+			if err != nil {
+				return sizes, err
+			}
+			sizes[i] = size
+			budget -= size
+		}
+		return sizes, nil
+	}
 	child, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan mediaSegmentResult, 2)
