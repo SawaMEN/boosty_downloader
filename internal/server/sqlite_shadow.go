@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"time"
 )
@@ -321,19 +320,12 @@ func (m *sqliteMetadata) reconcileWithExtra(ctx context.Context, jobs map[string
 }
 
 func sqliteShadowEqual(a, b any) bool {
+	if sqliteMetadataEqualValidated(a, b) {
+		return true
+	}
 	left, err := json.Marshal(a)
 	if err != nil {
 		return false
-	}
-	// For these concrete metadata types, deep equality implies the same
-	// deterministic JSON representation. Still marshal once first: equal
-	// invalid timestamps or non-finite prices must not certify parity.
-	// Other types and unequal representations retain the legacy path.
-	switch a.(type) {
-	case Job, AuthorImport:
-		if reflect.DeepEqual(a, b) {
-			return true
-		}
 	}
 	right, err := json.Marshal(b)
 	if err != nil {

@@ -84,3 +84,14 @@ sequence. Their final metadata generation is classified by a streaming
 SHA-256 with no-follow file access and size/identity checks. Existing size
 policies are preserved. SQL export refuses a pending SQL-primary intent.
 This does not replace a full parity scan or enable a cached proof.
+
+## Validated equality without serialization
+
+For exactly deep-equal Job/AuthorImport values, the fast proof validates all
+potentially fallible JSON fields: UTC timestamps with years 0–9999 and
+finite tier/purchase prices. The remaining current schema consists of plain
+strings, booleans, integers, string slices and known optional structures.
+Other values, non-UTC timestamps, differing representations and any failed
+proof use the original two-Marshal JSON comparison. A schema audit test
+requires explicit review of new encoders, types or fallible fields. No
+row, grant, identity or generation check is skipped, and no proof is cached.
