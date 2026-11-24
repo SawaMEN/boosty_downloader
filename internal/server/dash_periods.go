@@ -225,11 +225,8 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 		}
 		name := prefix + ".mp4"
 		output := filepath.Join(dir, name)
-		if err := checkStorageBudget(ctx, maxArchiveMediaSize-budget); err != nil {
-			return 0, "", err
-		}
 		args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
-		if err := runDASHLocalMux(ctx, ffmpeg, args); err != nil {
+		if err := runBoundedMediaMux(ctx, ffmpeg, args, output, maxArchiveMediaSize-stagedBytes); err != nil {
 			return 0, "", err
 		}
 		info, err := os.Stat(output)
@@ -258,12 +255,9 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	if err := os.WriteFile(listPath, []byte(list.String()), 0600); err != nil {
 		return 0, "", err
 	}
-	if err := checkStorageBudget(ctx, stagedBytes); err != nil {
-		return 0, "", err
-	}
 	output := filepath.Join(dir, "remux.mp4")
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe,data", "-f", "concat", "-safe", "1", "-i", listPath, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart", "-y", output}
-	if err := runDASHLocalMux(ctx, ffmpeg, args); err != nil {
+	if err := runBoundedMediaMux(ctx, ffmpeg, args, output, maxArchiveMediaSize); err != nil {
 		return 0, "", err
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -288,14 +282,3 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	return size, digest, nil
 }
 
-func runDASHLocalMux(ctx context.Context, ffmpeg string, args []string) error {
-	muxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	if err := exec.CommandContext(muxCtx, ffmpeg, args...).Run(); err != nil {
-		if muxCtx.Err() != nil {
-			return muxCtx.Err()
-		}
-		return errors.New("DASH: ошибка локальной сборки FFmpeg")
-	}
-	return nil
-}
