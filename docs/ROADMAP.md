@@ -496,6 +496,14 @@
 - [x] CI PR #4/#5: unit/race и benchmark успешно. PR #4, run 45441509221, 100k: streaming 1.826 с / 486439608 B/op против materialized 2.002 с / 523311584 B/op. 1 итерация; аллокации, не peak RSS. Не считать сравнением разных runners.
 - [ ] CI нового этапа, завершение остальных CI jobs, аудит journal-specific mutation paths. Полный ACL guard сохранён. Общий прогресс **7/13**, осталось **6**.
 
+## SQL 12.4.32 — общая классификация файловых транзакций (24.11.2026)
+
+- [x] PR #4 полностью прошёл CI (run 45441509221) и слит в main (cf174e9).
+- [x] Archive update использует общий SQL recovery helper с restore/purge, проверка SQL/JSON parity сохранена.
+- [x] SHA-256 после recovery вычисляется потоково без полной копии jobs.json, с no-follow, fstat-bound и проверкой идентичности/размера; существующий лимит публикации 64 MiB сохранён.
+- [x] Detached SQL export отклоняет незавершённый primary intent; добавлены тесты hash, лимита, symlink/FIFO и запрета export.
+- [ ] CI нового этапа, остаточные journal-path проверки, merge очереди PR и полные замеры записи. Общий прогресс **7/13**, осталось **6**.
+
 ## Критерии стабильного релиза
 
 - CI проходит: Go + race detector, UI-проверки, Docker, amd64/arm64 и обе установки.

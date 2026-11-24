@@ -479,12 +479,12 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 			s.primaryFatal = fmt.Errorf("archive revision restore recovery required: %w; original error: %v", recoveryErr, cause)
 			return Job{}, s.primaryFatal
 		}
-		actual, readErr := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+		actualHash, readErr := hashFileTransactionMetadata(s.root, "jobs.json", 0)
 		if readErr != nil {
 			s.primaryFatal = fmt.Errorf("archive revision restore cannot classify disk generation: %w", readErr)
 			return Job{}, s.primaryFatal
 		}
-		switch metadataDigest(actual) {
+		switch actualHash {
 		case journal.BeforeHash:
 			*j = old
 			return Job{}, cause

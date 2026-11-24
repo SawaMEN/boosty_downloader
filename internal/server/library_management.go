@@ -605,13 +605,13 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			s.mu.Unlock()
 			return 0, s.primaryFatal
 		}
-		actual, readErr := os.ReadFile(filepath.Join(s.root, "jobs.json"))
+		actualHash, readErr := hashFileTransactionMetadata(s.root, "jobs.json", 0)
 		if readErr != nil {
 			s.primaryFatal = fmt.Errorf("archive purge cannot classify jobs generation: %w", readErr)
 			s.mu.Unlock()
 			return 0, s.primaryFatal
 		}
-		if metadataDigest(actual) == journal.AfterHash {
+		if actualHash == journal.AfterHash {
 			for _, key := range ids {
 				delete(s.jobs, key)
 			}
@@ -622,7 +622,7 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 			}
 			return len(ids), nil
 		}
-		if metadataDigest(actual) == journal.BeforeHash {
+		if actualHash == journal.BeforeHash {
 			for key, job := range backup {
 				s.jobs[key] = job
 			}

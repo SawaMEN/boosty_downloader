@@ -111,6 +111,11 @@ func TestDetachedSQLToJSONRecoveryRefusesUnsafeState(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"primary-intent", func(t *testing.T, root string) {
+			if err := os.WriteFile(filepath.Join(root, sqlitePrimaryTransactionName), []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"cutover-intent", func(t *testing.T, root string) {
 			if err := os.WriteFile(filepath.Join(root, sqliteCutoverIntentName), []byte("{}"), 0600); err != nil {
 				t.Fatal(err)

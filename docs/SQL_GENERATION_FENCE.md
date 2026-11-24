@@ -76,3 +76,11 @@ batch persistence boundary. Duplicate IDs are rejected before mutation;
 rollback restores the exact previous pointers. Inputs and outputs are
 detached from storage-owned records. Physical archive journals are still
 separate. No cached parity or authorization fast path is enabled.
+
+## Physical journal classification (12.4.32)
+
+Archive publication, restore and purge share the SQL recovery/parity
+sequence. Their final metadata generation is classified by a streaming
+SHA-256 with no-follow file access and size/identity checks. Existing size
+policies are preserved. SQL export refuses a pending SQL-primary intent.
+This does not replace a full parity scan or enable a cached proof.
