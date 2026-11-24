@@ -265,7 +265,7 @@ func (s *Storage) transitionToQueued(jobID, owner string) (Job, error) {
 		*j = old
 		return Job{}, err
 	}
-	return *j, nil
+	return cloneStorageJob(*j), nil
 }
 func (s *Storage) claimQueued(id string) (Job, bool) {
 	s.mu.Lock()
@@ -284,7 +284,7 @@ func (s *Storage) claimQueued(id string) (Job, bool) {
 		*j = old
 		return Job{}, false
 	}
-	return *j, true
+	return cloneStorageJob(*j), true
 }
 
 func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
@@ -298,16 +298,17 @@ func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 			if old.DeletedAt != nil {
 				return Job{}, false, errors.New("архив находится в корзине — сначала восстановите его")
 			}
-			return *old, false, nil
+			return cloneStorageJob(*old), false, nil
 		}
 	}
+	j = cloneStorageJob(j)
 	j.UpdatedAt = time.Now().UTC()
 	s.jobs[j.ID] = &j
 	if err := s.saveJobsLocked(); err != nil {
 		delete(s.jobs, j.ID)
 		return Job{}, false, err
 	}
-	return j, true, nil
+	return cloneStorageJob(j), true, nil
 }
 
 // removeOwned hides finished copies atomically in jobs.json, retaining bytes
@@ -369,7 +370,7 @@ func (s *Storage) trashed(owner string) []Job {
 	out := make([]Job, 0)
 	for _, j := range s.jobs {
 		if j.OwnerID == owner && j.DeletedAt != nil {
-			out = append(out, *j)
+			out = append(out, cloneStorageJob(*j))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -392,7 +393,7 @@ func (s *Storage) trashedJob(owner, id string) (Job, bool) {
 	if job == nil || job.OwnerID != owner || job.DeletedAt == nil {
 		return Job{}, false
 	}
-	return *job, true
+	return cloneStorageJob(*job), true
 }
 
 // HTTP/manual and scheduled sweeps share the same storage-level purge gate.
@@ -427,7 +428,7 @@ func (s *Storage) restoreOwned(owner, id string) (Job, error) {
 		*j = old
 		return Job{}, err
 	}
-	return *j, nil
+	return cloneStorageJob(*j), nil
 }
 
 // purgeOwned permanently removes only previously trashed entries, staging

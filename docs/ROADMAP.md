@@ -459,6 +459,13 @@
 - [x] Зафиксированы [условия безопасного fast path](SQL_GENERATION_FENCE.md), включая защиту от изменения Go maps вне SQL.
 - [ ] Проверить CI, сравнить benchmark, внедрить проверяемую границу поколений памяти и только затем разрешать пропуск полного guard. Probe пока не используется в production ACL. Общий прогресс **7/13**, осталось **6**.
 
+## SQL 12.4.27 — изоляция mutable metadata (24.11.2026)
+
+- [x] Job копирует SharedWith, DeletedAt, Subscription, RequiredTier; AuthorImport копирует Subscription. Общие helpers без JSON round-trip.
+- [x] Изолированы внешние границы upsert/get/all, createUniqueJob/claim/transition/restore/trash и createImports/updateImport/claimImport/importsFor для обоих backend.
+- [x] Добавлены регрессионные тесты входных и возвращаемых объектов, timestamp корзины и перечня ссылочных полей.
+- [ ] CI, аудит внутренних in-place mutations и callback/file publication путей, затем generation fence. Полная проверка ACL сохранена. Общий прогресс **7/13**, осталось **6**.
+
 ## Критерии стабильного релиза
 
 - CI проходит: Go + race detector, UI-проверки, Docker, amd64/arm64 и обе установки.

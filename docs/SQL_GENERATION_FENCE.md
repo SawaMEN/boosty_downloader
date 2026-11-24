@@ -29,3 +29,12 @@ cache conservatively. Multiple separate queries are not an atomic fence.
 
 A proof covering only SQLite is not a proof of SQL/JSON/in-memory parity.
 No schema migration or backend default change is needed for this probe.
+
+## Ownership boundary (12.4.27)
+
+Storage now clones known mutable Job/AuthorImport fields at ordinary caller
+entry/exit boundaries. This prevents shared ACL slices and nested pointers
+from escaping those methods. SQL reads decoded from a fresh snapshot are
+already detached. Internal in-place writes and archive publication paths
+still need a separate inventory and generation accounting. The probe does
+not authorize a fast path.

@@ -251,6 +251,7 @@ func (s *Storage) upsert(job Job) error {
 		return err
 	}
 	previous, exists := s.jobs[job.ID]
+	job = cloneStorageJob(job)
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[job.ID] = &job
 	if err := s.saveJobsLocked(); err != nil {
@@ -284,7 +285,7 @@ func (s *Storage) get(id string) (Job, bool) {
 	if !ok || j.DeletedAt != nil {
 		return Job{}, false
 	}
-	return *j, true
+	return cloneStorageJob(*j), true
 }
 func (s *Storage) all() []Job {
 	s.mu.Lock()
@@ -308,7 +309,7 @@ func (s *Storage) all() []Job {
 	out := make([]Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
 		if j.DeletedAt == nil {
-			out = append(out, *j)
+			out = append(out, cloneStorageJob(*j))
 		}
 	}
 	return out
