@@ -91,53 +91,27 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SQLite is only an optional candidate index. Every returned job still
-	// comes from authoritative JSON and passes the existing ACL/filter logic.
-	jobs, _ := a.store.catalogJobs(r.Context(), viewer.ID, scope, a.catalogSQLReads)
+	filter := catalogFilter{viewer: viewer.ID, scope: scope, query: query, author: author, status: status}
+	if scope == "shared" {
+		filter.ownerNames = a.accounts.catalogOwnerNames()
+	}
 	selection := newCatalogSelection(page, perPage, orderBy, direction)
-	ownerNames := make(map[string]string)
+	// In default JSON mode a shallow page can be selected directly from
+	// the locked authoritative map, copying only returned records.
+	if !a.catalogSQLReads {
+		if result, ok := a.store.catalogJSONPage(filter, selection); ok {
+			reply(w, 200, result)
+			return
+		}
+	}
+
+	// SQL candidate parity and deep pages retain the existing detached
+	// snapshot path. All candidates still pass the same ACL and filters.
+	jobs, _ := a.store.catalogJobs(r.Context(), viewer.ID, scope, a.catalogSQLReads)
 	for _, job := range jobs {
-		if scope == "mine" {
-			if job.OwnerID != viewer.ID {
-				continue
-			}
-		} else {
-			if job.OwnerID == viewer.ID || (job.State != "done" && job.State != "partial") {
-				continue
-			}
-			if !job.SharedForAll && !contains(job.SharedWith, viewer.ID) {
-				continue
-			}
+		if item, ok := filter.item(job); ok {
+			selection.add(item)
 		}
-		if author != "" && !strings.Contains(strings.ToLower(job.Author), author) {
-			continue
-		}
-		if status != "" && job.State != status {
-			continue
-		}
-		owner := ""
-		if scope == "shared" {
-			var cached bool
-			owner, cached = ownerNames[job.OwnerID]
-			if !cached {
-				owner = a.accounts.username(job.OwnerID)
-				if len(ownerNames) < 4096 {
-					ownerNames[job.OwnerID] = owner
-				}
-			}
-		}
-		if query != "" && !strings.Contains(strings.ToLower(job.Title), query) &&
-			!strings.Contains(strings.ToLower(job.Author), query) &&
-			!(scope == "shared" && strings.Contains(strings.ToLower(owner), query)) {
-			continue
-		}
-		if scope == "shared" {
-			job.SharedWith = nil
-			job.Subscription = nil
-			job.OwnerID = ""
-			job.Error = ""
-		}
-		selection.add(catalogItem{Job: job, OwnerName: owner})
 	}
 	reply(w, 200, selection.result())
 }
