@@ -3,9 +3,12 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -98,5 +101,72 @@ func TestSQLPrimaryDeltaJournalSize(t *testing.T) {
 	}
 	if _, err := encodeSQLitePrimaryJournal(journal, 4096); err == nil {
 		t.Fatal("full images unexpectedly fit in delta limit")
+	}
+}
+
+func TestSQLPrimaryDeltaSIGKILL(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		after bool
+	}{
+		{"prepared", false},
+		{"sql-committed", true},
+		{"json-committed", true},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			root, _, _ := sqlPrimaryJournalFixture(t)
+			jobs, err := sqliteShadowReadJobs(filepath.Join(root, "jobs.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			imports, err := sqliteShadowReadImports(filepath.Join(root, "imports.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mirror := range []struct {
+				name  string
+				value any
+			}{
+				{"jobs.json", jobs},
+				{"imports.json", imports},
+			} {
+				raw, err := json.MarshalIndent(mirror.value, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, mirror.name), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSQLPrimaryJournalSIGKILLHelper$")
+			cmd.Env = append(os.Environ(),
+				"BD_TEST_SQL_PRIMARY_KILL=1",
+				"BD_TEST_SQL_PRIMARY_ROOT="+root,
+				"BD_TEST_SQL_PRIMARY_PHASE="+tc.phase)
+			err = cmd.Run()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) {
+				t.Fatalf("expected SIGKILL: %v", err)
+			}
+			status, ok := exit.Sys().(syscall.WaitStatus)
+			if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+				t.Fatalf("unexpected child exit: %v", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, sqlitePrimaryTransactionName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var journal sqlitePrimaryDeltaJournal
+			if err := json.Unmarshal(raw, &journal); err != nil || journal.Version != sqlitePrimaryDeltaVersion {
+				t.Fatalf("child did not persist v2 intent: %v", err)
+			}
+			if err := recoverMetadataPair(root); err != nil {
+				t.Fatal(err)
+			}
+			if err := recoverSQLitePrimaryCommitLocked(root); err != nil {
+				t.Fatal(err)
+			}
+			sqlPrimaryAssertImages(t, root, tc.after)
+		})
 	}
 }
