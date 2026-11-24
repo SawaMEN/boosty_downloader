@@ -84,3 +84,13 @@ sequence. Their final metadata generation is classified by a streaming
 SHA-256 with no-follow file access and size/identity checks. Existing size
 policies are preserved. SQL export refuses a pending SQL-primary intent.
 This does not replace a full parity scan or enable a cached proof.
+
+## Small ACL validation and matching
+
+Archive payload validation and SQL grant matching use a bounded linear scan
+for at most eight grants. A bitmask tracks consumed entries without altering
+payload order or creating a map. Larger ACLs use hash-based validation and
+matching to avoid quadratic work. Both ordered full scans and point reads
+reject missing, extra, duplicate and malformed grants. The matcher assumes
+payload validation has already succeeded; all call sites enforce this.
+No SQL generation checks, access decisions or mutation guards are cached.

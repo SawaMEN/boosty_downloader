@@ -424,20 +424,16 @@ func sqliteShadowVisitJobs(ctx context.Context, tx *sql.Tx, visit func(string, J
 		if hasGrant && grantID < id {
 			return errors.New("SQLite shadow has grants without owner archives")
 		}
-		permissions := make(map[string]bool, len(job.SharedWith))
-		for _, grantee := range job.SharedWith {
-			permissions[grantee] = true // validSQLiteArchive already rejects duplicates.
-		}
+		permissions := newSQLiteGrantMatcher(job.SharedWith)
 		for hasGrant && grantID == id {
-			if !permissions[grantUser] {
+			if !permissions.consume(grantUser) {
 				return fmt.Errorf("SQLite shadow grant mismatch: %q", id)
 			}
-			delete(permissions, grantUser)
 			if err := advanceGrant(); err != nil {
 				return err
 			}
 		}
-		if len(permissions) != 0 {
+		if !permissions.complete() {
 			return fmt.Errorf("SQLite shadow grant count mismatch: %q", id)
 		}
 		previousID = id
