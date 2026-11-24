@@ -26,6 +26,8 @@ jobs:
         run: go mod download
       - name: Verify offline SQLite export and safety
         run: python3 -m unittest discover -s tests -p 'test_sqlite_migrate.py' -v
+      - name: Verify stable release gate
+        run: python3 -m unittest discover -s tests -p 'test_release_gate.py' -v
       - name: Check interface scripts
         run: node --check internal/server/ui/app.js && node --check internal/server/ui/library.js && node --check internal/server/ui/subscriptions.js && node --check internal/server/ui/admin.js && python3 tests/ui_contract.py
       - name: Check formatting

@@ -3,9 +3,34 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: read
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require stable tag on checked main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          checked_sha="$(git rev-parse HEAD)"
+          test "$checked_sha" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$checked_sha" refs/remotes/origin/main
+          gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f branch=main -f event=push -f head_sha="$checked_sha" -F per_page=100 \
+            > "$RUNNER_TEMP/release-ci.json"
+          python3 tests/release_gate.py "$RUNNER_TEMP/release-ci.json" "$checked_sha" "$GITHUB_REPOSITORY"
   build:
+    needs: gate
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,6 +48,8 @@ jobs:
           path: dist/*
   publish:
     needs: build
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -35,3 +62,4 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          fail_on_unmatched_files: true
