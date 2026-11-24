@@ -17,6 +17,28 @@ import (
 )
 
 const maxArchiveRevisions = 8
+const maxConfigurableArchiveRevisions = 64
+
+func validRevisionLimit(limit int) bool {
+	return limit >= 1 && limit <= maxConfigurableArchiveRevisions
+}
+
+func revisionRetentionLimits(limits []int) (int, int64, error) {
+	if len(limits) == 0 {
+		return maxArchiveRevisions, 0, nil
+	}
+	if len(limits) > 2 || !validRevisionLimit(limits[0]) {
+		return 0, 0, errors.New("некорректный лимит истории")
+	}
+	var maxBytes int64
+	if len(limits) == 2 {
+		if !validRevisionMaxGiB(limits[1]) {
+			return 0, 0, errors.New("некорректный объём истории")
+		}
+		maxBytes = int64(limits[1]) * gibibyte
+	}
+	return limits[0], maxBytes, nil
+}
 
 type ArchiveRevision struct {
 	ID           string                `json:"id"`
@@ -233,7 +255,13 @@ func (s *Storage) saveArchiveRevisionLocked(job Job) (string, error) {
 }
 
 func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
+	if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
+		return nil, errors.New("неверный путь истории")
+	}
 	root := s.revisionsDir(job)
+	if info, err := purgeSafePath(s.root, root); err != nil || info == nil {
+		return []ArchiveRevision{}, err
+	}
 	dirs, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return []ArchiveRevision{}, nil
@@ -246,12 +274,8 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 		if !validRevisionID(entry.Name()) || !entry.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, entry.Name(), "manifest.json"))
-		if err != nil {
-			continue
-		}
-		var man ArchiveManifest
-		if json.Unmarshal(b, &man) != nil || man.Author != job.Author || man.PostID != job.PostID {
+		_, man, err := readArchiveManifestNoFollow(filepath.Join(root, entry.Name()))
+		if err != nil || man.Author != job.Author || man.PostID != job.PostID {
 			continue
 		}
 		result = append(result, ArchiveRevision{
@@ -268,23 +292,30 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 	return result, nil
 }
 
-func (s *Storage) pruneArchiveRevisions(job Job) error {
+func (s *Storage) pruneArchiveRevisions(job Job, limits ...int) error {
 	if s.primary != nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
-	return s.pruneArchiveRevisionsLocked(job)
+	return s.pruneArchiveRevisionsLocked(job, limits...)
 }
 
-func (s *Storage) pruneArchiveRevisionsLocked(job Job) error {
+func (s *Storage) pruneArchiveRevisionsLocked(job Job, limits ...int) error {
+	limit, maxBytes, err := revisionRetentionLimits(limits)
+	if err != nil {
+		return err
+	}
 	list, err := s.listArchiveRevisions(job)
 	if err != nil {
 		return err
 	}
-	if len(list) <= maxArchiveRevisions {
-		return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	keep, err := s.revisionKeepCount(ctx, job, list, limit, maxBytes)
+	if err != nil {
+		return err
 	}
-	for _, version := range list[maxArchiveRevisions:] {
+	for _, version := range list[keep:] {
 		if s.primary != nil {
 			if err := s.deleteSQLHistoryLocked(job, version.ID); err != nil {
 				return err
@@ -298,7 +329,10 @@ func (s *Storage) pruneArchiveRevisionsLocked(job Job) error {
 	return nil
 }
 
-func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
+func (s *Storage) restoreArchiveRevision(owner, id, rev string, limits ...int) (Job, error) {
+	if _, _, err := revisionRetentionLimits(limits); err != nil {
+		return Job{}, err
+	}
 	if !validRevisionID(rev) {
 		return Job{}, errors.New("неверный ID версии")
 	}
@@ -581,7 +615,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		s.primaryFatal = fmt.Errorf("restored archive committed, cleanup pending until startup recovery: %w", err)
 		return Job{}, s.primaryFatal
 	}
-	_ = s.pruneArchiveRevisionsLocked(next)
+	_ = s.pruneArchiveRevisionsLocked(next, limits...)
 	s.notifySQLiteMedia()
 	return cloneStorageJob(next), nil
 }
@@ -654,7 +688,8 @@ func (a *App) restoreJobRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
-	job, err := a.store.restoreArchiveRevision(principal(r).ID, r.PathValue("id"), r.PathValue("rev"))
+	policy := a.accounts.policy()
+	job, err := a.store.restoreArchiveRevision(principal(r).ID, r.PathValue("id"), r.PathValue("rev"), policy.RevisionLimit, policy.revisionMaxGiB())
 	if err != nil {
 		fail(w, 409, err.Error())
 		return

@@ -46,3 +46,29 @@ func TestAbandonedVideoStagingRejectsSymlink(t *testing.T) {
 		t.Fatalf("staging cleanup touched a foreign directory: %q %v", data, err)
 	}
 }
+
+func TestAbandonedVideoStagingShortNumericSuffix(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".video-stage-0", ".video-stage-42", ".video-stage-12345"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cleanupAbandonedVideoStages(root); err != nil {
+		t.Fatalf("valid short MkdirTemp suffix rejected: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("orphan not reclaimed: %v %v", entries, err)
+	}
+	unsafe := filepath.Join(root, ".video-stage-x")
+	if err := os.Mkdir(unsafe, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupAbandonedVideoStages(root); err == nil {
+		t.Fatal("unrecognized short suffix accepted")
+	}
+	if _, err := os.Stat(unsafe); err != nil {
+		t.Fatal("unrecognized directory removed")
+	}
+}

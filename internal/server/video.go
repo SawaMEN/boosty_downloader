@@ -341,13 +341,14 @@ func transcodeVideo(ctx context.Context, p VideoPolicy, src, dest string) (strin
 			continue
 		}
 		temp := dest + ".part.mp4"
-		_ = os.Remove(temp)
-		work, cancel := context.WithTimeout(ctx, 45*time.Minute)
-		command := exec.CommandContext(work, ffmpeg, buildVideoArgs(p, backend.Name, backend.Device, src, temp, width, height)...)
-		out, runErr := command.CombinedOutput()
-		cancel()
+		if err := os.Remove(temp); err != nil && !os.IsNotExist(err) {
+			return backend.Name, errors.New("не удалось удалить временную видеоверсию")
+		}
+		runErr := runBoundedMediaMuxFor(ctx, ffmpeg,
+			buildVideoArgs(p, backend.Name, backend.Device, src, temp, width, height),
+			temp, maxArchiveMediaSize, 45*time.Minute)
 		if runErr == nil {
-			if stat, e := os.Stat(temp); e == nil && stat.Size() > 0 {
+			if stat, e := os.Lstat(temp); e == nil && stat.Mode().IsRegular() && stat.Size() > 0 {
 				if p.OnlySmaller {
 					if original, e := os.Stat(src); e == nil && stat.Size() >= original.Size() {
 						_ = os.Remove(temp)
@@ -357,19 +358,18 @@ func transcodeVideo(ctx context.Context, p VideoPolicy, src, dest string) (strin
 				if err = os.Rename(temp, dest); err == nil {
 					return backend.Name, nil
 				}
-			} else if runErr == nil {
-				runErr = errors.New("FFmpeg создал пустой файл")
+				runErr = errors.New("не удалось сохранить временную видеоверсию")
+			} else {
+				runErr = errors.New("FFmpeg создал пустой или небезопасный файл")
 			}
 		}
-		_ = os.Remove(temp)
-		msg := strings.TrimSpace(string(out))
-		if len(msg) > 240 {
-			msg = msg[:240]
+		if err := os.Remove(temp); err != nil && !os.IsNotExist(err) {
+			return backend.Name, errors.New("не удалось очистить временную видеоверсию")
 		}
-		if msg == "" {
-			msg = fmt.Sprint(runErr)
+		if errors.Is(runErr, errMediaMuxLimit) {
+			return backend.Name, runErr
 		}
-		failures = append(failures, backend.Name+": "+msg)
+		failures = append(failures, backend.Name+": "+runErr.Error())
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}

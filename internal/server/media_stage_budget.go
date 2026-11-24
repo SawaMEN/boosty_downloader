@@ -96,7 +96,7 @@ func checkCompletedMediaOutputLocked(b *storageBudget, size int64) error {
 		return err
 	}
 	if b.maxUser > 0 && size > b.maxUser-b.used {
-		return fmt.Errorf("превышена квота архива пользователя (%d ГиБ)", b.maxUser/gibibyte)
+		return fmt.Errorf("%w (%d ГиБ)", errStorageUserQuota, b.maxUser/gibibyte)
 	}
 	return nil
 }

@@ -406,6 +406,7 @@ func (a *App) Handler() http.Handler {
 	private.HandleFunc("GET /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("PUT /api/admin/policy", a.adminPolicy)
 	private.HandleFunc("GET /api/admin/storage", a.adminStorage)
+	private.HandleFunc("GET /api/admin/storage/revision-preview", a.adminRevisionPreview)
 	private.HandleFunc("GET /api/admin/sqlite-shadow", a.adminSQLiteShadow)
 	private.HandleFunc("POST /api/admin/sqlite-shadow/commit", a.adminCommitSQLiteShadow)
 	private.HandleFunc("GET /api/admin/trash", a.adminTrashStatus)

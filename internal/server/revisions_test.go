@@ -172,4 +172,25 @@ func TestRevisionPruningKeepsRecentSnapshots(t *testing.T) {
 	if oldest.CapturedAt != time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC) {
 		t.Fatalf("incorrect oldest retained snapshot: %+v", oldest)
 	}
+	if err := store.pruneArchiveRevisions(job, 0); err == nil {
+		t.Fatal("invalid explicit limit accepted")
+	}
+	if err := store.pruneArchiveRevisions(job, 64); err != nil {
+		t.Fatal(err)
+	}
+	history, err = store.listArchiveRevisions(job)
+	if err != nil || len(history) != maxArchiveRevisions {
+		t.Fatalf("raising limit changed history: %d %v", len(history), err)
+	}
+	newest := history[0].ID
+	if err := store.pruneArchiveRevisions(job, 2); err != nil {
+		t.Fatal(err)
+	}
+	history, err = store.listArchiveRevisions(job)
+	if err != nil || len(history) != 2 || history[0].ID != newest {
+		t.Fatalf("configured limit did not retain newest: %+v %v", history, err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "index.html")); err != nil {
+		t.Fatal("pruning touched live archive")
+	}
 }

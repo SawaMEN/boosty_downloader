@@ -414,6 +414,11 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			}
 		}
 	}
+	// The stage now contains hardlinked old files plus newly written raw
+	// metadata. Refresh the accounting before any media transfer begins.
+	if err := reconcileArchiveStorageBudget(ctx); err != nil {
+		return fmt.Errorf("квота перед загрузкой медиа: %w", err)
+	}
 	rawMedia := boosty.ExtractMedia(p)
 	for _, m := range rawMedia {
 		if m.Type == "file" && !j.IncludeFiles || m.Type == "ok_video" && !j.IncludeVideos || m.Type == "audio_file" && !j.IncludeAudio {
@@ -521,8 +526,19 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	if e = writeAtomic(filepath.Join(folder, "index.html"), html.Bytes()); e != nil {
 		return e
 	}
+	// Include manifest, HTML, deduplication and temporary files that were
+	// not charged through guardedWriter. No media budget scope is active.
+	if err := reconcileArchiveStorageBudget(ctx); err != nil {
+		return fmt.Errorf("квота перед публикацией архива: %w", err)
+	}
 	if err := a.store.guardArchiveFileMutation(*j); err != nil {
 		return fmt.Errorf("unsafe archive generation before directory publication: %w", err)
+	}
+	// Manifest/HTML generation and other workers may have consumed the
+	// physical reserve since the last media write. Do not replace a live
+	// archive after a failed final storage check.
+	if err := checkStorageBudget(ctx, 0); err != nil {
+		return fmt.Errorf("публикация архива прервана: %w", err)
 	}
 	published, err := a.store.publishArchiveUpdate(*j, stage)
 	if err != nil {
@@ -538,7 +554,8 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 			fmt.Fprintf(os.Stderr, "revisions dedup: %v\n", err)
 		}
 	}
-	if err := a.store.pruneArchiveRevisions(*j); err != nil {
+	retention := a.accounts.policy()
+	if err := a.store.pruneArchiveRevisions(*j, retention.RevisionLimit, retention.revisionMaxGiB()); err != nil {
 		fmt.Fprintf(os.Stderr, "revisions cleanup: %v\n", err)
 	}
 	// Reclaim only after the current revision and history retention commit.

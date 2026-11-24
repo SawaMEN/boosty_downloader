@@ -160,6 +160,9 @@ func newStorageMode(root, keyString string, sqlPrimary bool, checkpoint func(str
 	if e = cleanupAbandonedVideoStages(root); e != nil {
 		return nil, fmt.Errorf("orphaned video staging cleanup failed: %w", e)
 	}
+	if e = cleanupAbandonedRevisionStages(root); e != nil {
+		return nil, fmt.Errorf("orphaned revision staging cleanup failed: %w", e)
+	}
 	if sqlPrimary {
 		return openSQLPrimaryStorageLocked(root, key, checkpoint)
 	}
