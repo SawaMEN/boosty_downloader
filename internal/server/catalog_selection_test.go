@@ -16,7 +16,7 @@ func catalogScaleFixture(n int) []catalogItem {
 	for i := range items {
 		items[i] = catalogItem{Job: Job{
 			ID: fmt.Sprintf("%024x", i), Title: fmt.Sprintf("Название %03d", i%127),
-			Author: fmt.Sprintf("Author-%02d", i%17),
+			Author:    fmt.Sprintf("Author-%02d", i%17),
 			CreatedAt: base.Add(time.Duration(i%43) * time.Minute),
 			UpdatedAt: base.Add(time.Duration(i%53) * time.Minute),
 		}}

@@ -61,8 +61,8 @@ func (h *catalogRankHeap) Pop() any {
 
 type catalogSelection struct {
 	page, perPage, total, limit int
-	orderBy                    string
-	rank                       catalogRankHeap
+	orderBy                     string
+	rank                        catalogRankHeap
 }
 
 func newCatalogSelection(page, perPage int, orderBy, direction string) *catalogSelection {
