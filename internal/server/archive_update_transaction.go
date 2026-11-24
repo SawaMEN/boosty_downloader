@@ -492,21 +492,7 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 		// journal from the JSON generation. A committed SQL transaction
 		// may still have the old jobs.json if the mirror write failed.
 		if s.primary != nil {
-			if err := recoverMetadataPair(s.root); err != nil {
-				return false, s.sqlitePrimaryQuarantineLocked(err)
-			}
-			if err := recoverSQLitePrimaryCommitLocked(s.root); err != nil {
-				return false, s.sqlitePrimaryQuarantineLocked(err)
-			}
-			jobs, err := sqliteShadowReadJobs(filepath.Join(s.root, "jobs.json"))
-			if err != nil {
-				return false, s.sqlitePrimaryQuarantineLocked(err)
-			}
-			imports, err := sqliteShadowReadImports(filepath.Join(s.root, "imports.json"))
-			if err != nil {
-				return false, s.sqlitePrimaryQuarantineLocked(err)
-			}
-			if err := s.primary.verifyJSONParity(context.Background(), jobs, imports); err != nil {
+			if err := s.recoverSQLFileCommitLocked(); err != nil {
 				return false, s.sqlitePrimaryQuarantineLocked(err)
 			}
 		}
@@ -514,12 +500,12 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 			s.primaryFatal = fmt.Errorf("archive update recovery failed: %w (initial error: %v)", err, cause)
 			return false, s.primaryFatal
 		}
-		actual, err := videoPublicationReadFile(s.root, "jobs.json", 64<<20)
+		actualHash, err := hashFileTransactionMetadata(s.root, "jobs.json", 64<<20)
 		if err != nil {
 			s.primaryFatal = fmt.Errorf("archive update metadata cannot be classified: %w", err)
 			return false, s.primaryFatal
 		}
-		switch metadataDigest(actual) {
+		switch actualHash {
 		case afterHash:
 			s.jobs[job.ID] = &next
 			s.notifySQLiteShadowLocked()
@@ -535,6 +521,7 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 			return false, s.primaryFatal
 		}
 	}
+	s.invalidateMetadataEpochLocked()
 	j, err := s.archiveUpdatePrepare(job, stage, beforeHash, afterHash)
 	if err != nil {
 		if _, found, readErr := archiveUpdateReadJournal(s.root); found || readErr != nil {
