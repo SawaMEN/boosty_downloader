@@ -262,54 +262,12 @@ func (m *sqliteMetadata) reconcileWithExtra(ctx context.Context, jobs map[string
 	}
 	defer tx.Rollback()
 
-	stored, err := sqliteShadowSQLJobs(ctx, tx)
+	plan, err := sqlitePlanShadowDelta(ctx, tx, jobs, imports)
 	if err != nil {
 		return err
 	}
-	storedImports, err := sqliteShadowSQLImports(ctx, tx)
-	if err != nil {
+	if err := plan.apply(ctx, tx); err != nil {
 		return err
-	}
-
-	for id, want := range jobs {
-		have, exists := stored[id]
-		if !exists {
-			if err := sqliteApplyArchive(ctx, tx, sqliteArchiveChange{After: want}); err != nil {
-				return err
-			}
-		} else if !sqliteShadowEqual(have, want) {
-			if err := sqliteApplyArchive(ctx, tx, sqliteArchiveChange{Before: &have, After: want}); err != nil {
-				return err
-			}
-		}
-		delete(stored, id)
-	}
-	for id, previous := range stored {
-		// Purge only SQL metadata of jobs already purged from JSON. Never
-		// unlink media blobs, CAS objects or filesystem revision snapshots.
-		if _, err := tx.ExecContext(ctx, "DELETE FROM owner_archives WHERE archive_id=? AND owner_id=?",
-			id, previous.OwnerID); err != nil {
-			return err
-		}
-	}
-	for id, want := range imports {
-		have, exists := storedImports[id]
-		if !exists {
-			if err := sqliteApplyImport(ctx, tx, sqliteImportChange{After: want}); err != nil {
-				return err
-			}
-		} else if !sqliteShadowEqual(have, want) {
-			if err := sqliteApplyImport(ctx, tx, sqliteImportChange{Before: &have, After: want}); err != nil {
-				return err
-			}
-		}
-		delete(storedImports, id)
-	}
-	for id, old := range storedImports {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM author_imports WHERE import_id=? AND owner_id=?",
-			id, old.OwnerID); err != nil {
-			return err
-		}
 	}
 	if extra != nil {
 		if err := extra(ctx, tx); err != nil {

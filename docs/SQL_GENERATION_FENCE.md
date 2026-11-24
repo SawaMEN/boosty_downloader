@@ -137,3 +137,13 @@ Any extra hook, changed byte, or malformed input retains the ordinary path
 or fails closed. Identical ACL slices skip only construction of the grant
 delta after the existing persisted ACL has been validated. This is not an
 authorization cache, nor a change to recovery or durability of real writes.
+
+## Streaming shadow reconciliation plan
+
+The non-authoritative shadow still performs complete ordered SQL validation
+on every periodic sweep, before any change or extra callback. It retains
+only seen desired IDs, changed before/after records and deletion identities,
+not a second full SQL inventory. The complete plan is built and applied
+inside the same transaction; a late invalid row cannot cause partial
+publication. Archive writes precede archive removals, then imports, as
+before. No change to authority, access decisions, timer or recovery policy.
