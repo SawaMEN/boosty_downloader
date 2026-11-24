@@ -91,6 +91,7 @@ HTTPS обязателен. Для доверенного сертификата
 - [SQLite и миграция](docs/DATABASE.md)
 - [Архитектура](docs/REFERENCE_ARCHITECTURE.md)
 - [План работ](docs/ROADMAP.md)
+- [Проверки перед стабильным выпуском](docs/RELEASE_CHECKLIST.md)
 - [Исследование](docs/RESEARCH.md)
 
 При Native вместе с сервером устанавливается `boosty-dbcheck` для офлайн-проверки SQLite и архивов. Для разработчиков: `go test -race ./...`, `go vet ./...`, `bash -n install.sh`. CI проверяет Go, Docker и оба варианта установки.
