@@ -57,10 +57,11 @@ type accountFile struct {
 	TrashPolicy        *TrashPolicy               `json:"trashPolicy,omitempty"`
 }
 type Accounts struct {
-	mu     sync.Mutex
-	path   string
-	data   accountFile
-	failed map[string][]time.Time
+	mu          sync.Mutex
+	path        string
+	data        accountFile
+	failed      map[string][]time.Time
+	failedSweep time.Time
 }
 
 func passwordKey(pass string, salt []byte, count int) []byte {
@@ -180,7 +181,11 @@ func (a *Accounts) register(user, password string) (Account, error) {
 	}
 	acc := Account{ID: id, Username: user, Password: hash, CreatedAt: time.Now().UTC()}
 	a.data.Accounts[id] = acc
-	return acc, a.saveLocked()
+	if err := a.saveLocked(); err != nil {
+		delete(a.data.Accounts, id)
+		return Account{}, err
+	}
+	return acc, nil
 }
 func (a *Accounts) authenticate(user, password, peer string) (Account, error) {
 	if host, _, e := net.SplitHostPort(peer); e == nil {
@@ -189,25 +194,21 @@ func (a *Accounts) authenticate(user, password, peer string) (Account, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
-	filtered := a.failed[peer][:0]
-	for _, v := range a.failed[peer] {
-		if now.Sub(v) < 15*time.Minute {
-			filtered = append(filtered, v)
-		}
-	}
-	a.failed[peer] = filtered
-	if len(filtered) >= 10 {
+	if !a.allowLoginPeerLocked(peer, now) {
 		return Account{}, errors.New("слишком много попыток входа; повторите позже")
 	}
-	for _, u := range a.data.Accounts {
-		if strings.EqualFold(u.Username, user) && verifyPassword(password, u.Password) {
-			delete(a.failed, peer)
-			return u, nil
+	if len(password) >= 12 && len(password) <= 1024 && usernamePattern.MatchString(user) {
+		for _, u := range a.data.Accounts {
+			if strings.EqualFold(u.Username, user) && verifyPassword(password, u.Password) {
+				delete(a.failed, peer)
+				return u, nil
+			}
 		}
 	}
 	a.failed[peer] = append(a.failed[peer], now)
 	return Account{}, errors.New("неверный логин или пароль")
 }
+
 func (a *Accounts) session(id string) (string, error) {
 	token, err := randomHex(32)
 	if err != nil {
@@ -217,8 +218,14 @@ func (a *Accounts) session(id string) (string, error) {
 	key := hex.EncodeToString(digest[:])
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if _, ok := a.data.Accounts[id]; !ok {
+		return "", errors.New("учётная запись отсутствует")
+	}
+	before := a.data.Sessions
+	a.data.Sessions = boundedLoginSessions(before, a.data.Accounts, id, time.Now().UTC())
 	a.data.Sessions[key] = LoginSession{UserID: id, Expires: time.Now().UTC().Add(sessionTTL)}
 	if err = a.saveLocked(); err != nil {
+		a.data.Sessions = before
 		return "", err
 	}
 	return token, nil
@@ -248,8 +255,13 @@ func (a *Accounts) logout(token string) error {
 func (a *Accounts) setRegistration(open bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	before := a.data.RegistrationOpen
 	a.data.RegistrationOpen = open
-	return a.saveLocked()
+	if err := a.saveLocked(); err != nil {
+		a.data.RegistrationOpen = before
+		return err
+	}
+	return nil
 }
 func (a *Accounts) registration() bool {
 	a.mu.Lock()
