@@ -45,12 +45,16 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 	nodes := 0
 	cursor := ""
 	reason := ""
-	for len(pages) < maxCommentPages {
+	requests := 0
+	replyExpansionAttempted := false
+	for requests < maxCommentPages {
+		firstPage := len(pages) == 0
 		endpoint := route
 		if cursor != "" {
 			endpoint += "&offset=" + url.QueryEscape(cursor)
 		}
 		var raw json.RawMessage
+		requests++
 		if err := c.doJSON(ctx, endpoint, &raw); err != nil {
 			if len(pages) == 0 || ctx.Err() != nil {
 				return CommentResult{}, err
@@ -72,6 +76,27 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 		}
 		pages = append(pages, raw)
 		rawBytes += len(raw)
+		// The existing endpoint already accepts reply_limit. Try a larger
+		// value once, only on an explicit gap at the old reply limit.
+		if !replyExpansionAttempted && requests < maxCommentPages && needsCommentReplyExpansion(page.Data) {
+			replyExpansionAttempted = true
+			requests++
+			var expandedRaw json.RawMessage
+			expandedEndpoint := strings.Replace(endpoint, "&reply_limit=100", "&reply_limit=300", 1)
+			if err := c.doJSON(ctx, expandedEndpoint, &expandedRaw); err == nil {
+				var expanded commentPage
+				if len(expandedRaw) <= maxCommentRawBytes-rawBytes &&
+					json.Unmarshal(expandedRaw, &expanded) == nil && expanded.Data != nil {
+					pages = append(pages, expandedRaw)
+					rawBytes += len(expandedRaw)
+					if safeCommentReplyExpansion(page, expanded) {
+						page = expanded
+					}
+				}
+			} else if ctx.Err() != nil {
+				return CommentResult{}, err
+			}
+		}
 		// Validate the entire page before accepting any new root, so a
 		// repeated or overlapping response cannot inflate Received.
 		pageIDs := make(map[string]bool)
@@ -84,7 +109,7 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 			}
 			pageIDs[node.ID] = true
 		})
-		if len(pages) > 1 && (overlap || truncated || nodes+pageNodes > MaxCommentTreeNodes) {
+		if !firstPage && (overlap || truncated || nodes+pageNodes > MaxCommentTreeNodes) {
 			reason = "Boosty вернул повторяющуюся или слишком большую страницу комментариев"
 			break
 		}
@@ -98,13 +123,13 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 			break
 		}
 		if truncated || nodes >= MaxCommentTreeNodes {
-			if truncated || commentPageHasMore(page.Extra) || ((len(pages) > 1 || len(page.Data) >= limit) && page.Extra.IsLast == nil) {
+			if truncated || commentPageHasMore(page.Extra) || ((!firstPage || len(page.Data) >= limit) && page.Extra.IsLast == nil) {
 				reason = "Достигнут предел дерева комментариев"
 			}
 			break
 		}
 		if !commentPageHasMore(page.Extra) {
-			if (len(pages) > 1 || len(page.Data) >= limit) && page.Extra.IsLast == nil {
+			if (!firstPage || len(page.Data) >= limit) && page.Extra.IsLast == nil {
 				reason = "Boosty не подтвердил последнюю страницу комментариев"
 			}
 			break
@@ -115,7 +140,7 @@ func (c *Client) Comments(ctx context.Context, author, id string, expected int) 
 			reason = "Boosty не подтвердил последнюю страницу комментариев"
 			break
 		}
-		if len(pages) == maxCommentPages {
+		if requests == maxCommentPages {
 			reason = "Достигнут предел страниц комментариев"
 			break
 		}
