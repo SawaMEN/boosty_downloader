@@ -18,6 +18,8 @@ func TestStorageMetadataDirectAccessInventory(t *testing.T) {
 	expected := []string{
 		"archive_update_transaction.go:archiveUpdatePrepare",
 		"archive_update_transaction.go:publishArchiveUpdate",
+		"catalog_json_page.go:catalogJSONPage",
+		"import_page_batch.go:commitImportPage",
 		"library_management.go:changeShare",
 		"library_management.go:claimQueued",
 		"library_management.go:createUniqueJob",

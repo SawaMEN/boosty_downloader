@@ -534,7 +534,13 @@ func (a *App) importWorker() {
 			if !ok {
 				continue
 			}
-			if err := a.runImport(&v); err != nil {
+			err := a.runImport(&v)
+			if v.State == "done" {
+				// The terminal page and its jobs already committed together.
+				// A shutdown during queue delivery must not replay that page.
+				continue
+			}
+			if err != nil {
 				if errors.Is(err, errImportCanceled) {
 					continue
 				}
@@ -630,59 +636,36 @@ func (a *App) runImport(v *AuthorImport) error {
 		if len(feed.Posts) == 0 {
 			return nil
 		}
-		for _, p := range feed.Posts {
-			if a.store.importCanceled(v.ID) {
-				return errImportCanceled
-			}
-			if v.Scanned >= importHardLimit || a.importLimit(*v) > 0 && v.Scanned >= a.importLimit(*v) {
-				v.Limited = true
-				break
-			}
-			v.Scanned++
-			if !p.HasAccess {
-				v.Skipped++
-				continue
-			}
-			b := make([]byte, 12)
-			if _, err = rand.Read(b); err != nil {
-				return err
-			}
-			j := Job{ID: hex.EncodeToString(b), OwnerID: v.OwnerID, Author: v.Author, PostID: p.ID, URL: boosty.PostURLFor(v.Author, p.ID), Title: p.Title, State: "queued", CreatedAt: time.Now().UTC(), IncludeComments: v.IncludeComments, IncludeFiles: v.IncludeFiles, IncludeVideos: v.IncludeVideos, IncludeAudio: v.IncludeAudio, AutoSync: v.AutoSync, Subscription: v.Subscription}
-			job, created, e := a.store.createUniqueJob(j)
-			if e != nil {
-				return e
-			}
-			if created {
-				v.Queued++
-				if !a.queueJob(job.ID) {
-					return a.ctx.Err()
-				}
-			} else {
-				v.Skipped++
-				if v.Incremental {
-					// Existing newest-to-oldest posts mark the catch-up boundary.
-					// Later manual full reimport can fill any older gaps.
-					return a.store.updateImport(*v)
-				}
-			}
-		}
-		if err := a.store.updateImport(*v); err != nil {
+		if err := a.ctx.Err(); err != nil {
 			return err
 		}
-		if v.Limited {
-			return nil
+		if !a.accounts.allowed(v.OwnerID, "importAuthors") || !a.accounts.allowed(v.OwnerID, "createArchives") || (v.Incremental && !a.accounts.allowed(v.OwnerID, "autoArchive")) {
+			return errors.New("функция отключена администратором")
 		}
-		if !feed.HasMore || feed.NextOffset == "" {
-			return nil
+		if !c.HasToken() && a.feedSource == nil {
+			return errors.New("аккаунт Boosty отключён")
 		}
-		if len(feed.NextOffset) > 200 || seenOffsets[feed.NextOffset] {
-			return errors.New("Boosty возвратил повторяющийся offset списка постов")
+		limit := a.importLimit(*v)
+		if limit <= 0 || limit > importHardLimit {
+			limit = importHardLimit
 		}
-		seenOffsets[feed.NextOffset] = true
-		v.NextOffset = feed.NextOffset
-		if err := a.store.updateImport(*v); err != nil {
+		invalidOffset := len(feed.NextOffset) > 200 || strings.ContainsAny(feed.NextOffset, "\r\n") || seenOffsets[feed.NextOffset]
+		next, ids, err := a.store.commitImportPage(*v, feed, limit, invalidOffset)
+		if err != nil {
 			return err
 		}
+		*v = next
+		// The persistent queue is authoritative. A restart delivers every
+		// queued job even when shutdown interrupted this in-memory delivery.
+		for _, id := range ids {
+			if !a.queueJob(id) {
+				return a.ctx.Err()
+			}
+		}
+		if v.State == "done" {
+			return nil
+		}
+		seenOffsets[v.NextOffset] = true
 		select {
 		case <-a.ctx.Done():
 			return a.ctx.Err()

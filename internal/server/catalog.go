@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -92,87 +91,27 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SQLite is only an optional candidate index. Every returned job still
-	// comes from authoritative JSON and passes the existing ACL/filter logic.
+	filter := catalogFilter{viewer: viewer.ID, scope: scope, query: query, author: author, status: status}
+	if scope == "shared" {
+		filter.ownerNames = a.accounts.catalogOwnerNames()
+	}
+	selection := newCatalogSelection(page, perPage, orderBy, direction)
+	// In default JSON mode a shallow page can be selected directly from
+	// the locked authoritative map, copying only returned records.
+	if !a.catalogSQLReads {
+		if result, ok := a.store.catalogJSONPage(filter, selection); ok {
+			reply(w, 200, result)
+			return
+		}
+	}
+
+	// SQL candidate parity and deep pages retain the existing detached
+	// snapshot path. All candidates still pass the same ACL and filters.
 	jobs, _ := a.store.catalogJobs(r.Context(), viewer.ID, scope, a.catalogSQLReads)
-	items := make([]catalogItem, 0)
 	for _, job := range jobs {
-		if scope == "mine" {
-			if job.OwnerID != viewer.ID {
-				continue
-			}
-		} else {
-			if job.OwnerID == viewer.ID || (job.State != "done" && job.State != "partial") {
-				continue
-			}
-			if !job.SharedForAll && !contains(job.SharedWith, viewer.ID) {
-				continue
-			}
-		}
-		if author != "" && !strings.Contains(strings.ToLower(job.Author), author) {
-			continue
-		}
-		if status != "" && job.State != status {
-			continue
-		}
-		owner := ""
-		if scope == "shared" {
-			owner = a.accounts.username(job.OwnerID)
-		}
-		if query != "" && !strings.Contains(strings.ToLower(job.Title), query) &&
-			!strings.Contains(strings.ToLower(job.Author), query) &&
-			!(scope == "shared" && strings.Contains(strings.ToLower(owner), query)) {
-			continue
-		}
-		if scope == "shared" {
-			job.SharedWith = nil
-			job.Subscription = nil
-			job.OwnerID = ""
-			job.Error = ""
-		}
-		items = append(items, catalogItem{Job: job, OwnerName: owner})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		left, right := items[i], items[j]
-		comparison := 0
-		switch orderBy {
-		case "created":
-			if left.CreatedAt.Before(right.CreatedAt) {
-				comparison = -1
-			} else if left.CreatedAt.After(right.CreatedAt) {
-				comparison = 1
-			}
-		case "title":
-			comparison = strings.Compare(strings.ToLower(left.Title), strings.ToLower(right.Title))
-		case "author":
-			comparison = strings.Compare(strings.ToLower(left.Author), strings.ToLower(right.Author))
-		default:
-			if catalogDate(left.Job).Before(catalogDate(right.Job)) {
-				comparison = -1
-			} else if catalogDate(left.Job).After(catalogDate(right.Job)) {
-				comparison = 1
-			}
-		}
-		if comparison == 0 {
-			return left.ID < right.ID
-		}
-		if direction == "asc" {
-			return comparison < 0
-		}
-		return comparison > 0
-	})
-	total := len(items)
-	pages := (total + perPage - 1) / perPage
-	start := total
-	if page-1 <= total/perPage {
-		start = (page - 1) * perPage
-		if start > total {
-			start = total
+		if item, ok := filter.item(job); ok {
+			selection.add(item)
 		}
 	}
-	end := start + perPage
-	if end > total {
-		end = total
-	}
-	reply(w, 200, catalogPage{Items: items[start:end], Total: total, Page: page, PerPage: perPage, Pages: pages})
+	reply(w, 200, selection.result())
 }
