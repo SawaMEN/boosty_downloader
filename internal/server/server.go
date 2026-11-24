@@ -722,17 +722,13 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, fmt.Sprintf("CDN HTTP %d", res.StatusCode))
 		return
 	}
-	for _, key := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
+	for _, key := range []string{"Content-Length", "Content-Range", "Accept-Ranges"} {
 		if v := res.Header.Get(key); v != "" {
 			w.Header().Set(key, v)
 		}
 	}
-	if r.URL.Query().Get("inline") == "1" && (m.Type == "ok_video" || m.Type == "audio_file" || m.Type == "image") {
-		w.Header().Set("Content-Disposition", "inline")
-	} else {
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", boosty.MediaName(m, i)))
-	}
-	w.Header().Set("Cache-Control", "no-store")
+	setIsolatedMediaHeaders(w.Header(), boosty.MediaName(m, i), res.Header.Get("Content-Type"),
+		m.Type, r.URL.Query().Get("inline") == "1")
 	w.WriteHeader(res.StatusCode)
 	_, _ = io.Copy(w, res.Body)
 }
