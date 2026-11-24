@@ -103,7 +103,10 @@
             </div>
             <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminUpdateStatusRefresh">Обновить сведения</button></div>
             <div id="adminUpdateReport" class="video-diagnostics" role="status"></div>
-            <h3>Видео: FFmpeg и аппаратное ускорение</h3>
+            <h3>Видео: загрузка и обработка</h3>
+            <div class="policy-controls">
+              <label>Потоки загрузки HLS/DASH<select id="adminSegmentWorkers"><option value="0">По настройкам сервера (по умолчанию 1)</option><option value="1">1 — минимальная нагрузка</option><option value="2">2 — параллельная загрузка (экспериментально)</option></select><small>Применяется к новым заданиям архивирования. При малом остатке лимита используется один поток. Не относится к перекодированию.</small></label>
+            </div>
             <p class="muted small">На основе подхода Immich: источник всегда сохраняется отдельно. Для Ryzen 5 5600H / Vega 7 предпочтителен VA-API и H.264, NVIDIA использует NVENC, Intel — QSV. Без проверки драйвера доступность не гарантируется.</p>
             <div class="policy-controls">
               <label class="check"><input type="checkbox" id="adminVideoEnabled"><span><strong>Разрешить создание дополнительных версий видео</strong><small>Исходное видео не удаляется и не перезаписывается.</small></span></label>

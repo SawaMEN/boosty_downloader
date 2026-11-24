@@ -76,6 +76,7 @@ async function loadAdminPanel(){
     $('adminDeduplicateMedia').checked=p.deduplicateMedia;
     $('adminMinFreeGiB').value=String(p.minFreeGiB??1);
     $('adminMaxUserGiB').value=String(p.maxUserGiB??0);
+    $('adminSegmentWorkers').value=String(p.segmentWorkers??0);
     $('adminRevisionLimit').value=String(p.revisionLimit??8);
     $('adminRevisionMaxGiB').value=String(p.revisionMaxGiB??0);
     loadAdminStorage();
@@ -137,6 +138,7 @@ async function savePolicy(){
     syncIntervalHours:Number($('adminSyncHours').value),maxScanPosts:Number($('adminMaxScan').value),maxImportPosts:Number($('adminMaxImport').value),
     compressionLevel:Number($('adminCompressionLevel').value),deduplicateMedia:$('adminDeduplicateMedia').checked,
     minFreeGiB:Number($('adminMinFreeGiB').value),maxUserGiB:Number($('adminMaxUserGiB').value),revisionLimit:Number($('adminRevisionLimit').value),revisionMaxGiB:Number($('adminRevisionMaxGiB').value),
+    segmentWorkers:Number($('adminSegmentWorkers').value),
     video:{enabled:$('adminVideoEnabled').checked,automatic:$('adminVideoAutomatic').checked,backend:$('adminVideoBackend').value,
       codec:$('adminVideoCodec').value,quality:Number($('adminVideoQuality').value),maxHeight:Number($('adminVideoHeight').value),
       fallbackCpu:$('adminVideoFallback').checked,onlySmaller:$('adminVideoOnlySmaller').checked},

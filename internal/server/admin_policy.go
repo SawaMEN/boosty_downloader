@@ -78,6 +78,9 @@ func (a *Accounts) initializePolicy(initial time.Duration) error {
 		limit := 0
 		a.data.MaxUserGiB = &limit
 	}
+	if a.data.SegmentWorkers != nil && !validSegmentWorkers(*a.data.SegmentWorkers) {
+		return errors.New("некорректное сохранённое число потоков сегментов")
+	}
 	if a.data.RevisionLimit == nil {
 		limit := maxArchiveRevisions
 		a.data.RevisionLimit = &limit
@@ -151,6 +154,7 @@ type AdminPolicy struct {
 	DeduplicateMedia  bool            `json:"deduplicateMedia"`
 	MinFreeGiB        int             `json:"minFreeGiB"`
 	MaxUserGiB        int             `json:"maxUserGiB"`
+	SegmentWorkers    *int            `json:"segmentWorkers"`
 	RevisionLimit     int             `json:"revisionLimit"`
 	RevisionMaxGiB    *int            `json:"revisionMaxGiB"`
 	Video             VideoPolicy     `json:"video"`
@@ -188,6 +192,10 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.MaxUserGiB != nil {
 		maxUser = *a.data.MaxUserGiB
 	}
+	workers := 0
+	if a.data.SegmentWorkers != nil {
+		workers = *a.data.SegmentWorkers
+	}
 	revisionLimit := maxArchiveRevisions
 	if a.data.RevisionLimit != nil {
 		revisionLimit = *a.data.RevisionLimit
@@ -204,7 +212,7 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.TrashPolicy != nil {
 		trash = *a.data.TrashPolicy
 	}
-	return AdminPolicy{Trash: trash, Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, RevisionLimit: revisionLimit, RevisionMaxGiB: &revisionMaxGiB, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
+	return AdminPolicy{SegmentWorkers: &workers, Trash: trash, Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, RevisionLimit: revisionLimit, RevisionMaxGiB: &revisionMaxGiB, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
 }
 
 func validatePolicy(p AdminPolicy) error {
@@ -216,6 +224,9 @@ func validatePolicy(p AdminPolicy) error {
 	}
 	if err := validateVideoPolicy(p.Video); err != nil {
 		return err
+	}
+	if p.SegmentWorkers != nil && !validSegmentWorkers(*p.SegmentWorkers) {
+		return errors.New("потоки сегментов: 0, 1 или 2")
 	}
 	if p.MinFreeGiB < 0 || p.MinFreeGiB > 1024 {
 		return errors.New("резерв свободного места: от 0 до 1024 ГиБ")
@@ -269,6 +280,10 @@ func (a *Accounts) changePolicy(p AdminPolicy) error {
 	a.data.DeduplicateMedia = &p.DeduplicateMedia
 	a.data.MinFreeGiB = &p.MinFreeGiB
 	a.data.MaxUserGiB = &p.MaxUserGiB
+	if p.SegmentWorkers != nil {
+		value := *p.SegmentWorkers
+		a.data.SegmentWorkers = &value
+	}
 	if p.RevisionLimit != 0 {
 		a.data.RevisionLimit = &p.RevisionLimit
 	}

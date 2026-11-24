@@ -313,6 +313,7 @@ func (a *App) archive(ctx context.Context, j *Job) error {
 	defer unlockOwner()
 	policy := a.accounts.policy()
 	ctx = withStorageBudget(ctx, a.store.root, j.OwnerID, policy.MinFreeGiB, policy.MaxUserGiB)
+	ctx = withSegmentWorkers(ctx, policy.SegmentWorkers)
 	if err := checkStorageBudget(ctx, 0); err != nil {
 		return err
 	}
