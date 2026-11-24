@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const verifiedSegmentCacheMaxBytes int64 = 256 << 20
@@ -33,6 +34,7 @@ type cachedVideoSegment struct {
 }
 
 type verifiedSegmentCache struct {
+	mu      sync.Mutex
 	parent  string
 	dir     string
 	entries map[videoSegmentKey]cachedVideoSegment
@@ -47,6 +49,8 @@ type verifiedSegmentCache struct {
 func withVerifiedSegmentCache(ctx context.Context, dest string) (context.Context, func()) {
 	cache := &verifiedSegmentCache{parent: filepath.Dir(dest)}
 	return context.WithValue(ctx, verifiedSegmentCacheKey{}, cache), func() {
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
 		cache.closed = true
 		if cache.dir != "" && os.RemoveAll(cache.dir) == nil {
 			releaseStorageBudget(withoutMediaStageBudget(ctx), cache.bytes)
@@ -107,8 +111,13 @@ func segmentResponseURL(res *http.Response, raw string) string {
 
 func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source string, res *http.Response, n, total int64) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	tag := strongSegmentETag(res.Header)
-	if cache == nil || cache.closed || tag == "" || !segmentIdentityEncoding(res.Header) || n <= 0 ||
+	if cache.closed || tag == "" || !segmentIdentityEncoding(res.Header) || n <= 0 ||
 		n > verifiedSegmentCacheMaxBytes-cache.bytes ||
 		len(cache.entries) >= verifiedSegmentCacheMaxEntries {
 		return
@@ -159,7 +168,12 @@ func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source stri
 // unexpected range or content encoding, then use the normal full download.
 func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmentKey, path string, budget int64) (int64, bool) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
-	if cache == nil || cache.closed {
+	if cache == nil {
+		return 0, false
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.closed {
 		return 0, false
 	}
 	item, ok := cache.entries[key]

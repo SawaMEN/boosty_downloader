@@ -402,32 +402,29 @@ func fetchDASHTrack(ctx context.Context, fetch mediaFetcher, tr dashTrack, dir, 
 	// to the local ISO BMFF track. The FFmpeg process never receives a URL.
 	defer output.Close()
 	links := append([]string{tr.init}, tr.segments...)
-	for i, link := range links {
+	for i := 0; i < len(links); {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		temp := filepath.Join(dir, fmt.Sprintf(".dash-%s-%06d", name, i))
-		n, e := fetchHLSSegment(ctx, fetch, link, temp, *budget)
-		if e != nil {
-			return "", e
+		count := 1
+		if os.Getenv("BD_DASH_SEGMENT_WORKERS") == "2" && len(links)-i >= 2 && *budget >= 2*maxHLSSegmentBytes {
+			count = 2
 		}
-		*budget -= n
-		part, e := os.Open(temp)
-		if e != nil {
-			return "", e
+		var batch [2]dashSegmentTask
+		for n := 0; n < count; n++ {
+			batch[n] = dashSegmentTask{url: links[i+n], path: filepath.Join(dir, fmt.Sprintf(".dash-%s-%06d", name, i+n))}
 		}
-		_, cpErr := guardedCopy(ctx, output, part)
-		closeErr := part.Close()
-		removeErr := os.Remove(temp)
-		if removeErr == nil {
-			releaseStorageBudget(ctx, n)
+		sizes, err := fetchDASHSegmentBatch(ctx, fetch, batch[:count], *budget)
+		if err != nil {
+			return "", err
 		}
-		if cpErr != nil {
-			return "", cpErr
+		for n, task := range batch[:count] {
+			*budget -= sizes[n]
+			if err := appendDASHSegment(ctx, output, task.path, sizes[n]); err != nil {
+				return "", err
+			}
 		}
-		if closeErr != nil {
-			return "", closeErr
-		}
+		i += count
 	}
 	if err := output.Sync(); err != nil {
 		return "", err
