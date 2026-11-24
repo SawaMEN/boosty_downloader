@@ -281,4 +281,3 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	}
 	return size, digest, nil
 }
-
