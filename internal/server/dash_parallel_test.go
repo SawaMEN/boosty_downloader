@@ -61,8 +61,8 @@ func TestDASHParallelBatchCancellation(t *testing.T) {
 		close(stopped)
 		return nil, ctx.Err()
 	}
-	tasks := []dashSegmentTask{{url: "bad", path: filepath.Join(dir, "a")}, {url: "wait", path: filepath.Join(dir, "b")}}
-	if _, err := fetchDASHSegmentBatch(ctx, fetch, tasks, 2*maxHLSSegmentBytes); !mediaExpired(err) {
+	tasks := []mediaSegmentTask{{url: "bad", path: filepath.Join(dir, "a")}, {url: "wait", path: filepath.Join(dir, "b")}}
+	if _, err := fetchMediaSegmentBatch(ctx, fetch, tasks, 2*maxHLSSegmentBytes); !mediaExpired(err) {
 		t.Fatalf("lost original CDN error: %v", err)
 	}
 	select {
@@ -70,7 +70,7 @@ func TestDASHParallelBatchCancellation(t *testing.T) {
 	default:
 		t.Fatal("worker not joined")
 	}
-	if _, err := fetchDASHSegmentBatch(ctx, fetch, tasks, 2*maxHLSSegmentBytes-1); err == nil {
+	if _, err := fetchMediaSegmentBatch(ctx, fetch, tasks, 2*maxHLSSegmentBytes-1); err == nil {
 		t.Fatal("over-budget pair accepted")
 	}
 }

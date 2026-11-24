@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 )
 
-type dashSegmentTask struct {
-	url, path string
+type mediaSegmentTask struct {
+	url, path      string
+	offset, length int64
 }
 
-type dashSegmentResult struct {
+type mediaSegmentResult struct {
 	index int
 	size  int64
 	err   error
@@ -21,23 +22,23 @@ type dashSegmentResult struct {
 // At most two workers, both joined before returning. Each parallel task
 // receives the full maximum segment size only if both fit the remaining
 // archive budget. The existing disk-write gate accounts for staged bytes.
-func fetchDASHSegmentBatch(ctx context.Context, fetch mediaFetcher, tasks []dashSegmentTask, budget int64) ([2]int64, error) {
+func fetchMediaSegmentBatch(ctx context.Context, fetch mediaFetcher, tasks []mediaSegmentTask, budget int64) ([2]int64, error) {
 	var sizes [2]int64
 	if len(tasks) == 1 {
 		var err error
-		sizes[0], err = fetchHLSSegment(ctx, fetch, tasks[0].url, tasks[0].path, budget)
+		sizes[0], err = fetchHLSRangeSegment(ctx, fetch, tasks[0].url, tasks[0].path, budget, tasks[0].offset, tasks[0].length)
 		return sizes, err
 	}
 	if len(tasks) != 2 || budget < 2*maxHLSSegmentBytes {
-		return sizes, errors.New("DASH: недопустимый параллельный пакет")
+		return sizes, errors.New("недопустимый параллельный пакет медиасегментов")
 	}
 	child, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make(chan dashSegmentResult, 2)
+	results := make(chan mediaSegmentResult, 2)
 	for i, task := range tasks {
-		go func(i int, task dashSegmentTask) {
-			n, err := fetchHLSSegment(child, fetch, task.url, task.path, maxHLSSegmentBytes)
-			results <- dashSegmentResult{index: i, size: n, err: err}
+		go func(i int, task mediaSegmentTask) {
+			n, err := fetchHLSRangeSegment(child, fetch, task.url, task.path, maxHLSSegmentBytes, task.offset, task.length)
+			results <- mediaSegmentResult{index: i, size: n, err: err}
 		}(i, task)
 	}
 	var first error

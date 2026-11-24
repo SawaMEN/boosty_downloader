@@ -207,6 +207,33 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 	var playlist strings.Builder
 	playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:36000\n#EXT-X-MEDIA-SEQUENCE:0\n")
 	lastInitKey := ""
+	parallel := os.Getenv("BD_HLS_SEGMENT_WORKERS") == "2"
+	var batch [2]mediaSegmentTask
+	pending := 0
+	flush := func() error {
+		if pending == 0 {
+			return nil
+		}
+		sizes, err := fetchMediaSegmentBatch(ctx, fetch, batch[:pending], maxArchiveMediaSize-*total)
+		if err != nil {
+			return err
+		}
+		for _, n := range sizes[:pending] {
+			*total += n
+		}
+		pending = 0
+		return nil
+	}
+	enqueue := func(task mediaSegmentTask) error {
+		batch[pending] = task
+		pending++
+		// Reserve the maximum possible size for each outstanding request.
+		// Close to the limit, fetch sequentially with the exact remainder.
+		if !parallel || pending == len(batch) || maxArchiveMediaSize-*total < 2*maxHLSSegmentBytes {
+			return flush()
+		}
+		return nil
+	}
 	for i, part := range parts {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -217,11 +244,9 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 		initKey := fmt.Sprintf("%s:%d:%d", part.initURL, part.initOffset, part.initLength)
 		if part.initURL != "" && initKey != lastInitKey {
 			name := fmt.Sprintf("%s-init-%06d.mp4", prefix, i)
-			n, e := fetchHLSRangeSegment(ctx, fetch, part.initURL, filepath.Join(dir, name), maxArchiveMediaSize-*total, part.initOffset, part.initLength)
-			if e != nil {
-				return "", e
+			if err := enqueue(mediaSegmentTask{url: part.initURL, path: filepath.Join(dir, name), offset: part.initOffset, length: part.initLength}); err != nil {
+				return "", err
 			}
-			*total += n
 			fmt.Fprintf(&playlist, "#EXT-X-MAP:URI=%q\n", name)
 			lastInitKey = initKey
 		}
@@ -232,12 +257,13 @@ func stageHLSTrack(ctx context.Context, fetch mediaFetcher, dir, prefix string, 
 			ext = ".ts"
 		}
 		name := fmt.Sprintf("%s-segment-%06d%s", prefix, i, ext)
-		n, e := fetchHLSRangeSegment(ctx, fetch, part.url, filepath.Join(dir, name), maxArchiveMediaSize-*total, part.byteOffset, part.byteLength)
-		if e != nil {
-			return "", e
+		if err := enqueue(mediaSegmentTask{url: part.url, path: filepath.Join(dir, name), offset: part.byteOffset, length: part.byteLength}); err != nil {
+			return "", err
 		}
-		*total += n
 		fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%s\n", part.duration, name)
+	}
+	if err := flush(); err != nil {
+		return "", err
 	}
 	playlist.WriteString("#EXT-X-ENDLIST\n")
 	local := filepath.Join(dir, prefix+".m3u8")
