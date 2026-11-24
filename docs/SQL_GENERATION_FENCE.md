@@ -68,3 +68,11 @@ ACL changes no longer leave a newer timestamp behind on rollback. Creation
 rejects an unrelated existing ID rather than overwriting it. Batch operations,
 imports and special physical journals remain separate audit targets. This is
 not a cached parity proof.
+
+## Batch copy-on-write (12.4.31)
+
+Ordinary imports, combined scheduling and group trash now use a single
+batch persistence boundary. Duplicate IDs are rejected before mutation;
+rollback restores the exact previous pointers. Inputs and outputs are
+detached from storage-owned records. Physical archive journals are still
+separate. No cached parity or authorization fast path is enabled.

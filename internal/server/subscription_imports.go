@@ -276,23 +276,20 @@ func (s *Storage) createImports(imports []AuthorImport) ([]AuthorImport, error) 
 			ongoing[v.OwnerID+"/"+v.Author] = true
 		}
 	}
-	var added []AuthorImport
+	added := make([]AuthorImport, 0, len(imports))
+	ids := make(map[string]bool, len(imports))
 	for _, v := range imports {
 		if ongoing[v.OwnerID+"/"+v.Author] {
 			continue
 		}
-		ongoing[v.OwnerID+"/"+v.Author] = true
-		item := cloneStorageImport(v)
-		s.imports[v.ID] = &item
-		added = append(added, cloneStorageImport(item))
-	}
-	if len(added) == 0 {
-		return []AuthorImport{}, nil
-	}
-	if err := s.saveImportsLocked(); err != nil {
-		for _, v := range added {
-			delete(s.imports, v.ID)
+		if _, exists := s.imports[v.ID]; exists || ids[v.ID] {
+			return nil, errors.New("идентификатор импорта уже существует")
 		}
+		ids[v.ID] = true
+		ongoing[v.OwnerID+"/"+v.Author] = true
+		added = append(added, cloneStorageImport(v))
+	}
+	if err := s.replaceStorageBatchLocked(nil, added); err != nil {
 		return nil, err
 	}
 	return added, nil
@@ -310,14 +307,10 @@ func (s *Storage) cancelImport(owner, id string) error {
 	if v.State != "queued" && v.State != "running" {
 		return errors.New("импорт уже завершён")
 	}
-	old := *v
-	v.State = "canceled"
-	v.UpdatedAt = time.Now().UTC()
-	if err := s.saveImportsLocked(); err != nil {
-		*v = old
-		return err
-	}
-	return nil
+	next := *v
+	next.State = "canceled"
+	next.UpdatedAt = time.Now().UTC()
+	return s.replaceStorageBatchLocked(nil, []AuthorImport{next})
 }
 func (s *Storage) importCanceled(id string) bool {
 	s.mu.Lock()
@@ -371,26 +364,17 @@ func (s *Storage) setImportSchedule(owner, id string, enabled bool) error {
 	if v.State != "done" && v.State != "failed" {
 		return errors.New("изменить расписание можно после завершения поиска")
 	}
-	old := v.AutoSync
-	v.AutoSync = enabled
-	previous := make(map[string]bool)
-	for jobID, j := range s.jobs {
-		if j.OwnerID == owner && j.DeletedAt == nil && strings.EqualFold(j.Author, v.Author) {
-			previous[jobID] = j.AutoSync
-			j.AutoSync = enabled
+	next := *v
+	next.AutoSync = enabled
+	var jobs []Job
+	for _, j := range s.jobs {
+		if j.OwnerID == owner && j.DeletedAt == nil && strings.EqualFold(j.Author, v.Author) && j.AutoSync != enabled {
+			updated := *j
+			updated.AutoSync = enabled
+			jobs = append(jobs, updated)
 		}
 	}
-	rollback := func() {
-		v.AutoSync = old
-		for jobID, enabled := range previous {
-			s.jobs[jobID].AutoSync = enabled
-		}
-	}
-	if err := s.saveJobsImportsLocked(); err != nil {
-		rollback()
-		return err
-	}
-	return nil
+	return s.replaceStorageBatchLocked(jobs, []AuthorImport{next})
 }
 
 // scheduleDueImports reuses the latest import per author instead of creating
@@ -429,27 +413,25 @@ func (s *Storage) scheduleDueImportsAllowed(now time.Time, interval time.Duratio
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
-	backups := make([]AuthorImport, len(candidates))
-	ids := make([]string, 0, len(candidates))
-	for i, v := range candidates {
-		backups[i] = *v
-		v.State = "queued"
-		v.Error = ""
-		v.NextOffset = ""
-		v.Scanned, v.Queued, v.Skipped = 0, 0, 0
-		v.Limited = false
-		v.Incremental = true
-		v.UpdatedAt = now
-		// Keep the initial import limit intact; incremental scans use the admin cap.
-		ids = append(ids, v.ID)
-	}
-	if len(ids) == 0 {
+	if len(candidates) == 0 {
 		return nil, nil
 	}
-	if err := s.saveImportsLocked(); err != nil {
-		for i, v := range candidates {
-			*v = backups[i]
-		}
+	next := make([]AuthorImport, 0, len(candidates))
+	ids := make([]string, 0, len(candidates))
+	for _, v := range candidates {
+		item := *v
+		item.State = "queued"
+		item.Error = ""
+		item.NextOffset = ""
+		item.Scanned, item.Queued, item.Skipped = 0, 0, 0
+		item.Limited = false
+		item.Incremental = true
+		item.UpdatedAt = now
+		// Keep the initial import limit intact; incremental scans use the admin cap.
+		next = append(next, item)
+		ids = append(ids, item.ID)
+	}
+	if err := s.replaceStorageBatchLocked(nil, next); err != nil {
 		return nil, err
 	}
 	return ids, nil
@@ -518,14 +500,11 @@ func (s *Storage) updateImport(v AuthorImport) error {
 	if previous.State == "canceled" {
 		return errImportCanceled
 	}
-	v = cloneStorageImport(v)
-	v.UpdatedAt = time.Now().UTC()
-	s.imports[v.ID] = &v
-	if err := s.saveImportsLocked(); err != nil {
-		s.imports[v.ID] = previous
-		return err
+	if v.OwnerID != previous.OwnerID || v.Author != previous.Author {
+		return errors.New("идентичность импорта изменена")
 	}
-	return nil
+	v.UpdatedAt = time.Now().UTC()
+	return s.replaceStorageBatchLocked(nil, []AuthorImport{v})
 }
 func (s *Storage) claimImport(id string) (AuthorImport, bool) {
 	s.mu.Lock()
@@ -537,14 +516,13 @@ func (s *Storage) claimImport(id string) (AuthorImport, bool) {
 	if !ok || v.State != "queued" {
 		return AuthorImport{}, false
 	}
-	old := *v
-	v.State = "running"
-	v.UpdatedAt = time.Now().UTC()
-	if s.saveImportsLocked() != nil {
-		*v = old
+	next := *v
+	next.State = "running"
+	next.UpdatedAt = time.Now().UTC()
+	if s.replaceStorageBatchLocked(nil, []AuthorImport{next}) != nil {
 		return AuthorImport{}, false
 	}
-	return cloneStorageImport(*v), true
+	return cloneStorageImport(next), true
 }
 func (a *App) importWorker() {
 	for {

@@ -341,19 +341,17 @@ func (s *Storage) removeOwned(owner, id, author string) (int, error) {
 		return 0, errors.New("архив не найден")
 	}
 	now := time.Now().UTC()
-	previous := make([]Job, len(selected))
-	for i, j := range selected {
-		previous[i] = *j
-		j.DeletedAt = &now
-		j.AutoSync = false
-		j.SharedForAll = false
-		j.SharedWith = nil
-		j.UpdatedAt = now
+	next := make([]Job, 0, len(selected))
+	for _, j := range selected {
+		item := *j
+		item.DeletedAt = &now
+		item.AutoSync = false
+		item.SharedForAll = false
+		item.SharedWith = nil
+		item.UpdatedAt = now
+		next = append(next, item)
 	}
-	if err := s.saveJobsLocked(); err != nil {
-		for i, j := range selected {
-			*j = previous[i]
-		}
+	if err := s.replaceStorageBatchLocked(next, nil); err != nil {
 		return 0, err
 	}
 	return len(selected), nil
