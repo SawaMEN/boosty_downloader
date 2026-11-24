@@ -84,3 +84,12 @@ sequence. Their final metadata generation is classified by a streaming
 SHA-256 with no-follow file access and size/identity checks. Existing size
 policies are preserved. SQL export refuses a pending SQL-primary intent.
 This does not replace a full parity scan or enable a cached proof.
+
+## Cursor-local scan buffers
+
+Ordered archive and import scans reuse scalar Scan destinations and decode
+payload_json directly from sql.RawBytes before advancing the cursor. The
+Job/AuthorImport value is freshly decoded for every row, including optional
+fields and grants; no RawBytes or mutable record is retained across rows.
+All ordering, ownership, timestamp, ACL, orphan and inventory checks remain
+unchanged. This is an allocation optimization, not a cached parity proof.
