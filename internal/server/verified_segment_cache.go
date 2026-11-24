@@ -17,16 +17,24 @@ const verifiedSegmentCacheMaxEntries = 512
 
 type verifiedSegmentCacheKey struct{}
 
+type videoSegmentKey struct {
+	url    string
+	offset int64
+	length int64 // zero identifies a complete HTTP resource
+}
+
 type cachedVideoSegment struct {
-	name   string
-	etag   string
-	digest string
-	size   int64
+	name     string
+	etag     string
+	digest   string
+	finalURL string
+	size     int64
+	total    int64
 }
 
 type verifiedSegmentCache struct {
 	dir     string
-	entries map[string]cachedVideoSegment
+	entries map[videoSegmentKey]cachedVideoSegment
 	bytes   int64
 	serial  int
 }
@@ -39,7 +47,7 @@ func withVerifiedSegmentCache(ctx context.Context, dest string) (context.Context
 	if err != nil {
 		return ctx, func() {}
 	}
-	cache := &verifiedSegmentCache{dir: dir, entries: make(map[string]cachedVideoSegment)}
+	cache := &verifiedSegmentCache{dir: dir, entries: make(map[videoSegmentKey]cachedVideoSegment)}
 	return context.WithValue(ctx, verifiedSegmentCacheKey{}, cache), func() {
 		if os.RemoveAll(dir) == nil {
 			releaseStorageBudget(ctx, cache.bytes)
@@ -57,14 +65,27 @@ func strongSegmentETag(h http.Header) string {
 	return tag
 }
 
-func rememberCachedSegment(ctx context.Context, raw, source string, headers http.Header, n int64) {
+func segmentIdentityEncoding(h http.Header) bool {
+	encoding := strings.TrimSpace(h.Get("Content-Encoding"))
+	return encoding == "" || strings.EqualFold(encoding, "identity")
+}
+
+func segmentResponseURL(res *http.Response, raw string) string {
+	if res.Request != nil && res.Request.URL != nil {
+		return res.Request.URL.String()
+	}
+	return raw
+}
+
+func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source string, res *http.Response, n, total int64) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
-	tag := strongSegmentETag(headers)
-	if cache == nil || tag == "" || n <= 0 || n > verifiedSegmentCacheMaxBytes-cache.bytes ||
+	tag := strongSegmentETag(res.Header)
+	if cache == nil || tag == "" || !segmentIdentityEncoding(res.Header) || n <= 0 ||
+		n > verifiedSegmentCacheMaxBytes-cache.bytes ||
 		len(cache.entries) >= verifiedSegmentCacheMaxEntries {
 		return
 	}
-	if _, exists := cache.entries[raw]; exists {
+	if _, exists := cache.entries[key]; exists {
 		return
 	}
 	in, err := openArchiveRegular(filepath.Dir(source), filepath.Base(source))
@@ -91,7 +112,10 @@ func rememberCachedSegment(ctx context.Context, raw, source string, headers http
 		return
 	}
 	cache.bytes += n
-	cache.entries[raw] = cachedVideoSegment{name: name, etag: tag, digest: hex.EncodeToString(hash.Sum(nil)), size: n}
+	cache.entries[key] = cachedVideoSegment{
+		name: name, etag: tag, digest: hex.EncodeToString(hash.Sum(nil)),
+		finalURL: segmentResponseURL(res, key.url), size: n, total: total,
+	}
 }
 
 // A strong validator is scoped to its exact resource URL. Do not strip
@@ -99,25 +123,25 @@ func rememberCachedSegment(ctx context.Context, raw, source string, headers http
 // A one-byte conditional range probe proves the same complete resource is
 // still available. Reject a missing/weak/changed validator, 200 fallback,
 // unexpected range or content encoding, then use the normal full download.
-func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, raw, path string, budget int64) (int64, bool) {
+func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmentKey, path string, budget int64) (int64, bool) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
 	if cache == nil {
 		return 0, false
 	}
-	item, ok := cache.entries[raw]
+	item, ok := cache.entries[key]
 	if !ok || item.size > budget || item.size > maxHLSSegmentBytes || ctx.Err() != nil {
 		return 0, false
 	}
-	res, err := fetch(ctx, raw, "bytes=0-0", item.etag)
+	res, err := fetch(ctx, key.url, fmt.Sprintf("bytes=%d-%d", key.offset, key.offset), item.etag)
 	if err != nil {
 		return 0, false
 	}
 	defer res.Body.Close()
 	start, end, total, rangeErr := parseByteRange(res.Header.Get("Content-Range"))
-	encoding := strings.TrimSpace(res.Header.Get("Content-Encoding"))
-	if res.StatusCode != http.StatusPartialContent || rangeErr != nil || start != 0 || end != 0 ||
-		total != item.size || strongSegmentETag(res.Header) != item.etag ||
-		(res.ContentLength >= 0 && res.ContentLength != 1) || (encoding != "" && !strings.EqualFold(encoding, "identity")) {
+	if res.StatusCode != http.StatusPartialContent || rangeErr != nil || start != key.offset || end != key.offset ||
+		total != item.total || strongSegmentETag(res.Header) != item.etag ||
+		segmentResponseURL(res, key.url) != item.finalURL ||
+		(res.ContentLength >= 0 && res.ContentLength != 1) || !segmentIdentityEncoding(res.Header) {
 		return 0, false
 	}
 	probe, err := io.ReadAll(io.LimitReader(res.Body, 2))

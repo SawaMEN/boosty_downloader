@@ -49,7 +49,7 @@ func TestVerifiedSegmentCacheRevalidation(t *testing.T) {
 			}
 			if mode == "damaged-local" {
 				cache := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
-				if err := os.WriteFile(filepath.Join(cache.dir, cache.entries[raw].name), []byte("abcdeg"), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(cache.dir, cache.entries[videoSegmentKey{url: raw}].name), []byte("abcdeg"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
