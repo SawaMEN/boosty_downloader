@@ -23,7 +23,7 @@ type Storage struct {
 	archiveUpdateMu               sync.Mutex
 	root                          string
 	key                           []byte
-	metadataMutationEpoch         uint64 // process-local conservative invalidation, protected by mu
+	metadataMutationEpoch         uint64
 	jobs                          map[string]*Job
 	authors                       map[string][]string
 	imports                       map[string]*AuthorImport
