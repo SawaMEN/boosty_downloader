@@ -8,7 +8,7 @@ import (
 type segmentWorkersKey struct{}
 
 func validSegmentWorkers(n int) bool {
-	return n >= 0 && n <= 2
+	return n >= 0 && n <= 3
 }
 
 // Snapshot the administrator's choice for the lifetime of one archive job.
@@ -21,7 +21,11 @@ func withSegmentWorkers(ctx context.Context, n *int) context.Context {
 }
 
 func segmentWorkers(ctx context.Context, env string) int {
-	if n, _ := ctx.Value(segmentWorkersKey{}).(int); n == 1 || n == 2 {
+	n, _ := ctx.Value(segmentWorkersKey{}).(int)
+	if n == 3 {
+		return adaptiveSegmentWorkers()
+	}
+	if n == 1 || n == 2 {
 		return n
 	}
 	if os.Getenv(env) == "2" {

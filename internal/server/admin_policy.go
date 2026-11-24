@@ -226,7 +226,7 @@ func validatePolicy(p AdminPolicy) error {
 		return err
 	}
 	if p.SegmentWorkers != nil && !validSegmentWorkers(*p.SegmentWorkers) {
-		return errors.New("потоки сегментов: 0, 1 или 2")
+		return errors.New("потоки сегментов: 0, 1, 2 или 3")
 	}
 	if p.MinFreeGiB < 0 || p.MinFreeGiB > 1024 {
 		return errors.New("резерв свободного места: от 0 до 1024 ГиБ")

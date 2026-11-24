@@ -47,7 +47,7 @@ func TestSegmentWorkersPolicyPersistence(t *testing.T) {
 	if err := a.changePolicy(p); err != nil {
 		t.Fatal(err)
 	}
-	for _, invalid := range []int{-1, 3} {
+	for _, invalid := range []int{-1, 4} {
 		p.SegmentWorkers = &invalid
 		if err := a.changePolicy(p); err == nil {
 			t.Fatal("invalid workers accepted")
