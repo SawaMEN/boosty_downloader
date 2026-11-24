@@ -28,7 +28,10 @@ type dashMPD struct {
 }
 type dashPeriod struct {
 	Duration    string           `xml:"duration,attr"`
+	Start       string           `xml:"start,attr"`
 	BaseURL     string           `xml:"BaseURL"`
+	Template    *dashTemplate    `xml:"SegmentTemplate"`
+	List        *dashSegmentList `xml:"SegmentList"`
 	Protections []struct{}       `xml:"ContentProtection"`
 	Sets        []dashAdaptation `xml:"AdaptationSet"`
 }
@@ -51,12 +54,13 @@ type dashRepresentation struct {
 	Protections []struct{}       `xml:"ContentProtection"`
 }
 type dashTemplate struct {
-	Init        string `xml:"initialization,attr"`
-	Media       string `xml:"media,attr"`
-	StartNumber uint64 `xml:"startNumber,attr"`
-	Timescale   uint64 `xml:"timescale,attr"`
-	Duration    uint64 `xml:"duration,attr"`
-	Timeline    *struct {
+	Init                    *string `xml:"initialization,attr"`
+	Media                   *string `xml:"media,attr"`
+	StartNumber             *uint64 `xml:"startNumber,attr"`
+	Timescale               *uint64 `xml:"timescale,attr"`
+	Duration                *uint64 `xml:"duration,attr"`
+	PresentationTimeOffset  *uint64 `xml:"presentationTimeOffset,attr"`
+	Timeline                *struct {
 		S []dashTimelineEntry `xml:"S"`
 	} `xml:"SegmentTimeline"`
 }
@@ -104,30 +108,43 @@ func expandDASHTemplate(s, id string, bandwidth int64, number, tick uint64) (str
 	if s == "" || len(s) > 2048 {
 		return "", errors.New("DASH: отсутствует шаблон сегмента")
 	}
-	out := dashTokenPattern.ReplaceAllStringFunc(s, func(key string) string {
+	var out strings.Builder
+	pos := 0
+	for _, match := range dashTokenPattern.FindAllStringIndex(s, -1) {
+		literal := s[pos:match[0]]
+		if strings.Contains(literal, "$") {
+			return "", errors.New("DASH: неподдерживаемый параметр шаблона")
+		}
+		out.WriteString(literal)
+		key := s[match[0]:match[1]]
+		pos = match[1]
 		if key == "$$" {
-			return "$"
+			out.WriteByte('$')
+			continue
 		}
 		token := strings.Trim(key, "$")
 		switch {
 		case token == "RepresentationID":
-			return id
+			if strings.Contains(id, "$") {
+				return "", errors.New("DASH: неверный идентификатор Representation")
+			}
+			out.WriteString(id)
 		case token == "Bandwidth":
-			return strconv.FormatInt(bandwidth, 10)
+			out.WriteString(strconv.FormatInt(bandwidth, 10))
 		case token == "Time":
-			return strconv.FormatUint(tick, 10)
+			out.WriteString(strconv.FormatUint(tick, 10))
 		case token == "Number":
-			return strconv.FormatUint(number, 10)
+			out.WriteString(strconv.FormatUint(number, 10))
 		case strings.HasPrefix(token, "Number%0"):
 			w := int(token[8] - '0')
-			return fmt.Sprintf("%0*d", w, number)
+			fmt.Fprintf(&out, "%0*d", w, number)
 		}
-		return key
-	})
-	if strings.Contains(out, "$") {
+	}
+	if strings.Contains(s[pos:], "$") {
 		return "", errors.New("DASH: неподдерживаемый параметр шаблона")
 	}
-	return out, nil
+	out.WriteString(s[pos:])
+	return out.String(), nil
 }
 
 func dashBase(parent, next string) (string, error) {
@@ -176,22 +193,25 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 		}
 		return tr, nil
 	}
-	templ := rep.Template
-	if templ == nil {
-		templ = set.Template
-	}
-	if templ == nil || templ.Init == "" || templ.Media == "" {
+	templ := mergeDASHTemplate(set.Template, rep.Template)
+	if templ == nil || templ.Init == nil || templ.Media == nil || *templ.Init == "" || *templ.Media == "" {
 		return tr, errors.New("DASH: требуется SegmentTemplate с initialization и media")
 	}
-	start := templ.StartNumber
-	if start == 0 {
-		start = 1
+	start := uint64(1)
+	if templ.StartNumber != nil {
+		start = *templ.StartNumber
 	}
-	timescale := templ.Timescale
+	timescale := uint64(1)
+	if templ.Timescale != nil {
+		timescale = *templ.Timescale
+	}
 	if timescale == 0 {
-		timescale = 1
+		return tr, errors.New("DASH: нулевой timescale")
 	}
-	init, e := expandDASHTemplate(templ.Init, rep.ID, rep.Bandwidth, start, 0)
+	if templ.PresentationTimeOffset != nil && *templ.PresentationTimeOffset != 0 {
+		return tr, errors.New("DASH: ненулевой presentationTimeOffset пока не поддерживается")
+	}
+	init, e := expandDASHTemplate(*templ.Init, rep.ID, rep.Bandwidth, start, 0)
 	if e != nil {
 		return tr, e
 	}
@@ -201,7 +221,10 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 	}
 	type segment struct{ number, tick uint64 }
 	segmentIDs := make([]segment, 0)
-	if templ.Timeline != nil && len(templ.Timeline.S) > 0 {
+	if templ.Timeline != nil {
+		if len(templ.Timeline.S) == 0 {
+			return tr, errors.New("DASH: пустой SegmentTimeline")
+		}
 		tick := uint64(0)
 		for index, item := range templ.Timeline.S {
 			if item.T != nil {
@@ -254,10 +277,10 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 			}
 		}
 	} else {
-		if templ.Duration == 0 {
+		if templ.Duration == nil || *templ.Duration == 0 {
 			return tr, errors.New("DASH: неизвестна длительность сегментов")
 		}
-		countF := math.Ceil(duration*float64(timescale)/float64(templ.Duration) - 1e-8)
+		countF := math.Ceil(duration*float64(timescale)/float64(*templ.Duration) - 1e-8)
 		if countF < 1 || countF > maxHLSSegments {
 			return tr, errors.New("DASH: слишком много сегментов")
 		}
@@ -265,14 +288,14 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 			return tr, errors.New("DASH: переполнение номера сегмента")
 		}
 		for k := 0; k < int(countF); k++ {
-			if uint64(k) > ^uint64(0)/templ.Duration {
+			if uint64(k) > ^uint64(0)/(*templ.Duration) {
 				return tr, errors.New("DASH: переполнение сегмента")
 			}
-			segmentIDs = append(segmentIDs, segment{number: start + uint64(k), tick: uint64(k) * templ.Duration})
+			segmentIDs = append(segmentIDs, segment{number: start + uint64(k), tick: uint64(k) * (*templ.Duration)})
 		}
 	}
 	for _, part := range segmentIDs {
-		name, e := expandDASHTemplate(templ.Media, rep.ID, rep.Bandwidth, part.number, part.tick)
+		name, e := expandDASHTemplate(*templ.Media, rep.ID, rep.Bandwidth, part.number, part.tick)
 		if e != nil {
 			return tr, e
 		}
@@ -307,6 +330,9 @@ func resolveDASH(ctx context.Context, fetch mediaFetcher, raw string) (dashTrack
 	if len(p.Protections) > 0 {
 		return empty, nil, errors.New("DASH: DRM не поддерживается")
 	}
+	if p.Start != "" && p.Start != "PT0S" && p.Start != "PT0.0S" && p.Start != "PT0H0M0S" {
+		return empty, nil, errors.New("DASH: ненулевой или неподдерживаемый Period@start")
+	}
 	durationText := p.Duration
 	if durationText == "" {
 		durationText = doc.Duration
@@ -326,6 +352,10 @@ func resolveDASH(ctx context.Context, fetch mediaFetcher, raw string) (dashTrack
 	var video, audio *dashTrack
 	var videoRate, audioRate int64 = -1, -1
 	for _, set := range p.Sets {
+		if p.List != nil {
+			return empty, nil, errors.New("DASH: SegmentList на уровне Period пока не поддерживается")
+		}
+		set.Template = mergeDASHTemplate(p.Template, set.Template)
 		kind := set.ContentType
 		if kind == "" {
 			if strings.HasPrefix(set.MimeType, "video/") {
