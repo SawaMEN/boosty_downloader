@@ -74,7 +74,7 @@ func passwordKey(pass string, salt []byte, count int) []byte {
 	u := h.Sum(nil)
 	out := append([]byte{}, u...)
 	for i := 1; i < count; i++ {
-		h = hmac.New(sha256.New, key)
+		h.Reset()
 		h.Write(u)
 		u = h.Sum(u[:0])
 		for j := range out {
@@ -158,7 +158,11 @@ func (a *Accounts) register(user, password string) (Account, error) {
 	if !a.registration() {
 		return Account{}, errors.New("регистрация закрыта администратором")
 	}
+	if !tryPasswordWork() {
+		return Account{}, errPasswordBusy
+	}
 	hash, err := hashPassword(password)
+	releasePasswordWork()
 	if err != nil {
 		return Account{}, err
 	}
@@ -188,25 +192,48 @@ func (a *Accounts) register(user, password string) (Account, error) {
 	return acc, nil
 }
 func (a *Accounts) authenticate(user, password, peer string) (Account, error) {
+	return a.authenticateWith(user, password, peer, verifyPassword)
+}
+
+func (a *Accounts) authenticateWith(user, password, peer string, verify func(string, string) bool) (Account, error) {
 	if host, _, e := net.SplitHostPort(peer); e == nil {
 		peer = host
 	}
+	if !tryPasswordWork() {
+		return Account{}, errPasswordBusy
+	}
+	defer releasePasswordWork()
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	now := time.Now()
 	if !a.allowLoginPeerLocked(peer, now) {
+		a.mu.Unlock()
 		return Account{}, errors.New("слишком много попыток входа; повторите позже")
 	}
-	if len(password) >= 12 && len(password) <= 1024 && usernamePattern.MatchString(user) {
-		for _, u := range a.data.Accounts {
-			if strings.EqualFold(u.Username, user) && verifyPassword(password, u.Password) {
-				delete(a.failed, peer)
-				return u, nil
-			}
+	// Charge the attempt before releasing the lock, so concurrent requests
+	// cannot pass the same rate-limit snapshot.
+	a.failed[peer] = append(a.failed[peer], now)
+	var candidate Account
+	for _, u := range a.data.Accounts {
+		if strings.EqualFold(u.Username, user) {
+			candidate = u
+			break
 		}
 	}
-	a.failed[peer] = append(a.failed[peer], now)
-	return Account{}, errors.New("неверный логин или пароль")
+	a.mu.Unlock()
+
+	if candidate.ID == "" || len(password) < 12 || len(password) > 1024 || !usernamePattern.MatchString(user) ||
+		!verify(password, candidate.Password) {
+		return Account{}, errors.New("неверный логин или пароль")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current, ok := a.data.Accounts[candidate.ID]
+	if !ok || current != candidate {
+		return Account{}, errors.New("учётная запись изменилась; повторите вход")
+	}
+	delete(a.failed, peer)
+	return current, nil
 }
 
 func (a *Accounts) session(id string) (string, error) {

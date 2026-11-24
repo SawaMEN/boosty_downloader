@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"sort"
 	"time"
 )
@@ -10,6 +11,22 @@ const (
 	maxSessionsPerOwner = 32
 	loginFailureWindow  = 15 * time.Minute
 )
+
+// Cap expensive password work across login and registration. Nonblocking
+// admission avoids a queue of unbounded password requests.
+var passwordWork = make(chan struct{}, 2)
+var errPasswordBusy = errors.New("сервер занят проверкой паролей; повторите позже")
+
+func tryPasswordWork() bool {
+	select {
+	case passwordWork <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releasePasswordWork() { <-passwordWork }
 
 func recentLoginFailures(values []time.Time, now time.Time) []time.Time {
 	kept := values[:0]
