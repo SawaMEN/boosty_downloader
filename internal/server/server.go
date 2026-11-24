@@ -212,6 +212,10 @@ func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 		}
 	}
 	a := &App{cfg: cfg, dataDirLock: dataDirLock, store: s, archiveGates: s.gates, catalogSQLReads: os.Getenv("BD_SQLITE_CATALOG_READS") == "1", accounts: accounts, clients: make(map[string]*boosty.Client), queue: make(chan string, 128), importQueue: make(chan string, 64), videoQueue: make(chan VideoTask, 64), trashQueue: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	// Snapshot both persistent queues before any worker/scheduler can
+	// change their state. Deliver them after startup without blocking HTTP
+	// admission on the capacity of either bounded channel.
+	recoveredJobs, recoveredImports := s.queued(), s.queuedImports()
 	a.wg.Add(6)
 	if s.shadow != nil {
 		a.wg.Add(1)
@@ -223,12 +227,8 @@ func newAppMode(cfg Config, sqlPrimary bool) (*App, error) {
 	go func() { defer a.wg.Done(); a.importSyncLoop() }()
 	go func() { defer a.wg.Done(); a.videoWorker() }()
 	go func() { defer a.wg.Done(); a.trashCleanupLoop() }()
-	for _, id := range s.queued() {
-		a.queueJob(id)
-	}
-	for _, id := range s.queuedImports() {
-		a.importQueue <- id
-	}
+	a.restorePendingQueue(a.queue, recoveredJobs)
+	a.restorePendingQueue(a.importQueue, recoveredImports)
 	initialized = true
 	return a, nil
 }
