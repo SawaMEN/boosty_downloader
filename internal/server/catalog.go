@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,7 +94,8 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 	// SQLite is only an optional candidate index. Every returned job still
 	// comes from authoritative JSON and passes the existing ACL/filter logic.
 	jobs, _ := a.store.catalogJobs(r.Context(), viewer.ID, scope, a.catalogSQLReads)
-	items := make([]catalogItem, 0)
+	selection := newCatalogSelection(page, perPage, orderBy, direction)
+	ownerNames := make(map[string]string)
 	for _, job := range jobs {
 		if scope == "mine" {
 			if job.OwnerID != viewer.ID {
@@ -117,7 +117,14 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 		owner := ""
 		if scope == "shared" {
-			owner = a.accounts.username(job.OwnerID)
+			var cached bool
+			owner, cached = ownerNames[job.OwnerID]
+			if !cached {
+				owner = a.accounts.username(job.OwnerID)
+				if len(ownerNames) < 4096 {
+					ownerNames[job.OwnerID] = owner
+				}
+			}
 		}
 		if query != "" && !strings.Contains(strings.ToLower(job.Title), query) &&
 			!strings.Contains(strings.ToLower(job.Author), query) &&
@@ -130,49 +137,7 @@ func (a *App) catalog(w http.ResponseWriter, r *http.Request) {
 			job.OwnerID = ""
 			job.Error = ""
 		}
-		items = append(items, catalogItem{Job: job, OwnerName: owner})
+		selection.add(catalogItem{Job: job, OwnerName: owner})
 	}
-	sort.Slice(items, func(i, j int) bool {
-		left, right := items[i], items[j]
-		comparison := 0
-		switch orderBy {
-		case "created":
-			if left.CreatedAt.Before(right.CreatedAt) {
-				comparison = -1
-			} else if left.CreatedAt.After(right.CreatedAt) {
-				comparison = 1
-			}
-		case "title":
-			comparison = strings.Compare(strings.ToLower(left.Title), strings.ToLower(right.Title))
-		case "author":
-			comparison = strings.Compare(strings.ToLower(left.Author), strings.ToLower(right.Author))
-		default:
-			if catalogDate(left.Job).Before(catalogDate(right.Job)) {
-				comparison = -1
-			} else if catalogDate(left.Job).After(catalogDate(right.Job)) {
-				comparison = 1
-			}
-		}
-		if comparison == 0 {
-			return left.ID < right.ID
-		}
-		if direction == "asc" {
-			return comparison < 0
-		}
-		return comparison > 0
-	})
-	total := len(items)
-	pages := (total + perPage - 1) / perPage
-	start := total
-	if page-1 <= total/perPage {
-		start = (page - 1) * perPage
-		if start > total {
-			start = total
-		}
-	}
-	end := start + perPage
-	if end > total {
-		end = total
-	}
-	reply(w, 200, catalogPage{Items: items[start:end], Total: total, Page: page, PerPage: perPage, Pages: pages})
+	reply(w, 200, selection.result())
 }

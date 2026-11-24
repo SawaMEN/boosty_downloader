@@ -61,6 +61,8 @@ jobs:
           go test ./internal/server -run '^TestDASH(FiniteNegativeTimelineRepeat|NegativeTimelineRepeatRejectsUnsafeOrUnbounded|NegativeRepeatStillRejectsDynamicAndDRM|DurationTemplateRejectsSegmentNumberWrap)$' -count=1
       - name: Unit tests and race detector
         run: go test -race ./...
+      - name: Catalog page selection benchmark
+        run: go test ./internal/server -run '^$' -bench '^BenchmarkCatalogSelection$' -benchtime=1x -benchmem -count=1
       - name: SQL metadata scale benchmark
         run: go test ./internal/server -run '^$' -bench '^BenchmarkSQLPrimaryLibraryGuard$' -benchtime=1x -benchmem -count=1
       - name: Docker image build
