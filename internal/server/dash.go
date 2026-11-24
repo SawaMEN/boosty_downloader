@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"math"
@@ -308,44 +307,25 @@ func dashTrackURLs(parent string, rep dashRepresentation, set dashAdaptation, du
 	return tr, nil
 }
 
-// resolveDASH returns the highest-bandwidth supported video and audio tracks.
-// The source manifest is not passed to external programs or written into archives.
+// resolveDASH retains the single-period resolver contract for existing callers.
 func resolveDASH(ctx context.Context, fetch mediaFetcher, raw string) (dashTrack, *dashTrack, error) {
-	var empty dashTrack
-	b, err := fetchHLSBytes(ctx, fetch, raw, maxHLSManifestBytes)
+	periods, err := resolveDASHPresentation(ctx, fetch, raw)
 	if err != nil {
-		return empty, nil, err
+		return dashTrack{}, nil, err
 	}
-	if strings.Contains(strings.ToLower(string(b)), "<!doctype") || strings.Contains(strings.ToLower(string(b)), "<!entity") {
-		return empty, nil, errors.New("DASH: XML entities запрещены")
+	if len(periods) != 1 {
+		return dashTrack{}, nil, errors.New("DASH: требуется многопериодная сборка")
 	}
-	var doc dashMPD
-	if err := xml.Unmarshal(b, &doc); err != nil {
-		return empty, nil, fmt.Errorf("DASH: неправильный MPD: %w", err)
-	}
-	if doc.XMLName.Local != "MPD" || doc.Type != "static" || len(doc.Periods) != 1 || len(doc.Protections) > 0 {
-		return empty, nil, errors.New("DASH: поддерживается один период без DRM в конечном MPD")
-	}
-	p := doc.Periods[0]
+	return periods[0].video, periods[0].audio, nil
+}
+
+// Resolve each period independently, including its own initialization files.
+func resolveDASHPeriod(base string, p dashPeriod, duration float64) (dashTrack, *dashTrack, error) {
+	var empty dashTrack
 	if len(p.Protections) > 0 {
 		return empty, nil, errors.New("DASH: DRM не поддерживается")
 	}
-	if p.Start != "" && (!mpdDurationPattern.MatchString(p.Start) || p.Start == "PT" || strings.ContainsAny(p.Start, "123456789")) {
-		return empty, nil, errors.New("DASH: ненулевой или неподдерживаемый Period@start")
-	}
-	durationText := p.Duration
-	if durationText == "" {
-		durationText = doc.Duration
-	}
-	duration, err := dashDuration(durationText)
-	if err != nil {
-		return empty, nil, err
-	}
-	base, err := dashBase(raw, doc.BaseURL)
-	if err != nil {
-		return empty, nil, err
-	}
-	base, err = dashBase(base, p.BaseURL)
+	base, err := dashBase(base, p.BaseURL)
 	if err != nil {
 		return empty, nil, err
 	}
@@ -458,10 +438,14 @@ func fetchDASHTrack(ctx context.Context, fetch mediaFetcher, tr dashTrack, dir, 
 // archiveDASH keeps existing destinations intact until both tracks are fully
 // fetched, muxed and SHA-256 verified. Unsupported live or DRM returns an error.
 func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int64, string, error) {
-	video, audio, err := resolveDASH(ctx, fetch, raw)
+	periods, err := resolveDASHPresentation(ctx, fetch, raw)
 	if err != nil {
 		return 0, "", err
 	}
+	if len(periods) > 1 {
+		return archiveDASHPeriods(ctx, fetch, periods, dest)
+	}
+	video, audio := periods[0].video, periods[0].audio
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return 0, "", errors.New("DASH: необходим FFmpeg")
@@ -482,7 +466,7 @@ func archiveDASH(ctx context.Context, fetch mediaFetcher, raw, dest string) (int
 		if e != nil {
 			return 0, "", e
 		}
-		args = append(args, "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0")
+		args = append(args, "-protocol_whitelist", "file,pipe,data", "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0")
 	} else {
 		args = append(args, "-map", "0:v:0", "-map", "0:a?")
 	}
