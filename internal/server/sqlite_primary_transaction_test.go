@@ -296,7 +296,7 @@ func TestSQLPrimaryJournalSizeLimitBeforeCommit(t *testing.T) {
 func TestSQLPrimaryJournalEncodedSizeBoundary(t *testing.T) {
 	journal := sqlitePrimaryTransaction{
 		Version: sqlitePrimaryTransactionVersion,
-		Jobs: metadataImage{Before: []byte("{}"), After: []byte("{\"a\":1}")},
+		Jobs:    metadataImage{Before: []byte("{}"), After: []byte("{\"a\":1}")},
 	}
 	raw, err := json.Marshal(journal)
 	if err != nil {
