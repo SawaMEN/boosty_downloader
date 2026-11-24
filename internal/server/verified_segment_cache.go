@@ -33,27 +33,55 @@ type cachedVideoSegment struct {
 }
 
 type verifiedSegmentCache struct {
+	parent  string
 	dir     string
 	entries map[videoSegmentKey]cachedVideoSegment
 	bytes   int64
 	serial  int
+	closed  bool
 }
 
 // This cache belongs to exactly one media download, not a user, server or
 // persistent archive. URL keys (including tokens) stay in memory. A failure
 // to create the optional cache must not prevent normal video archiving.
 func withVerifiedSegmentCache(ctx context.Context, dest string) (context.Context, func()) {
-	dir, err := os.MkdirTemp(filepath.Dir(dest), ".boosty-segment-cache-")
-	if err != nil {
-		return ctx, func() {}
-	}
-	cache := &verifiedSegmentCache{dir: dir, entries: make(map[videoSegmentKey]cachedVideoSegment)}
+	cache := &verifiedSegmentCache{parent: filepath.Dir(dest)}
 	return context.WithValue(ctx, verifiedSegmentCacheKey{}, cache), func() {
-		if os.RemoveAll(dir) == nil {
-			releaseStorageBudget(ctx, cache.bytes)
+		cache.closed = true
+		if cache.dir != "" && os.RemoveAll(cache.dir) == nil {
+			releaseStorageBudget(withoutMediaStageBudget(ctx), cache.bytes)
 			cache.bytes = 0
 			clear(cache.entries)
 		}
+	}
+}
+
+func (c *verifiedSegmentCache) ensureDir() bool {
+	if c.closed {
+		return false
+	}
+	if c.dir != "" {
+		return true
+	}
+	dir, err := os.MkdirTemp(c.parent, ".boosty-segment-cache-")
+	if err != nil {
+		// Caching is optional; avoid retrying mkdir for every segment.
+		c.closed = true
+		return false
+	}
+	c.dir = dir
+	c.entries = make(map[videoSegmentKey]cachedVideoSegment)
+	return true
+}
+
+// Remove only this cache's own entry and credit only charged bytes after
+// the pathname has been removed. Failed removals remain charged until
+// directory cleanup; the stale entry is never used again.
+func (c *verifiedSegmentCache) invalidate(ctx context.Context, key videoSegmentKey, item cachedVideoSegment) {
+	delete(c.entries, key)
+	if err := os.Remove(filepath.Join(c.dir, item.name)); err == nil || os.IsNotExist(err) {
+		c.bytes -= item.size
+		releaseStorageBudget(withoutMediaStageBudget(ctx), item.size)
 	}
 }
 
@@ -80,7 +108,7 @@ func segmentResponseURL(res *http.Response, raw string) string {
 func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source string, res *http.Response, n, total int64) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
 	tag := strongSegmentETag(res.Header)
-	if cache == nil || tag == "" || !segmentIdentityEncoding(res.Header) || n <= 0 ||
+	if cache == nil || cache.closed || tag == "" || !segmentIdentityEncoding(res.Header) || n <= 0 ||
 		n > verifiedSegmentCacheMaxBytes-cache.bytes ||
 		len(cache.entries) >= verifiedSegmentCacheMaxEntries {
 		return
@@ -96,6 +124,9 @@ func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source stri
 		return
 	}
 	defer in.Close()
+	if !cache.ensureDir() {
+		return
+	}
 	cache.serial++
 	name := fmt.Sprintf("segment-%06d", cache.serial)
 	path := filepath.Join(cache.dir, name)
@@ -128,7 +159,7 @@ func rememberCachedSegment(ctx context.Context, key videoSegmentKey, source stri
 // unexpected range or content encoding, then use the normal full download.
 func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmentKey, path string, budget int64) (int64, bool) {
 	cache, _ := ctx.Value(verifiedSegmentCacheKey{}).(*verifiedSegmentCache)
-	if cache == nil {
+	if cache == nil || cache.closed {
 		return 0, false
 	}
 	item, ok := cache.entries[key]
@@ -141,8 +172,15 @@ func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmen
 	}
 	defer res.Body.Close()
 	start, end, total, rangeErr := parseByteRange(res.Header.Get("Content-Range"))
+	tag := strongSegmentETag(res.Header)
+	// A changed strong validator on the same resource is definitive.
+	// Drop the old entry so a subsequent full download can cache the new one.
+	if tag != "" && tag != item.etag && segmentResponseURL(res, key.url) == item.finalURL {
+		cache.invalidate(ctx, key, item)
+		return 0, false
+	}
 	if res.StatusCode != http.StatusPartialContent || rangeErr != nil || start != key.offset || end != key.offset ||
-		total != item.total || strongSegmentETag(res.Header) != item.etag ||
+		total != item.total || tag != item.etag ||
 		segmentResponseURL(res, key.url) != item.finalURL ||
 		(res.ContentLength >= 0 && res.ContentLength != 1) || !segmentIdentityEncoding(res.Header) {
 		return 0, false
@@ -153,15 +191,18 @@ func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmen
 	}
 	in, err := openArchiveRegular(cache.dir, item.name)
 	if err != nil {
+		cache.invalidate(ctx, key, item)
 		return 0, false
 	}
 	defer in.Close()
 	info, err := in.Stat()
 	if err != nil || info.Size() != item.size {
+		cache.invalidate(ctx, key, item)
 		return 0, false
 	}
 	var first [1]byte
 	if _, err := io.ReadFull(in, first[:]); err != nil || first[0] != probe[0] {
+		cache.invalidate(ctx, key, item)
 		return 0, false
 	}
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
@@ -174,9 +215,13 @@ func reuseCachedSegment(ctx context.Context, fetch mediaFetcher, key videoSegmen
 	hash := sha256.New()
 	n, copyErr := guardedCopy(ctx, io.MultiWriter(out, hash), io.LimitReader(in, item.size+1))
 	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil || n != item.size || hex.EncodeToString(hash.Sum(nil)) != item.digest {
+	damaged := copyErr == nil && (n != item.size || hex.EncodeToString(hash.Sum(nil)) != item.digest)
+	if copyErr != nil || closeErr != nil || damaged {
 		if os.Remove(path) == nil {
 			releaseStorageBudget(ctx, n)
+		}
+		if damaged {
+			cache.invalidate(ctx, key, item)
 		}
 		return 0, false
 	}
