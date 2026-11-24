@@ -84,8 +84,10 @@ func (s *Storage) sqlitePrimaryGuardMutationLocked() error {
 	if s.primary == nil {
 		return nil
 	}
-	// Mutation guards only need proof of parity, not a second materialized
-	// inventory. Validate the same SQL rows and ACLs in one read transaction.
+	// Both mutation guards and verified projections need proof of parity,
+	// not a second materialized inventory. Validate all SQL rows and ACLs
+	// in one read transaction. Callers may project detached values from
+	// the verified memory generation while still holding Storage.mu.
 	if s.shadow != nil {
 		return s.sqlitePrimaryQuarantineLocked(errors.New("SQL-primary read conflicts with JSON shadow writer"))
 	}
