@@ -44,6 +44,12 @@ func fetchHLSRangeSegment(ctx context.Context, fetch mediaFetcher, raw, path str
 	if length == 0 {
 		return fetchHLSSegment(ctx, fetch, raw, path, budget)
 	}
+	return retryMediaSegment(ctx, func() (int64, error) {
+		return fetchHLSRangeSegmentOnce(ctx, fetch, raw, path, budget, offset, length)
+	})
+}
+
+func fetchHLSRangeSegmentOnce(ctx context.Context, fetch mediaFetcher, raw, path string, budget, offset, length int64) (int64, error) {
 	if length <= 0 || offset < 0 || length > budget || length > maxHLSSegmentBytes || offset > maxArchiveMediaSize-length {
 		return 0, errors.New("HLS: диапазон превышает лимит")
 	}
@@ -54,7 +60,7 @@ func fetchHLSRangeSegment(ctx context.Context, fetch mediaFetcher, raw, path str
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusPartialContent {
-		return 0, errors.New("HLS: CDN не выполнил запрос BYTERANGE (нужен HTTP 206)")
+		return 0, &mediaHTTPError{status: res.StatusCode}
 	}
 	start, last, _, err := parseByteRange(res.Header.Get("Content-Range"))
 	if err != nil || start != offset || last != end {
@@ -74,14 +80,20 @@ func fetchHLSRangeSegment(ctx context.Context, fetch mediaFetcher, raw, path str
 	n, copyErr := guardedCopy(ctx, out, io.LimitReader(res.Body, length+1))
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil || n != length {
-		_ = os.Remove(path)
+		if err := os.Remove(path); err != nil {
+			return 0, err
+		}
+		releaseStorageBudget(ctx, n)
 		if copyErr != nil {
 			return 0, copyErr
 		}
 		if closeErr != nil {
 			return 0, closeErr
 		}
-		return 0, errors.New("HLS: неполный BYTERANGE сегмент")
+		if n < length {
+			return 0, errMediaIncomplete
+		}
+		return 0, errors.New("HLS: слишком длинный BYTERANGE сегмент")
 	}
 	return n, nil
 }

@@ -153,7 +153,7 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusPartialContent {
-		return 0, "", fmt.Errorf("CDN HTTP %d", res.StatusCode)
+		return 0, "", &mediaHTTPError{status: res.StatusCode}
 	}
 	// HLS and DASH playlists are NOT MP4 files. They require a separate
 	// segment downloader/FFmpeg pipeline and are never archived as .mp4.
@@ -239,9 +239,12 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 		return 0, "", errors.New("медиа превышает предел 10 ГиБ")
 	}
 	if res.ContentLength >= 0 && n != res.ContentLength {
-		return 0, "", errors.New("CDN передал неполный файл")
+		return 0, "", fmt.Errorf("%w: CDN передал неполный файл", errMediaIncomplete)
 	}
 	if total >= 0 && size != total {
+		if size < total {
+			return 0, "", errMediaIncomplete
+		}
 		return 0, "", errors.New("несовпадение полного размера файла")
 	}
 	if expected > 0 && size != expected {
