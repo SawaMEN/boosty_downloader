@@ -7,16 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 // An SQL-first commit must be recoverable even if SIGKILL happens after the
 // SQLite commit but before the JSON mirror is durably published. The journal
-// holds both full before/after images, not caller-controlled file paths.
+// holds exact before/after hashes with row deltas or full legacy images.
 // This transaction layer is not yet connected to live Storage writes.
 const sqlitePrimaryTransactionName = ".sqlite-primary-transaction.json"
 const sqlitePrimaryTransactionVersion = 1
+const sqlitePrimaryJournalMaxBytes = 128 << 20
 
 type sqlitePrimaryTransaction struct {
 	Version int           `json:"version"`
@@ -39,9 +43,22 @@ type sqlitePrimaryCommitHooks struct {
 // A committed SQL transaction is NEVER rolled back over new data. Instead,
 // the journal rolls forward the two-file JSON mirror after a crash.
 func sqlitePrimaryCommitMetadata(root string, m *sqliteMetadata, jobs map[string]Job,
-	imports map[string]AuthorImport, hooks *sqlitePrimaryCommitHooks) (err error) {
+	imports map[string]AuthorImport, hooks *sqlitePrimaryCommitHooks) error {
+	return sqlitePrimaryCommitMetadataWithLimit(root, m, jobs, imports, hooks, sqlitePrimaryJournalMaxBytes)
+}
+
+// A smaller limit permits exercising the pre-commit rejection without allocating
+// hundreds of MiB in tests. Never allow a journal larger than recovery accepts.
+func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs map[string]Job,
+	imports map[string]AuthorImport, hooks *sqlitePrimaryCommitHooks, limit int) (err error) {
+	if limit <= 0 || limit > sqlitePrimaryJournalMaxBytes {
+		return errors.New("invalid SQL primary journal size limit")
+	}
 	if root == "" || m == nil {
 		return errors.New("SQL primary transaction needs data directory and open SQLite")
+	}
+	if err := recoverMetadataPair(root); err != nil {
+		return fmt.Errorf("previous JSON transaction could not be recovered: %w", err)
 	}
 	if err := recoverSQLitePrimaryCommitLocked(root); err != nil {
 		return fmt.Errorf("previous SQL primary transaction could not be recovered: %w", err)
@@ -78,7 +95,7 @@ func sqlitePrimaryCommitMetadata(root string, m *sqliteMetadata, jobs map[string
 		return fmt.Errorf("SQL before-image does not match existing JSON: %w", err)
 	}
 	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
-	raw, err := json.Marshal(journal)
+	raw, err := encodeSQLitePrimaryBestJournal(journal, limit)
 	if err != nil {
 		return err
 	}
@@ -118,7 +135,7 @@ func sqlitePrimaryCommitMetadata(root string, m *sqliteMetadata, jobs map[string
 	// SQL has now committed. Never undo its new ACLs merely because a JSON
 	// mirror write or cleanup failed. The durable primary journal will
 	// complete the mirror before any subsequent service startup.
-	if err := writeMetadataPair(root, afterJobs, afterImports); err != nil {
+	if err := publishSQLitePrimaryMirrors(root, journal, hooks); err != nil {
 		return err
 	}
 	if hooks != nil && hooks.checkpoint != nil {
@@ -135,6 +152,108 @@ func sqlitePrimaryCommitMetadata(root string, m *sqliteMetadata, jobs map[string
 	return nil
 }
 
+// publishSQLitePrimaryMirrors runs only after a durable SQL commit with a
+// durable SQL intent. The intent itself protects both atomic renames, so a
+// second full JSON journal is unnecessary. Validate BOTH files before writing
+// either and skip an exact after-image, including an unchanged mirror.
+func publishSQLitePrimaryMirrors(root string, journal sqlitePrimaryTransaction, hooks *sqlitePrimaryCommitHooks) error {
+	if _, err := os.Lstat(filepath.Join(root, metadataJournalName)); err == nil {
+		return errors.New("unexpected legacy JSON journal during SQL mirror publication")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	targets := []struct {
+		name    string
+		image   metadataImage
+		phase   string
+		current bool
+	}{
+		{name: "jobs.json", image: journal.Jobs, phase: "jobs-mirror"},
+		{name: "imports.json", image: journal.Imports, phase: "imports-mirror"},
+	}
+	for i := range targets {
+		target := &targets[i]
+		file, err := openArchiveRegular(root, target.name)
+		if err != nil {
+			return err
+		}
+		// The mirror must be one of two known lengths. Bound the read
+		// without allocating for a possibly unrelated, oversized file.
+		maxSize := max(len(target.image.Before), len(target.image.After))
+		raw, err := io.ReadAll(io.LimitReader(file, int64(maxSize)+1))
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		target.current = bytes.Equal(raw, target.image.After)
+		if !target.current && !bytes.Equal(raw, target.image.Before) {
+			return fmt.Errorf("SQL mirror diverged from transaction: %s", target.name)
+		}
+	}
+	for _, target := range targets {
+		if !target.current {
+			if err := writeSyncedMetadata(root, target.name, target.image.After); err != nil {
+				return err
+			}
+		}
+		if hooks != nil && hooks.checkpoint != nil {
+			if err := hooks.checkpoint(target.phase); err != nil {
+				return err
+			}
+		}
+	}
+	// A previous rename may have succeeded just before a directory fsync
+	// failure. Even when both images already match, sync before cleanup.
+	return syncMetadataDirectory(root)
+}
+
+// encodeSQLitePrimaryJournal checks the serialized size, including base64
+// expansion of both metadata images. Reject before persisting intent or SQL COMMIT.
+func encodeSQLitePrimaryJournal(journal sqlitePrimaryTransaction, limit int) ([]byte, error) {
+	raw, err := json.Marshal(journal)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > limit {
+		return nil, fmt.Errorf("SQL primary journal exceeds %d bytes; transaction not committed", limit)
+	}
+	return raw, nil
+}
+
+// readSQLitePrimaryJournal pins the inspected regular file and bounds the read
+// even if its size changes after Lstat. A replaced symlink or FIFO cannot be read.
+func readSQLitePrimaryJournal(path string, expected os.FileInfo) ([]byte, error) {
+	if !expected.Mode().IsRegular() || expected.Mode().Perm()&0077 != 0 ||
+		expected.Size() <= 0 || expected.Size() > sqlitePrimaryJournalMaxBytes {
+		return nil, errors.New("unsafe or oversized SQL primary transaction journal")
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(expected, info) || !info.Mode().IsRegular() ||
+		info.Mode().Perm()&0077 != 0 || info.Size() != expected.Size() {
+		return nil, errors.New("SQL primary journal replaced or changed")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, sqlitePrimaryJournalMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > sqlitePrimaryJournalMaxBytes || int64(len(raw)) != info.Size() {
+		return nil, errors.New("SQL primary journal size changed during read")
+	}
+	return raw, nil
+}
+
 // recoverSQLitePrimaryCommitLocked is called before any account migration,
 // authentication, HTTP request or background worker can access archive ACLs.
 // Caller owns the directory OS lock; a corrupt/unknown marker fails closed.
@@ -147,15 +266,12 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 128<<20 {
-		return errors.New("unsafe or oversized SQL primary transaction journal")
-	}
-	before, err := os.ReadFile(path)
+	before, err := readSQLitePrimaryJournal(path, info)
 	if err != nil {
 		return err
 	}
-	var journal sqlitePrimaryTransaction
-	if err := json.Unmarshal(before, &journal); err != nil {
+	journal, err := decodeSQLitePrimaryJournal(root, before)
+	if err != nil {
 		return fmt.Errorf("malformed SQL primary journal: %w", err)
 	}
 	if journal.Version != sqlitePrimaryTransactionVersion {
@@ -199,16 +315,19 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 		return err
 	}
 	defer db.close()
-	beforeMatches := db.verifyJSONParity(context.Background(), beforeJobs, beforeImports) == nil
 	afterMatches := db.verifyJSONParity(context.Background(), afterJobs, afterImports) == nil
 	switch {
 	case afterMatches:
 		// A successful SQL commit, even one lost between the COMMIT return
 		// and the next line of Go, MUST roll forward the JSON mirror.
-		if err := writeMetadataPair(root, journal.Jobs.After, journal.Imports.After); err != nil {
+		// Older binaries may have left their nested JSON journal.
+		if err := recoverMetadataPair(root); err != nil {
 			return err
 		}
-	case beforeMatches:
+		if err := publishSQLitePrimaryMirrors(root, journal, nil); err != nil {
+			return err
+		}
+	case db.verifyJSONParity(context.Background(), beforeJobs, beforeImports) == nil:
 		// SQL did not commit. JSON must not have advanced; a mismatch
 		// indicates corruption or an uncooperative external writer.
 		for _, image := range []struct {
@@ -227,7 +346,7 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 		return errors.New("SQL primary recovery found neither journal before nor after state; refusing to overwrite ACLs")
 	}
 	// A swapped journal must not be unlinked based on stale validation.
-	now, err := os.ReadFile(path)
+	now, err := readSQLitePrimaryJournal(path, info)
 	if err != nil || !bytes.Equal(now, before) {
 		return errors.New("SQL primary journal was changed during recovery")
 	}

@@ -100,6 +100,8 @@ func TestSQLPrimaryJournalHandlesInjectedFailures(t *testing.T) {
 	}{
 		{"prepared", false},
 		{"sql-committed", true},
+		{"jobs-mirror", true},
+		{"imports-mirror", true},
 		{"json-committed", true},
 	} {
 		t.Run(tc.checkpoint, func(t *testing.T) {
@@ -233,6 +235,8 @@ func TestSQLPrimaryJournalSIGKILLRecoversAcrossPhases(t *testing.T) {
 	}{
 		{"prepared", false},
 		{"sql-committed", true},
+		{"jobs-mirror", true},
+		{"imports-mirror", true},
 		{"json-committed", true},
 	} {
 		t.Run(tc.phase, func(t *testing.T) {
@@ -261,5 +265,185 @@ func TestSQLPrimaryJournalSIGKILLRecoversAcrossPhases(t *testing.T) {
 			}
 			sqlPrimaryAssertImages(t, root, tc.after)
 		})
+	}
+}
+
+func TestSQLPrimaryJournalSizeLimitBeforeCommit(t *testing.T) {
+	root, jobs, imports := sqlPrimaryJournalFixture(t)
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.close()
+	err = sqlitePrimaryCommitMetadataWithLimit(root, meta, jobs, imports, &sqlitePrimaryCommitHooks{
+		checkpoint: func(phase string) error {
+			t.Fatalf("oversized journal reached checkpoint %s", phase)
+			return nil
+		},
+	}, 1)
+	if err == nil || !strings.Contains(err.Error(), "journal exceeds") {
+		t.Fatalf("expected journal size rejection, got %v", err)
+	}
+	sqlPrimaryAssertImages(t, root, false)
+	// A normal retry must remain possible without manual recovery.
+	if err := sqlitePrimaryCommitMetadata(root, meta, jobs, imports, nil); err != nil {
+		t.Fatal(err)
+	}
+	sqlPrimaryAssertImages(t, root, true)
+}
+
+func TestSQLPrimaryJournalEncodedSizeBoundary(t *testing.T) {
+	journal := sqlitePrimaryTransaction{
+		Version: sqlitePrimaryTransactionVersion,
+		Jobs:    metadataImage{Before: []byte("{}"), After: []byte("{\"a\":1}")},
+	}
+	raw, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encodeSQLitePrimaryJournal(journal, len(raw)); err != nil {
+		t.Fatalf("exact boundary rejected: %v", err)
+	}
+	if _, err := encodeSQLitePrimaryJournal(journal, len(raw)-1); err == nil {
+		t.Fatal("oversized encoded journal accepted")
+	}
+}
+
+func TestSQLPrimaryJournalUnsafeRecoveryInput(t *testing.T) {
+	for _, scenario := range []string{"oversized", "public", "fifo", "replaced"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, _, _ := sqlPrimaryJournalFixture(t)
+			path := filepath.Join(root, sqlitePrimaryTransactionName)
+			before, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "oversized":
+				file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := file.Truncate(sqlitePrimaryJournalMaxBytes + 1); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			case "public":
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if err := syscall.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "replaced":
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(path, path+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := readSQLitePrimaryJournal(path, info); err == nil {
+					t.Fatal("replaced journal accepted")
+				}
+			}
+			if err := recoverSQLitePrimaryCommitLocked(root); err == nil {
+				t.Fatal("unsafe journal accepted")
+			}
+			after, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("unsafe journal changed jobs mirror")
+			}
+		})
+	}
+}
+
+func TestSQLPrimaryMirrorSkipsUnchangedFileAndNestedJournal(t *testing.T) {
+	root, jobs, _ := sqlPrimaryJournalFixture(t)
+	lock, err := lockDataDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	meta, err := openSQLiteMetadata(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.close()
+	path := filepath.Join(root, "imports.json")
+	imports, err := sqliteShadowReadImports(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.MarshalIndent(imports, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSyncedMetadata(root, "imports.json", raw); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlitePrimaryCommitMetadata(root, meta, jobs, imports, &sqlitePrimaryCommitHooks{
+		checkpoint: func(phase string) error {
+			if _, err := os.Lstat(filepath.Join(root, metadataJournalName)); !os.IsNotExist(err) {
+				t.Fatalf("unexpected nested JSON journal at %s: %v", phase, err)
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("unchanged import mirror was rewritten: %v", err)
+	}
+	if err := meta.verifyJSONParity(context.Background(), jobs, imports); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, sqlitePrimaryTransactionName)); !os.IsNotExist(err) {
+		t.Fatalf("SQL journal not finalized: %v", err)
+	}
+}
+
+func TestSQLPrimaryMirrorRejectsDivergentSecondTarget(t *testing.T) {
+	root := t.TempDir()
+	old, next := []byte("{}"), []byte("{\"new\":1}")
+	for _, name := range []string{"jobs.json", "imports.json"} {
+		if err := os.WriteFile(filepath.Join(root, name), old, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	img := metadataImage{Existed: true, Before: old, After: next, OldHash: metadataDigest(old), NewHash: metadataDigest(next)}
+	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: img, Imports: img}
+	if err := os.WriteFile(filepath.Join(root, "imports.json"), []byte("{\"foreign\":1}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSQLitePrimaryMirrors(root, journal, nil); err == nil {
+		t.Fatal("divergent second target accepted")
+	}
+	current, err := os.ReadFile(filepath.Join(root, "jobs.json"))
+	if err != nil || !bytes.Equal(current, old) {
+		t.Fatal("first mirror was modified before validating the second")
 	}
 }
