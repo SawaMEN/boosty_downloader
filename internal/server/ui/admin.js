@@ -275,6 +275,24 @@ async function loadAdminStorage(){
     if(Number(data.freeBytes)<Number(data.minFreeGiB)*1024**3)target.append(text('p','Свободное место ниже заданного резерва. Новые загрузки будут приостановлены.','error'));
   }catch(e){target.replaceChildren(text('p',e.message,'error'))}
 }
+async function loadRevisionPreview(){
+  if(!state.user?.admin)return;
+  const button=$('adminRevisionPreview'),target=$('adminRevisionPreviewReport');
+  const limit=Number($('adminRevisionLimit').value);
+  if(!Number.isInteger(limit)||limit<1||limit>64){
+    target.replaceChildren(text('p','Укажите от 1 до 64 версий.','error'));return;
+  }
+  button.disabled=true;
+  target.replaceChildren(text('p','Рассчитываем объём истории без удаления файлов…','muted'));
+  try{
+    const result=await api('/api/admin/storage/revision-preview?limit='+encodeURIComponent(String(limit)));
+    const bytes=(Number(result.logicalBytes)/(1024**3)).toFixed(2)+' ГиБ';
+    target.replaceChildren(text('strong','Лимит '+result.limit+': '+result.candidateCount+' версий сверх лимита · '+bytes+' логически'));
+    target.append(text('p','Проверено публикаций: '+result.scanned+' из '+result.total+' · пропущено: '+result.skipped,'muted small'));
+    if(!result.complete)target.append(text('p','Расчёт неполный: занятые, изменённые или недоступные архивы не учтены.','error'));
+    target.append(text('p','Это не гарантированное освобождение места: файлы могут иметь другие hardlinks. Ничего не удалено.','muted small'));
+  }catch(e){target.replaceChildren(text('p',e.message,'error'))}finally{button.disabled=false}
+}
 async function loadAdminSQLite(){
   if(!state.user?.admin)return;
   const root=$('adminSQLiteReport'),button=$('adminSQLiteCommit');
@@ -355,6 +373,7 @@ function adminEvents(){
   $('adminTrashStatusRefresh').onclick=loadAdminTrash;
   $('adminTrashCleanupNow').onclick=runAdminTrashCleanup;
   $('adminStorageRefresh').onclick=loadAdminStorage;
+  $('adminRevisionPreview').onclick=loadRevisionPreview;
   $('adminSQLiteRefresh').onclick=loadAdminSQLite;
   $('adminSQLiteCommit').onclick=commitAdminSQLite;
   $('adminVideoProbe').onclick=()=>loadVideoReport(true);

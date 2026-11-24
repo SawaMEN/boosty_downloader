@@ -248,7 +248,13 @@ func (s *Storage) saveArchiveRevisionLocked(job Job) (string, error) {
 }
 
 func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
+	if !safeArchivePart(job.OwnerID) || !safeArchivePart(job.Author) || !safeArchivePart(job.PostID) {
+		return nil, errors.New("неверный путь истории")
+	}
 	root := s.revisionsDir(job)
+	if info, err := purgeSafePath(s.root, root); err != nil || info == nil {
+		return []ArchiveRevision{}, err
+	}
 	dirs, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return []ArchiveRevision{}, nil
@@ -261,12 +267,8 @@ func (s *Storage) listArchiveRevisions(job Job) ([]ArchiveRevision, error) {
 		if !validRevisionID(entry.Name()) || !entry.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, entry.Name(), "manifest.json"))
-		if err != nil {
-			continue
-		}
-		var man ArchiveManifest
-		if json.Unmarshal(b, &man) != nil || man.Author != job.Author || man.PostID != job.PostID {
+		_, man, err := readArchiveManifestNoFollow(filepath.Join(root, entry.Name()))
+		if err != nil || man.Author != job.Author || man.PostID != job.PostID {
 			continue
 		}
 		result = append(result, ArchiveRevision{
