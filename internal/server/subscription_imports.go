@@ -365,27 +365,7 @@ func (s *Storage) scheduleDueImportsAllowed(now time.Time, interval time.Duratio
 	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 		return nil, err
 	}
-	latest := map[string]*AuthorImport{}
-	busy := map[string]bool{}
-	for _, v := range s.imports {
-		key := v.OwnerID + "/" + strings.ToLower(v.Author)
-		if old := latest[key]; old == nil || old.CreatedAt.Before(v.CreatedAt) || (old.CreatedAt.Equal(v.CreatedAt) && old.ID < v.ID) {
-			latest[key] = v
-		}
-		if v.State == "queued" || v.State == "running" {
-			busy[key] = true
-		}
-	}
-	candidates := make([]*AuthorImport, 0, len(latest))
-	for key, v := range latest {
-		if !busy[key] && (v.State == "done" || (v.State == "failed" && v.Incremental)) && v.AutoSync && (allowed == nil || allowed(v.OwnerID)) && !v.UpdatedAt.IsZero() && now.Sub(v.UpdatedAt) >= interval {
-			candidates = append(candidates, v)
-		}
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].UpdatedAt.Before(candidates[j].UpdatedAt) })
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
+	candidates := selectDueImports(s.imports, now, interval, limit, allowed)
 	if len(candidates) == 0 {
 		return nil, nil
 	}
