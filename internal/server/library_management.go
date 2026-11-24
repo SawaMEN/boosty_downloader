@@ -141,10 +141,10 @@ func (s *Storage) setEveryone(jobID, owner string, everyone bool) (bool, error) 
 	if j.SharedForAll == everyone {
 		return false, nil
 	}
-	j.SharedForAll = everyone
-	j.UpdatedAt = time.Now().UTC()
-	if err := s.saveJobsLocked(); err != nil {
-		j.SharedForAll = !everyone
+	next := *j
+	next.SharedForAll = everyone
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.replaceStorageJobLocked(next); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -232,10 +232,10 @@ func (s *Storage) changeShare(jobID, owner, target string, grant bool) (bool, er
 	} else if !found {
 		return false, nil
 	}
-	j.SharedWith = selected
-	j.UpdatedAt = time.Now().UTC()
-	if err := s.saveJobsLocked(); err != nil {
-		j.SharedWith = previous
+	next := *j
+	next.SharedWith = selected
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.replaceStorageJobLocked(next); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -254,18 +254,17 @@ func (s *Storage) transitionToQueued(jobID, owner string) (Job, error) {
 	if j.State == "queued" || j.State == "running" {
 		return Job{}, errors.New("задача уже выполняется")
 	}
-	old := *j
-	j.State = "queued"
-	j.Error = ""
-	j.DoneFiles = 0
-	j.TotalFiles = 0
-	j.CommentsPartial = false
-	j.UpdatedAt = time.Now().UTC()
-	if err := s.saveJobsLocked(); err != nil {
-		*j = old
+	next := *j
+	next.State = "queued"
+	next.Error = ""
+	next.DoneFiles = 0
+	next.TotalFiles = 0
+	next.CommentsPartial = false
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.replaceStorageJobLocked(next); err != nil {
 		return Job{}, err
 	}
-	return cloneStorageJob(*j), nil
+	return cloneStorageJob(next), nil
 }
 func (s *Storage) claimQueued(id string) (Job, bool) {
 	s.mu.Lock()
@@ -277,14 +276,13 @@ func (s *Storage) claimQueued(id string) (Job, bool) {
 	if !ok || j.State != "queued" {
 		return Job{}, false
 	}
-	old := *j
-	j.State = "running"
-	j.UpdatedAt = time.Now().UTC()
-	if s.saveJobsLocked() != nil {
-		*j = old
+	next := *j
+	next.State = "running"
+	next.UpdatedAt = time.Now().UTC()
+	if s.replaceStorageJobLocked(next) != nil {
 		return Job{}, false
 	}
-	return cloneStorageJob(*j), true
+	return cloneStorageJob(next), true
 }
 
 func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
@@ -301,11 +299,11 @@ func (s *Storage) createUniqueJob(j Job) (Job, bool, error) {
 			return cloneStorageJob(*old), false, nil
 		}
 	}
-	j = cloneStorageJob(j)
+	if _, exists := s.jobs[j.ID]; exists {
+		return Job{}, false, errors.New("идентификатор архива уже существует")
+	}
 	j.UpdatedAt = time.Now().UTC()
-	s.jobs[j.ID] = &j
-	if err := s.saveJobsLocked(); err != nil {
-		delete(s.jobs, j.ID)
+	if err := s.replaceStorageJobLocked(j); err != nil {
 		return Job{}, false, err
 	}
 	return cloneStorageJob(j), true, nil
@@ -421,14 +419,13 @@ func (s *Storage) restoreOwned(owner, id string) (Job, error) {
 			return Job{}, errors.New("файлы архива отсутствуют — восстановление невозможно")
 		}
 	}
-	old := *j
-	j.DeletedAt = nil
-	j.UpdatedAt = time.Now().UTC()
-	if err := s.saveJobsLocked(); err != nil {
-		*j = old
+	next := *j
+	next.DeletedAt = nil
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.replaceStorageJobLocked(next); err != nil {
 		return Job{}, err
 	}
-	return cloneStorageJob(*j), nil
+	return cloneStorageJob(next), nil
 }
 
 // purgeOwned permanently removes only previously trashed entries, staging

@@ -59,3 +59,12 @@ New or stale entries fail the test and require review. Reads are included
 because a pointer may escape through a read. This is deliberately conservative:
 it is not type-aware, does not track aliases, and cannot detect a new mutation
 inside an already listed function. No cached authorization path is enabled.
+
+## Single-job copy-on-write boundary (12.4.30)
+
+Ordinary single-job operations replace the record through
+replaceStorageJobLocked; a failed save restores the exact previous pointer.
+ACL changes no longer leave a newer timestamp behind on rollback. Creation
+rejects an unrelated existing ID rather than overwriting it. Batch operations,
+imports and special physical journals remain separate audit targets. This is
+not a cached parity proof.

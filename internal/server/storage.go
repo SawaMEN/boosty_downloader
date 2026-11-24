@@ -252,19 +252,8 @@ func (s *Storage) upsert(job Job) error {
 	if err := s.sqlitePrimaryGuardMutationLocked(); err != nil {
 		return err
 	}
-	previous, exists := s.jobs[job.ID]
-	job = cloneStorageJob(job)
 	job.UpdatedAt = time.Now().UTC()
-	s.jobs[job.ID] = &job
-	if err := s.saveJobsLocked(); err != nil {
-		if exists {
-			s.jobs[job.ID] = previous
-		} else {
-			delete(s.jobs, job.ID)
-		}
-		return err
-	}
-	return nil
+	return s.replaceStorageJobLocked(job)
 }
 func (s *Storage) get(id string) (Job, bool) {
 	s.mu.Lock()

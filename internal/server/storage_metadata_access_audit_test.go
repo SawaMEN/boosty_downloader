@@ -44,7 +44,7 @@ func TestStorageMetadataDirectAccessInventory(t *testing.T) {
 		"storage.go:newStorageMode",
 		"storage.go:queued",
 		"storage.go:saveJobsLocked",
-		"storage.go:upsert",
+		"storage_metadata_replace.go:replaceStorageJobLocked",
 		"subscription_imports.go:cancelImport",
 		"subscription_imports.go:claimImport",
 		"subscription_imports.go:createImports",
