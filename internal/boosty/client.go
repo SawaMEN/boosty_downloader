@@ -362,8 +362,16 @@ func countComments(arr []Comment) (n int, truncated bool) {
 	// Use the same traversal limits as the offline and live renderers.
 	// Counting nodes that cannot be displayed would falsely report a fully
 	// preserved discussion. Deleted stubs still preserve their reply trees.
+	seen := make(map[string]bool)
 	limited := WalkCommentTree(arr, func(x *Comment, _ int) {
-		if !x.IsDeleted {
+		duplicate := x.ID != "" && seen[x.ID]
+		if duplicate {
+			truncated = true
+		}
+		if x.ID != "" {
+			seen[x.ID] = true
+		}
+		if !x.IsDeleted && !duplicate {
 			n++ // Boosty does not include deleted stubs in published counts.
 		}
 		directLive := 0
@@ -379,54 +387,6 @@ func countComments(arr []Comment) (n int, truncated bool) {
 	return n, truncated || limited
 }
 
-func (c *Client) Comments(ctx context.Context, author, id string, expected int) (CommentResult, error) {
-	if !safeSegment(author) || !safeSegment(id) {
-		return CommentResult{}, errors.New("недопустимый путь")
-	}
-	// The Boosty comments API does not reliably honor offset pagination.
-	// Request a larger bounded single page for busy posts instead of
-	// silently claiming the first 101 comments to be the whole discussion.
-	const maxCommentPage = 300
-	limit := 101
-	if expected >= maxCommentPage {
-		limit = maxCommentPage
-	} else if expected >= limit {
-		limit = expected + 1
-	}
-	var v struct {
-		Data  []Comment        `json:"data"`
-		Extra commentPageExtra `json:"extra"`
-	}
-	route := "/v1/blog/" + url.PathEscape(author) + "/post/" + url.PathEscape(id) +
-		"/comment/?limit=" + strconv.Itoa(limit) + "&reply_limit=100"
-	var raw json.RawMessage
-	if e := c.doJSON(ctx, route, &raw); e != nil {
-		return CommentResult{}, e
-	}
-	if e := json.Unmarshal(raw, &v); e != nil {
-		return CommentResult{}, e
-	}
-	if v.Data == nil {
-		return CommentResult{}, errors.New("Boosty не вернул массив комментариев")
-	}
-	n, trimmed := countComments(v.Data)
-	cutoff := len(v.Data) >= limit
-	missing := expected > 0 && n < expected
-	hints := commentPageHasMore(v.Extra)
-	part := trimmed || cutoff || missing || hints
-	reason := ""
-	if part {
-		switch {
-		case trimmed:
-			reason = "Boosty вернул не все ответы на комментарии"
-		case missing:
-			reason = "Boosty вернул меньше комментариев, чем указано в посте"
-		default:
-			reason = "Boosty не подтвердил последнюю страницу комментариев"
-		}
-	}
-	return CommentResult{Raw: raw, Comments: v.Data, Partial: part, Expected: expected, Received: n, Reason: reason}, nil
-}
 func ExtractMedia(p *Post) []Media {
 	out := make([]Media, 0)
 	for _, raw := range p.Data {
