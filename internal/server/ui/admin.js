@@ -290,7 +290,12 @@ async function loadRevisionPreview(){
     target.replaceChildren(text('strong','Лимит '+result.limit+': '+result.candidateCount+' версий сверх лимита · '+bytes+' логически'));
     target.append(text('p','Проверено публикаций: '+result.scanned+' из '+result.total+' · пропущено: '+result.skipped,'muted small'));
     if(!result.complete)target.append(text('p','Расчёт неполный: занятые, изменённые или недоступные архивы не учтены.','error'));
-    target.append(text('p','Это не гарантированное освобождение места: файлы могут иметь другие hardlinks. Ничего не удалено.','muted small'));
+    if(result.physicalBytes!=null){
+      const physical=(Number(result.physicalBytes)/(1024**3)).toFixed(2)+' ГиБ';
+      target.append(text('p','Оценка выделенных блоков без оставшихся hardlinks: '+physical+' · проверено '+result.physicalScanned+' из '+result.total,'muted small'));
+      if(result.physicalScanned!==result.total)target.append(text('p','Физический расчёт неполный.','error'));
+    }
+    target.append(text('p','Не гарантия освобождения места: межархивные ссылки, reflink, снимки ФС и открытые файлы могут изменить результат. Ничего не удалено.','muted small'));
   }catch(e){target.replaceChildren(text('p',e.message,'error'))}finally{button.disabled=false}
 }
 async function loadAdminSQLite(){
