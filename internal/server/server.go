@@ -393,8 +393,12 @@ func (a *App) Handler() http.Handler {
 		reply(w, 200, map[string]any{"id": u.ID, "username": u.Username, "admin": u.Admin, "permissions": a.accounts.effective(u.ID)})
 	})
 	private.HandleFunc("POST /api/account/logout", func(w http.ResponseWriter, r *http.Request) {
-		_ = a.accounts.logout(sessionToken(r))
+		err := a.accounts.logout(sessionToken(r))
 		setSessionCookie(w, "", -1)
+		if err != nil {
+			fail(w, 500, "сессия отозвана в памяти, но не удалось сохранить отзыв")
+			return
+		}
 		reply(w, 200, map[string]bool{"ok": true})
 	})
 	private.HandleFunc("GET /api/admin/video", a.videoAdmin)

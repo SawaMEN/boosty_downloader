@@ -230,13 +230,22 @@ type CommentResult struct {
 }
 
 type Client struct {
-	mu      sync.Mutex
-	tokens  Tokens
-	save    func(Tokens) error
-	api     *http.Client
-	media   *http.Client
-	apiBase string
+	mu         sync.Mutex
+	tokens     Tokens
+	generation uint64
+	refreshing *tokenRefresh
+	save       func(Tokens) error
+	api        *http.Client
+	media      *http.Client
+	apiBase    string
 }
+
+type tokenRefresh struct {
+	done chan struct{}
+	err  error
+}
+
+var errCredentialsChanged = errors.New("учётные данные Boosty изменились; повторите запрос")
 
 func New(tokens Tokens, save func(Tokens) error) *Client {
 	return &Client{tokens: tokens, save: save, api: safeMediaClient(), media: safeMediaClient(), apiBase: "https://api.boosty.to"}
@@ -250,13 +259,15 @@ func (c *Client) SetTokens(t Tokens) error {
 		}
 	}
 	c.tokens = t
+	c.generation++
+	c.refreshing = nil
 	return nil
 }
 func (c *Client) HasToken() bool   { c.mu.Lock(); defer c.mu.Unlock(); return c.tokens.AccessToken != "" }
 func (c *Client) Snapshot() Tokens { c.mu.Lock(); defer c.mu.Unlock(); return c.tokens }
 func (c *Client) doJSON(ctx context.Context, route string, result any) error {
 	c.mu.Lock()
-	t := c.tokens
+	t, generation := c.tokens, c.generation
 	c.mu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		req, e := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+route, nil)
@@ -274,43 +285,97 @@ func (c *Client) doJSON(ctx context.Context, route string, result any) error {
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && t.RefreshToken != "" {
 			resp.Body.Close()
-			if e = c.refresh(ctx, t); e != nil {
+			if e = c.refresh(ctx, t, generation); e != nil {
 				return fmt.Errorf("сессия Boosty истекла: %w", e)
 			}
-			t = c.Snapshot()
+			c.mu.Lock()
+			if c.generation != generation {
+				c.mu.Unlock()
+				return errCredentialsChanged
+			}
+			t = c.tokens
+			c.mu.Unlock()
 			continue
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
 			return fmt.Errorf("Boosty API вернул HTTP %d", resp.StatusCode)
 		}
-		return json.NewDecoder(io.LimitReader(resp.Body, 12<<20)).Decode(result)
+		if e := json.NewDecoder(io.LimitReader(resp.Body, 12<<20)).Decode(result); e != nil {
+			return e
+		}
+		c.mu.Lock()
+		changed := c.generation != generation
+		c.mu.Unlock()
+		if changed {
+			return errCredentialsChanged
+		}
+		return nil
 	}
 	return errors.New("не удалось авторизоваться в Boosty")
 }
-func (c *Client) refresh(ctx context.Context, previous Tokens) error {
+func (c *Client) refresh(ctx context.Context, previous Tokens, generation uint64) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.tokens.RefreshToken != previous.RefreshToken {
+	if c.generation != generation {
+		c.mu.Unlock()
+		return errCredentialsChanged
+	}
+	if c.tokens != previous {
+		c.mu.Unlock()
 		return nil
 	}
+	if flight := c.refreshing; flight != nil {
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-flight.done:
+			return flight.err
+		}
+	}
+	flight := &tokenRefresh{done: make(chan struct{})}
+	c.refreshing = flight
+	c.mu.Unlock()
+
+	updated, err := c.requestRefreshedTokens(ctx, previous)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != generation || c.tokens != previous || c.refreshing != flight {
+		err = errCredentialsChanged
+	} else if err == nil {
+		if c.save != nil {
+			err = c.save(updated)
+		}
+		if err == nil {
+			c.tokens = updated
+		}
+	}
+	if c.refreshing == flight {
+		c.refreshing = nil
+	}
+	flight.err = err
+	close(flight.done)
+	return err
+}
+
+func (c *Client) requestRefreshedTokens(ctx context.Context, previous Tokens) (Tokens, error) {
 	if previous.DeviceID == "" {
-		return errors.New("для обновления токена требуется deviceId")
+		return Tokens{}, errors.New("для обновления токена требуется deviceId")
 	}
 	b, _ := json.Marshal(map[string]string{"device_id": previous.DeviceID, "refresh_token": previous.RefreshToken})
 	req, e := http.NewRequestWithContext(ctx, "POST", c.apiBase+"/oauth/token/", bytes.NewReader(b))
 	if e != nil {
-		return e
+		return Tokens{}, e
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	res, e := c.api.Do(req)
 	if e != nil {
-		return e
+		return Tokens{}, e
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return fmt.Errorf("обновление отклонено (HTTP %d)", res.StatusCode)
+		return Tokens{}, fmt.Errorf("обновление отклонено (HTTP %d)", res.StatusCode)
 	}
 	var v struct {
 		Access  string `json:"access_token"`
@@ -318,21 +383,15 @@ func (c *Client) refresh(ctx context.Context, previous Tokens) error {
 		Expires int64  `json:"expires_in"`
 	}
 	if e := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&v); e != nil {
-		return e
+		return Tokens{}, e
 	}
 	if v.Access == "" || v.Refresh == "" {
-		return errors.New("Boosty не вернул токены")
+		return Tokens{}, errors.New("Boosty не вернул токены")
 	}
 	previous.AccessToken = v.Access
 	previous.RefreshToken = v.Refresh
 	previous.ExpiresAt = time.Now().Unix() + v.Expires
-	if c.save != nil {
-		if e := c.save(previous); e != nil {
-			return e
-		}
-	}
-	c.tokens = previous
-	return nil
+	return previous, nil
 }
 func (c *Client) Post(ctx context.Context, author, id string) (*Post, error) {
 	if !safeSegment(author) || !safeSegment(id) {

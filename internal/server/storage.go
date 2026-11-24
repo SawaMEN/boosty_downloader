@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SawaMEN/boosty_downloader/internal/boosty"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -423,6 +424,8 @@ func safeArchivePart(s string) bool {
 	return true
 }
 
+const maxUserTokenVaultBytes = 256 << 10
+
 func (s *Storage) saveUserTokens(owner string, t boosty.Tokens) error {
 	if !safeArchivePart(owner) {
 		return errors.New("неверный ID пользователя")
@@ -446,18 +449,34 @@ func (s *Storage) saveUserTokens(owner string, t boosty.Tokens) error {
 	if e = os.MkdirAll(filepath.Join(s.root, "vault"), 0700); e != nil {
 		return e
 	}
-	return writeAtomic(filepath.Join(s.root, "vault", owner+".enc"), gcm.Seal(nonce, nonce, b, []byte(owner)))
+	sealed := gcm.Seal(nonce, nonce, b, []byte(owner))
+	if len(sealed) > maxUserTokenVaultBytes {
+		return errors.New("учётные данные превышают допустимый размер")
+	}
+	return writeAtomic(filepath.Join(s.root, "vault", owner+".enc"), sealed)
 }
 func (s *Storage) loadUserTokens(owner string) (boosty.Tokens, error) {
 	if !safeArchivePart(owner) {
 		return boosty.Tokens{}, errors.New("неверный ID пользователя")
 	}
-	b, e := os.ReadFile(filepath.Join(s.root, "vault", owner+".enc"))
+	file, e := openArchiveRegular(s.root, "vault/"+owner+".enc")
 	if os.IsNotExist(e) {
 		return boosty.Tokens{}, nil
 	}
 	if e != nil {
 		return boosty.Tokens{}, e
+	}
+	defer file.Close()
+	info, e := file.Stat()
+	if e != nil || info.Size() > maxUserTokenVaultBytes || info.Mode().Perm()&0077 != 0 {
+		return boosty.Tokens{}, errors.New("небезопасный размер или права файла учётных данных")
+	}
+	b, e := io.ReadAll(io.LimitReader(file, maxUserTokenVaultBytes+1))
+	if e != nil {
+		return boosty.Tokens{}, e
+	}
+	if len(b) > maxUserTokenVaultBytes {
+		return boosty.Tokens{}, errors.New("учётные данные превышают допустимый размер")
 	}
 	block, e := aes.NewCipher(s.key)
 	if e != nil {

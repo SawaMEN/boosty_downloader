@@ -57,10 +57,11 @@ type accountFile struct {
 	TrashPolicy        *TrashPolicy               `json:"trashPolicy,omitempty"`
 }
 type Accounts struct {
-	mu     sync.Mutex
-	path   string
-	data   accountFile
-	failed map[string][]time.Time
+	mu          sync.Mutex
+	path        string
+	data        accountFile
+	failed      map[string][]time.Time
+	failedSweep time.Time
 }
 
 func passwordKey(pass string, salt []byte, count int) []byte {
@@ -73,7 +74,7 @@ func passwordKey(pass string, salt []byte, count int) []byte {
 	u := h.Sum(nil)
 	out := append([]byte{}, u...)
 	for i := 1; i < count; i++ {
-		h = hmac.New(sha256.New, key)
+		h.Reset()
 		h.Write(u)
 		u = h.Sum(u[:0])
 		for j := range out {
@@ -157,7 +158,11 @@ func (a *Accounts) register(user, password string) (Account, error) {
 	if !a.registration() {
 		return Account{}, errors.New("регистрация закрыта администратором")
 	}
+	if !tryPasswordWork() {
+		return Account{}, errPasswordBusy
+	}
 	hash, err := hashPassword(password)
+	releasePasswordWork()
 	if err != nil {
 		return Account{}, err
 	}
@@ -180,34 +185,57 @@ func (a *Accounts) register(user, password string) (Account, error) {
 	}
 	acc := Account{ID: id, Username: user, Password: hash, CreatedAt: time.Now().UTC()}
 	a.data.Accounts[id] = acc
-	return acc, a.saveLocked()
+	if err := a.saveLocked(); err != nil {
+		delete(a.data.Accounts, id)
+		return Account{}, err
+	}
+	return acc, nil
 }
 func (a *Accounts) authenticate(user, password, peer string) (Account, error) {
+	return a.authenticateWith(user, password, peer, verifyPassword)
+}
+
+func (a *Accounts) authenticateWith(user, password, peer string, verify func(string, string) bool) (Account, error) {
 	if host, _, e := net.SplitHostPort(peer); e == nil {
 		peer = host
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	now := time.Now()
-	filtered := a.failed[peer][:0]
-	for _, v := range a.failed[peer] {
-		if now.Sub(v) < 15*time.Minute {
-			filtered = append(filtered, v)
-		}
+	if !tryPasswordWork() {
+		return Account{}, errPasswordBusy
 	}
-	a.failed[peer] = filtered
-	if len(filtered) >= 10 {
+	defer releasePasswordWork()
+	a.mu.Lock()
+	now := time.Now()
+	if !a.allowLoginPeerLocked(peer, now) {
+		a.mu.Unlock()
 		return Account{}, errors.New("слишком много попыток входа; повторите позже")
 	}
+	// Charge the attempt before releasing the lock, so concurrent requests
+	// cannot pass the same rate-limit snapshot.
+	a.failed[peer] = append(a.failed[peer], now)
+	var candidate Account
 	for _, u := range a.data.Accounts {
-		if strings.EqualFold(u.Username, user) && verifyPassword(password, u.Password) {
-			delete(a.failed, peer)
-			return u, nil
+		if strings.EqualFold(u.Username, user) {
+			candidate = u
+			break
 		}
 	}
-	a.failed[peer] = append(a.failed[peer], now)
-	return Account{}, errors.New("неверный логин или пароль")
+	a.mu.Unlock()
+
+	if candidate.ID == "" || len(password) < 12 || len(password) > 1024 || !usernamePattern.MatchString(user) ||
+		!verify(password, candidate.Password) {
+		return Account{}, errors.New("неверный логин или пароль")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current, ok := a.data.Accounts[candidate.ID]
+	if !ok || current != candidate {
+		return Account{}, errors.New("учётная запись изменилась; повторите вход")
+	}
+	delete(a.failed, peer)
+	return current, nil
 }
+
 func (a *Accounts) session(id string) (string, error) {
 	token, err := randomHex(32)
 	if err != nil {
@@ -217,8 +245,14 @@ func (a *Accounts) session(id string) (string, error) {
 	key := hex.EncodeToString(digest[:])
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if _, ok := a.data.Accounts[id]; !ok {
+		return "", errors.New("учётная запись отсутствует")
+	}
+	before := a.data.Sessions
+	a.data.Sessions = boundedLoginSessions(before, a.data.Accounts, id, time.Now().UTC())
 	a.data.Sessions[key] = LoginSession{UserID: id, Expires: time.Now().UTC().Add(sessionTTL)}
 	if err = a.saveLocked(); err != nil {
+		a.data.Sessions = before
 		return "", err
 	}
 	return token, nil
@@ -248,8 +282,13 @@ func (a *Accounts) logout(token string) error {
 func (a *Accounts) setRegistration(open bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	before := a.data.RegistrationOpen
 	a.data.RegistrationOpen = open
-	return a.saveLocked()
+	if err := a.saveLocked(); err != nil {
+		a.data.RegistrationOpen = before
+		return err
+	}
+	return nil
 }
 func (a *Accounts) registration() bool {
 	a.mu.Lock()
