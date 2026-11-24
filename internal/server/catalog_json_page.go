@@ -4,7 +4,7 @@ import "strings"
 
 type catalogFilter struct {
 	viewer, scope, query, author, status string
-	ownerNames                          map[string]string
+	ownerNames                           map[string]string
 }
 
 func (a *Accounts) catalogOwnerNames() map[string]string {
