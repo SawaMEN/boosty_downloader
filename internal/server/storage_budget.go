@@ -17,7 +17,7 @@ const gibibyte int64 = 1 << 30
 type storageBudgetKey struct{}
 
 var (
-	errStorageUserQuota = errors.New("превышена квота архива пользователя")
+	errStorageUserQuota   = errors.New("превышена квота архива пользователя")
 	errStorageFreeReserve = errors.New("недостаточный резерв свободного места")
 	errStorageBudgetProbe = errors.New("не удалось проверить дисковую квоту")
 )
