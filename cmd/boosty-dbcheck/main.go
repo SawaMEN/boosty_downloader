@@ -13,6 +13,7 @@ import (
 func main() {
 	root := flag.String("data-dir", "", "the stopped server's data directory")
 	backup := flag.String("backup-dir", "", "create a new private metadata rollback backup directory (must not exist)")
+	bundle := flag.String("prepare-sqlite-bundle-dir", "", "create a new private metadata and full recovery bundle and verify exact cutover readiness without activation")
 	fullSnapshot := flag.String("full-snapshot-dir", "", "create a new private, SHA-256 verified copy of the whole stopped data directory, including media")
 	verifyFullSnapshot := flag.String("verify-full-snapshot-dir", "", "independently verify a full data directory snapshot with no live server access")
 	restoreFullSnapshot := flag.String("restore-full-snapshot-dir", "", "verified full snapshot to recover into --restore-to (new, nonexistent directory only)")
@@ -39,7 +40,7 @@ func main() {
 	// Exactly one operation per invocation, with an explicit verified backup
 	// for any operation that claims a fixed recovery point.
 	modes := 0
-	for _, enabled := range []bool{*backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON, *rollbackSQL, *recoverRollback, *activatePrimary} {
+	for _, enabled := range []bool{*bundle != "", *backup != "", *fullSnapshot != "", *auditMedia, *reindexMedia, *cutoverPreflight, *restoreShadow, *prepareCutover, *recoverCutover, *exportSQL != "", *pinJSON, *rollbackSQL, *recoverRollback, *activatePrimary} {
 		if enabled {
 			modes++
 		}
@@ -69,7 +70,7 @@ func main() {
 		(*fromFull != "" && *restoreSQL == "") ||
 		(verifiers != 0 && (*root != "" || modes != 0 || *recoveryDir != "")) ||
 		(verifiers == 0 && (*root == "" || modes > 1 || (needsRecovery != (*recoveryDir != "")))) {
-		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --activate-sqlite-primary --confirm-experimental-sqlite --recovery-dir VERIFIED-BACKUP --cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend | --rollback-sqlite-to-json --rollback-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-rollback] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
+		fmt.Fprintln(os.Stderr, "usage: boosty-dbcheck --data-dir DATA [--prepare-sqlite-bundle-dir NEW-DIR | --backup-dir NEW-DIR | --full-snapshot-dir NEW-DIR | --audit-media | --reindex-media --recovery-dir VERIFIED-BACKUP | --cutover-preflight --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --restore-sqlite-shadow --recovery-dir VERIFIED-BACKUP | --prepare-sqlite-cutover --recovery-dir VERIFIED-BACKUP [--cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT] | --activate-sqlite-primary --confirm-experimental-sqlite --recovery-dir VERIFIED-BACKUP --cutover-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-cutover | --export-sqlite-json-dir NEW-DIR | --pin-json-backend | --rollback-sqlite-to-json --rollback-full-snapshot-dir VERIFIED-FULL-SNAPSHOT | --recover-sqlite-rollback] | --verify-backup-dir EXISTING-DIR | --verify-full-snapshot-dir EXISTING-DIR | --restore-full-snapshot-dir VERIFIED-SNAPSHOT --restore-to NEW-DIR | --restore-sqlite-json-dir VERIFIED-SQL-EXPORT --from-full-snapshot-dir VERIFIED-FULL-SNAPSHOT --restore-to NEW-DIR")
 		os.Exit(2)
 	}
 	if *restoreSQL != "" {
@@ -205,6 +206,16 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("SQLite revision/media index updated transactionally and verified; JSON remains authoritative.")
+		return
+	}
+	if *bundle != "" {
+		if err := server.PrepareSQLiteRecoveryBundle(*root, *bundle); err != nil {
+			fmt.Fprintln(os.Stderr, "SQLite recovery bundle not ready:", err)
+			fmt.Fprintln(os.Stderr, "Do not activate using an incomplete bundle; completed snapshots are retained for inspection.")
+			os.Exit(1)
+		}
+		fmt.Println("Verified recovery bundle ready:", *bundle)
+		fmt.Println("Subdirectories: metadata and full. JSON remains selected; activation requires a separate explicit command and revalidation.")
 		return
 	}
 	if *fullSnapshot != "" {
