@@ -91,40 +91,37 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 	if _, _, err := sqlitePrimaryDecodeImages(afterJobs, afterImports); err != nil {
 		return err
 	}
-	if err := m.verifyJSONParity(context.Background(), beforeJobs, beforeImports); err != nil {
-		return fmt.Errorf("SQL before-image does not match existing JSON: %w", err)
-	}
 	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
 	raw, err := encodeSQLitePrimaryBestJournal(journal, limit)
 	if err != nil {
 		return err
 	}
-	if err := writeSyncedMetadata(root, sqlitePrimaryTransactionName, raw); err != nil {
-		// An atomic rename might have completed even if fsync returned an
-		// error; always resolve an on-disk intent before returning.
-		if recoverErr := recoverSQLitePrimaryCommitLocked(root); recoverErr != nil {
-			return fmt.Errorf("SQL journal staging failed: %w; recovery also failed: %v", err, recoverErr)
-		}
-		return err
-	}
+	// Recover only after the SQL transaction has closed, including a failure
+	// during journal staging (rename may precede a directory fsync error).
+	stagingAttempted := false
 	defer func() {
-		if err == nil {
+		if err == nil || !stagingAttempted {
 			return
 		}
 		if recoveryErr := recoverSQLitePrimaryCommitLocked(root); recoveryErr != nil {
 			err = fmt.Errorf("%w; SQL primary transaction recovery failed (service must stop): %v", err, recoveryErr)
 		}
 	}()
-	if hooks != nil && hooks.checkpoint != nil {
-		if err := hooks.checkpoint("prepared"); err != nil {
+	stage := func() error {
+		stagingAttempted = true
+		if err := writeSyncedMetadata(root, sqlitePrimaryTransactionName, raw); err != nil {
 			return err
 		}
+		if hooks != nil && hooks.checkpoint != nil {
+			return hooks.checkpoint("prepared")
+		}
+		return nil
 	}
 	var extra func(context.Context, *sql.Tx) error
 	if hooks != nil {
 		extra = hooks.reconcileExtra
 	}
-	if err := m.reconcileWithExtra(context.Background(), jobs, imports, extra); err != nil {
+	if err := m.applyCheckedPrimaryDelta(context.Background(), beforeJobs, beforeImports, jobs, imports, stage, extra); err != nil {
 		return err
 	}
 	if hooks != nil && hooks.checkpoint != nil {

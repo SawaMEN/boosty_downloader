@@ -96,18 +96,40 @@ func (m *sqliteMetadata) verifyJSONParity(ctx context.Context, jobs map[string]J
 		return err
 	}
 	defer tx.Rollback()
-	actualJobs, err := sqliteShadowSQLJobs(ctx, tx)
-	if err != nil {
+	if err := sqliteVerifyParityTx(ctx, tx, jobs, imports); err != nil {
 		return err
-	}
-	actualImports, err := sqliteShadowSQLImports(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if !sqliteShadowEqual(jobs, actualJobs) || !sqliteShadowEqual(imports, actualImports) {
-		return errors.New("SQLite jobs or imports differ from the authoritative JSON snapshot")
 	}
 	return tx.Commit()
+}
+
+// Compare one row at a time rather than allocating another complete map
+// and marshaling the entire SQL and JSON libraries for equality.
+func sqliteVerifyParityTx(ctx context.Context, tx *sql.Tx, jobs map[string]Job, imports map[string]AuthorImport) error {
+	jobCount, importCount := 0, 0
+	if err := sqliteShadowVisitJobs(ctx, tx, func(id string, actual Job) error {
+		want, ok := jobs[id]
+		if !ok || !sqliteShadowEqual(want, actual) {
+			return fmt.Errorf("SQLite archive differs from expected snapshot: %s", id)
+		}
+		jobCount++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := sqliteShadowVisitImports(ctx, tx, func(id string, actual AuthorImport) error {
+		want, ok := imports[id]
+		if !ok || !sqliteShadowEqual(want, actual) {
+			return fmt.Errorf("SQLite import differs from expected snapshot: %s", id)
+		}
+		importCount++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if jobCount != len(jobs) || importCount != len(imports) {
+		return errors.New("SQLite jobs or imports differ from the authoritative JSON snapshot")
+	}
+	return nil
 }
 
 // Only administrators can request a consistent SQL metadata checkpoint.
