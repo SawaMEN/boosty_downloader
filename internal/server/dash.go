@@ -410,11 +410,11 @@ func fetchDASHTrack(ctx context.Context, fetch mediaFetcher, tr dashTrack, dir, 
 		if os.Getenv("BD_DASH_SEGMENT_WORKERS") == "2" && len(links)-i >= 2 && *budget >= 2*maxHLSSegmentBytes {
 			count = 2
 		}
-		var batch [2]dashSegmentTask
+		var batch [2]mediaSegmentTask
 		for n := 0; n < count; n++ {
-			batch[n] = dashSegmentTask{url: links[i+n], path: filepath.Join(dir, fmt.Sprintf(".dash-%s-%06d", name, i+n))}
+			batch[n] = mediaSegmentTask{url: links[i+n], path: filepath.Join(dir, fmt.Sprintf(".dash-%s-%06d", name, i+n))}
 		}
-		sizes, err := fetchDASHSegmentBatch(ctx, fetch, batch[:count], *budget)
+		sizes, err := fetchMediaSegmentBatch(ctx, fetch, batch[:count], *budget)
 		if err != nil {
 			return "", err
 		}
