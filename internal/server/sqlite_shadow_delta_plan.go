@@ -12,7 +12,7 @@ type sqliteShadowRemoval struct {
 type sqliteShadowDeltaPlan struct {
 	archives       []sqliteArchiveChange
 	removeArchives []sqliteShadowRemoval
-	imports        []sqliteImportChange
+	importChanges  []sqliteImportChange
 	removeImports  []sqliteShadowRemoval
 }
 
@@ -50,7 +50,7 @@ func sqlitePlanShadowDelta(ctx context.Context, tx *sql.Tx, jobs map[string]Job,
 		}
 		seenImports[id] = struct{}{}
 		if !sqliteShadowEqual(have, want) {
-			plan.imports = append(plan.imports, sqliteImportChange{Before: &have, After: want})
+			plan.importChanges = append(plan.importChanges, sqliteImportChange{Before: &have, After: want})
 		}
 		return nil
 	}); err != nil {
@@ -58,7 +58,7 @@ func sqlitePlanShadowDelta(ctx context.Context, tx *sql.Tx, jobs map[string]Job,
 	}
 	for id, want := range imports {
 		if _, exists := seenImports[id]; !exists {
-			plan.imports = append(plan.imports, sqliteImportChange{After: want})
+			plan.importChanges = append(plan.importChanges, sqliteImportChange{After: want})
 		}
 	}
 	return plan, nil
@@ -78,7 +78,7 @@ func (p sqliteShadowDeltaPlan) apply(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
-	for _, change := range p.imports {
+	for _, change := range p.importChanges {
 		if err := sqliteApplyImport(ctx, tx, change); err != nil {
 			return err
 		}

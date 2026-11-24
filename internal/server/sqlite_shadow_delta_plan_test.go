@@ -27,7 +27,7 @@ func TestSQLiteShadowStreamingDelta(t *testing.T) {
 	}
 	plan, err := sqlitePlanShadowDelta(ctx, tx, jobs, imports)
 	_ = tx.Rollback()
-	if err != nil || len(plan.archives)+len(plan.removeArchives)+len(plan.imports)+len(plan.removeImports) != 0 {
+	if err != nil || len(plan.archives)+len(plan.removeArchives)+len(plan.importChanges)+len(plan.removeImports) != 0 {
 		t.Fatalf("unchanged inventory produced a delta: %+v %v", plan, err)
 	}
 	first, second := strings.Repeat("1", 24), strings.Repeat("2", 24)
@@ -71,7 +71,7 @@ func TestSQLiteShadowStreamingDeltaRejectsLateDrift(t *testing.T) {
 	oldTitle := changed.Title
 	changed.Title = "must not commit"
 	jobs[id] = changed
-	if _, err := meta.db.Exec("UPDATE author_imports SET job_state='forged'"); err != nil {
+	if _, err := meta.db.Exec("UPDATE author_imports SET job_state=CASE WHEN job_state='done' THEN 'failed' ELSE 'done' END"); err != nil {
 		t.Fatal(err)
 	}
 	called := false
