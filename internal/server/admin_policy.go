@@ -78,6 +78,13 @@ func (a *Accounts) initializePolicy(initial time.Duration) error {
 		limit := 0
 		a.data.MaxUserGiB = &limit
 	}
+	if a.data.RevisionLimit == nil {
+		limit := maxArchiveRevisions
+		a.data.RevisionLimit = &limit
+	}
+	if !validRevisionLimit(*a.data.RevisionLimit) {
+		return errors.New("некорректный сохранённый лимит истории")
+	}
 	if a.data.AutoUpdatePolicy == nil {
 		defaults := defaultAutoUpdatePolicy()
 		a.data.AutoUpdatePolicy = &defaults
@@ -137,6 +144,7 @@ type AdminPolicy struct {
 	DeduplicateMedia  bool            `json:"deduplicateMedia"`
 	MinFreeGiB        int             `json:"minFreeGiB"`
 	MaxUserGiB        int             `json:"maxUserGiB"`
+	RevisionLimit     int             `json:"revisionLimit"`
 	Video             VideoPolicy     `json:"video"`
 
 	Updates AutoUpdatePolicy `json:"updates"`
@@ -172,6 +180,10 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.MaxUserGiB != nil {
 		maxUser = *a.data.MaxUserGiB
 	}
+	revisionLimit := maxArchiveRevisions
+	if a.data.RevisionLimit != nil {
+		revisionLimit = *a.data.RevisionLimit
+	}
 	updates := defaultAutoUpdatePolicy()
 	if a.data.AutoUpdatePolicy != nil {
 		updates = *a.data.AutoUpdatePolicy
@@ -180,7 +192,7 @@ func (a *Accounts) policy() AdminPolicy {
 	if a.data.TrashPolicy != nil {
 		trash = *a.data.TrashPolicy
 	}
-	return AdminPolicy{Trash: trash, Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
+	return AdminPolicy{Trash: trash, Updates: updates, MinFreeGiB: minFree, MaxUserGiB: maxUser, RevisionLimit: revisionLimit, Defaults: defaults, SyncIntervalHours: hours, MaxScanPosts: a.data.MaxScanPosts, MaxImportPosts: a.data.MaxImportPosts, RegistrationOpen: a.data.RegistrationOpen, CompressionLevel: level, DeduplicateMedia: dedup, Video: video}
 }
 
 func validatePolicy(p AdminPolicy) error {
@@ -198,6 +210,10 @@ func validatePolicy(p AdminPolicy) error {
 	}
 	if p.MaxUserGiB < 0 || p.MaxUserGiB > 16384 {
 		return errors.New("квота пользователя: от 0 до 16384 ГиБ")
+	}
+	// Zero is reserved for older API clients that omit the new field.
+	if p.RevisionLimit != 0 && !validRevisionLimit(p.RevisionLimit) {
+		return errors.New("количество версий: от 1 до 64")
 	}
 	if p.CompressionLevel < 0 || p.CompressionLevel > 19 {
 		return errors.New("уровень Zstandard должен быть от 0 до 19; 0 отключает сжатие")
@@ -238,6 +254,9 @@ func (a *Accounts) changePolicy(p AdminPolicy) error {
 	a.data.DeduplicateMedia = &p.DeduplicateMedia
 	a.data.MinFreeGiB = &p.MinFreeGiB
 	a.data.MaxUserGiB = &p.MaxUserGiB
+	if p.RevisionLimit != 0 {
+		a.data.RevisionLimit = &p.RevisionLimit
+	}
 	a.data.VideoPolicy = &p.Video
 	a.data.AutoUpdatePolicy = &p.Updates
 	a.data.TrashPolicy = &p.Trash

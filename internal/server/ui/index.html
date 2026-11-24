@@ -75,6 +75,7 @@
             <div class="policy-controls">
               <label>Минимальный резерв диска (ГиБ)<input id="adminMinFreeGiB" type="number" min="0" max="1024" step="1" value="1"><small>1 ГиБ по умолчанию; 0 — без резерва. Контролируется при каждой порции загрузки.</small></label>
               <label>Лимит архива на пользователя (ГиБ)<input id="adminMaxUserGiB" type="number" min="0" max="16384" step="1" value="0"><small>0 — без квоты; объём считается вместе с временными файлами и видеокопиями.</small></label>
+              <label>История: версий на публикацию<input id="adminRevisionLimit" type="number" min="1" max="64" step="1" value="8" required><small>По умолчанию 8. Старые версии удаляются после успешного обновления или восстановления; сохранение настройки само по себе ничего не удаляет.</small></label>
             </div>
             <div class="video-diagnostic-tools"><button class="btn subtle" type="button" id="adminStorageRefresh">Проверить место и квоты</button></div>
             <div id="adminStorageReport" class="video-diagnostics" role="status"></div>

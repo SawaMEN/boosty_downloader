@@ -52,6 +52,7 @@ type accountFile struct {
 	DeduplicateMedia   *bool                      `json:"deduplicateMedia,omitempty"`
 	MinFreeGiB         *int                       `json:"minFreeGiB,omitempty"`
 	MaxUserGiB         *int                       `json:"maxUserGiB,omitempty"`
+	RevisionLimit      *int                       `json:"revisionLimit,omitempty"`
 	VideoPolicy        *VideoPolicy               `json:"videoPolicy,omitempty"`
 	AutoUpdatePolicy   *AutoUpdatePolicy          `json:"autoUpdatePolicy,omitempty"`
 	TrashPolicy        *TrashPolicy               `json:"trashPolicy,omitempty"`

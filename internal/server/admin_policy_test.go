@@ -237,3 +237,42 @@ func TestAdminCanControlUserAuthorAutoScanToggle(t *testing.T) {
 	policyRequest(t, app, member, "PUT", path, `{"autoSync":true}`, 403)
 	policyRequest(t, app, member, "PUT", path, `{"autoSync":false}`, 200)
 }
+
+func TestRevisionRetentionPolicyPersistsAndLegacyRequestsPreserveLimit(t *testing.T) {
+	root := t.TempDir()
+	accounts, err := newAccounts(root, "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accounts.initializePolicy(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p := accounts.policy()
+	if p.RevisionLimit != maxArchiveRevisions {
+		t.Fatalf("unexpected default: %d", p.RevisionLimit)
+	}
+	p.RevisionLimit = 16
+	if err := accounts.changePolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	p.RevisionLimit = 0
+	if err := accounts.changePolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []int{-1, 65} {
+		p.RevisionLimit = invalid
+		if err := accounts.changePolicy(p); err == nil {
+			t.Fatal("invalid retention accepted")
+		}
+	}
+	again, err := newAccounts(root, "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.initializePolicy(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got := again.policy().RevisionLimit; got != 16 {
+		t.Fatalf("retention lost after restart: %d", got)
+	}
+}
