@@ -362,7 +362,7 @@ class BrowserE2E(unittest.TestCase):
 
         page.route(re.compile(r"/api/catalog([?]|$)"), mock_catalog)
         page.locator('#navigation [data-page="library"]').click()
-        expect(page.locator("#libraryJobs .job-title")).to_contain_text("Archived " + payload)
+        expect(page.locator("#libraryJobs .job-title").filter(has_text="Archived " + payload)).to_have_count(1)
         self.assertEqual(page.locator("#libraryJobs img, #libraryJobs script").count(), 0)
         self.assertIsNone(page.evaluate("window.__browser_xss || null"))
 
