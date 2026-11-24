@@ -535,6 +535,7 @@ func (s *Storage) publishArchiveUpdate(job Job, stage archiveUpdateStage) (bool,
 			return false, s.primaryFatal
 		}
 	}
+	s.invalidateMetadataEpochLocked()
 	j, err := s.archiveUpdatePrepare(job, stage, beforeHash, afterHash)
 	if err != nil {
 		if _, found, readErr := archiveUpdateReadJournal(s.root); found || readErr != nil {

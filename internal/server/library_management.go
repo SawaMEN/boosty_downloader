@@ -638,6 +638,7 @@ func (s *Storage) purgeOwnedBeforeUnderGate(owner, id, author string, cutoff tim
 		s.mu.Unlock()
 		return 0, s.primaryFatal
 	}
+	s.invalidateMetadataEpochLocked()
 	if err := writePurgeJournal(s.root, journal); err != nil {
 		return abort(err)
 	}

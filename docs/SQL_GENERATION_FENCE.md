@@ -38,3 +38,15 @@ from escaping those methods. SQL reads decoded from a fresh snapshot are
 already detached. Internal in-place writes and archive publication paths
 still need a separate inventory and generation accounting. The probe does
 not authorize a fast path.
+
+## Conservative mutation epoch (12.4.28)
+
+The process-local metadataMutationEpoch is invalidated at ordinary save
+boundaries and before the special archive publication, restore and purge
+intents. The counter never rewinds on rollback and saturates at MaxUint64
+(which must never certify a cached proof). It can advance more than once
+per logical operation and resets on process restart. It counts attempts,
+not committed transactions. Startup initialization has no existing cache.
+It does not detect direct writes bypassing these boundaries; the full
+SQL/ACL parity scan remains required. Do not enable a fast path until
+all such paths and nested object ownership have been audited.

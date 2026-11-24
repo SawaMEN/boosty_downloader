@@ -491,12 +491,15 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 		case journal.AfterHash:
 			*j = next
 			s.notifySQLiteMedia()
-			return next, nil
+			return cloneStorageJob(next), nil
 		default:
 			s.primaryFatal = errors.New("archive revision restore ended with unknown metadata generation")
 			return Job{}, s.primaryFatal
 		}
 	}
+	// The physical publication can commit despite a late error. Invalidate
+	// before writing its journal, not only on a successful return.
+	s.invalidateMetadataEpochLocked()
 	if err := writeRevisionRestoreJournal(s.root, journal); err != nil {
 		// writeSyncedMetadata may have published the journal before returning
 		// fsync failure; recover it rather than unconditionally discarding it.
@@ -580,7 +583,7 @@ func (s *Storage) restoreArchiveRevision(owner, id, rev string) (Job, error) {
 	}
 	_ = s.pruneArchiveRevisionsLocked(next)
 	s.notifySQLiteMedia()
-	return next, nil
+	return cloneStorageJob(next), nil
 }
 
 func revisionRestoreManifestDigest(dir, author, post string) (string, error) {

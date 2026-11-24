@@ -189,6 +189,7 @@ func jsonUnmarshalImports(raw []byte, into *map[string]*AuthorImport) error {
 }
 
 func (s *Storage) saveImportsLocked() error {
+	s.invalidateMetadataEpochLocked()
 	if s.primary != nil {
 		return s.saveSQLitePrimaryLocked()
 	}

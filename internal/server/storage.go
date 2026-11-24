@@ -23,6 +23,7 @@ type Storage struct {
 	archiveUpdateMu               sync.Mutex
 	root                          string
 	key                           []byte
+	metadataMutationEpoch         uint64 // process-local conservative invalidation, protected by mu
 	jobs                          map[string]*Job
 	authors                       map[string][]string
 	imports                       map[string]*AuthorImport
@@ -228,6 +229,7 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 func (s *Storage) saveJobsLocked() error {
+	s.invalidateMetadataEpochLocked()
 	if s.primary != nil {
 		return s.saveSQLitePrimaryLocked()
 	}

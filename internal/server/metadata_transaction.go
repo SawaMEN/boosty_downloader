@@ -277,6 +277,7 @@ func writeMetadataPair(root string, jobs, imports []byte) error {
 }
 
 func (s *Storage) saveJobsImportsLocked() error {
+	s.invalidateMetadataEpochLocked()
 	if s.primary != nil {
 		return s.saveSQLitePrimaryLocked()
 	}
