@@ -57,6 +57,9 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 	if root == "" || m == nil {
 		return errors.New("SQL primary transaction needs data directory and open SQLite")
 	}
+	if err := recoverMetadataPair(root); err != nil {
+		return fmt.Errorf("previous JSON transaction could not be recovered: %w", err)
+	}
 	if err := recoverSQLitePrimaryCommitLocked(root); err != nil {
 		return fmt.Errorf("previous SQL primary transaction could not be recovered: %w", err)
 	}
@@ -132,7 +135,7 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 	// SQL has now committed. Never undo its new ACLs merely because a JSON
 	// mirror write or cleanup failed. The durable primary journal will
 	// complete the mirror before any subsequent service startup.
-	if err := writeMetadataPair(root, afterJobs, afterImports); err != nil {
+	if err := publishSQLitePrimaryMirrors(root, journal, hooks); err != nil {
 		return err
 	}
 	if hooks != nil && hooks.checkpoint != nil {
@@ -147,6 +150,64 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 		return err
 	}
 	return nil
+}
+
+// publishSQLitePrimaryMirrors runs only after a durable SQL commit with a
+// durable SQL intent. The intent itself protects both atomic renames, so a
+// second full JSON journal is unnecessary. Validate BOTH files before writing
+// either and skip an exact after-image, including an unchanged mirror.
+func publishSQLitePrimaryMirrors(root string, journal sqlitePrimaryTransaction, hooks *sqlitePrimaryCommitHooks) error {
+	if _, err := os.Lstat(filepath.Join(root, metadataJournalName)); err == nil {
+		return errors.New("unexpected legacy JSON journal during SQL mirror publication")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	targets := []struct {
+		name    string
+		image   metadataImage
+		phase   string
+		current bool
+	}{
+		{name: "jobs.json", image: journal.Jobs, phase: "jobs-mirror"},
+		{name: "imports.json", image: journal.Imports, phase: "imports-mirror"},
+	}
+	for i := range targets {
+		target := &targets[i]
+		file, err := openArchiveRegular(root, target.name)
+		if err != nil {
+			return err
+		}
+		// The mirror must be one of two known lengths. Bound the read
+		// without allocating for a possibly unrelated, oversized file.
+		maxSize := max(len(target.image.Before), len(target.image.After))
+		raw, err := io.ReadAll(io.LimitReader(file, int64(maxSize)+1))
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		target.current = bytes.Equal(raw, target.image.After)
+		if !target.current && !bytes.Equal(raw, target.image.Before) {
+			return fmt.Errorf("SQL mirror diverged from transaction: %s", target.name)
+		}
+	}
+	for _, target := range targets {
+		if !target.current {
+			if err := writeSyncedMetadata(root, target.name, target.image.After); err != nil {
+				return err
+			}
+		}
+		if hooks != nil && hooks.checkpoint != nil {
+			if err := hooks.checkpoint(target.phase); err != nil {
+				return err
+			}
+		}
+	}
+	// A previous rename may have succeeded just before a directory fsync
+	// failure. Even when both images already match, sync before cleanup.
+	return syncMetadataDirectory(root)
 }
 
 // encodeSQLitePrimaryJournal checks the serialized size, including base64
@@ -254,16 +315,19 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 		return err
 	}
 	defer db.close()
-	beforeMatches := db.verifyJSONParity(context.Background(), beforeJobs, beforeImports) == nil
 	afterMatches := db.verifyJSONParity(context.Background(), afterJobs, afterImports) == nil
 	switch {
 	case afterMatches:
 		// A successful SQL commit, even one lost between the COMMIT return
 		// and the next line of Go, MUST roll forward the JSON mirror.
-		if err := writeMetadataPair(root, journal.Jobs.After, journal.Imports.After); err != nil {
+		// Older binaries may have left their nested JSON journal.
+		if err := recoverMetadataPair(root); err != nil {
 			return err
 		}
-	case beforeMatches:
+		if err := publishSQLitePrimaryMirrors(root, journal, nil); err != nil {
+			return err
+		}
+	case db.verifyJSONParity(context.Background(), beforeJobs, beforeImports) == nil:
 		// SQL did not commit. JSON must not have advanced; a mismatch
 		// indicates corruption or an uncooperative external writer.
 		for _, image := range []struct {

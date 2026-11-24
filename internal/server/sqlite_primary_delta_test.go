@@ -111,6 +111,8 @@ func TestSQLPrimaryDeltaSIGKILL(t *testing.T) {
 	}{
 		{"prepared", false},
 		{"sql-committed", true},
+		{"jobs-mirror", true},
+		{"imports-mirror", true},
 		{"json-committed", true},
 	} {
 		t.Run(tc.phase, func(t *testing.T) {
