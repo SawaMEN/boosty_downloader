@@ -54,13 +54,13 @@ type dashRepresentation struct {
 	Protections []struct{}       `xml:"ContentProtection"`
 }
 type dashTemplate struct {
-	Init                    *string `xml:"initialization,attr"`
-	Media                   *string `xml:"media,attr"`
-	StartNumber             *uint64 `xml:"startNumber,attr"`
-	Timescale               *uint64 `xml:"timescale,attr"`
-	Duration                *uint64 `xml:"duration,attr"`
-	PresentationTimeOffset  *uint64 `xml:"presentationTimeOffset,attr"`
-	Timeline                *struct {
+	Init                   *string `xml:"initialization,attr"`
+	Media                  *string `xml:"media,attr"`
+	StartNumber            *uint64 `xml:"startNumber,attr"`
+	Timescale              *uint64 `xml:"timescale,attr"`
+	Duration               *uint64 `xml:"duration,attr"`
+	PresentationTimeOffset *uint64 `xml:"presentationTimeOffset,attr"`
+	Timeline               *struct {
 		S []dashTimelineEntry `xml:"S"`
 	} `xml:"SegmentTimeline"`
 }
@@ -330,7 +330,7 @@ func resolveDASH(ctx context.Context, fetch mediaFetcher, raw string) (dashTrack
 	if len(p.Protections) > 0 {
 		return empty, nil, errors.New("DASH: DRM не поддерживается")
 	}
-	if p.Start != "" && p.Start != "PT0S" && p.Start != "PT0.0S" && p.Start != "PT0H0M0S" {
+	if p.Start != "" && (!mpdDurationPattern.MatchString(p.Start) || p.Start == "PT" || strings.ContainsAny(p.Start, "123456789")) {
 		return empty, nil, errors.New("DASH: ненулевой или неподдерживаемый Period@start")
 	}
 	durationText := p.Duration
