@@ -100,3 +100,36 @@ func TestStorageGuardEnforcesFreeReserveAndCancellation(t *testing.T) {
 		t.Fatal("cancellation ignored")
 	}
 }
+
+type chunkRecordingWriter struct {
+	sizes []int
+}
+
+func (w *chunkRecordingWriter) Write(p []byte) (int, error) {
+	w.sizes = append(w.sizes, len(p))
+	return len(p), nil
+}
+
+func TestGuardedCopyBoundsWriterTo(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 2*guardedCopyChunkBytes+17)
+	// bytes.Reader implements io.WriterTo; the old CopyBuffer path issued
+	// one write for the whole payload, ignoring the supplied buffer.
+	var out chunkRecordingWriter
+	n, err := guardedCopy(context.Background(), &out, bytes.NewReader(payload))
+	if err != nil || n != int64(len(payload)) {
+		t.Fatalf("copy: n=%d err=%v", n, err)
+	}
+	if len(out.sizes) != 3 || out.sizes[0] != guardedCopyChunkBytes ||
+		out.sizes[1] != guardedCopyChunkBytes || out.sizes[2] != 17 {
+		t.Fatalf("unbounded writes: %v", out.sizes)
+	}
+}
+
+func TestGuardedCopyCanceledEmptySource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	if n, err := guardedCopy(ctx, &out, strings.NewReader("")); n != 0 || err != context.Canceled {
+		t.Fatalf("canceled empty copy: n=%d err=%v", n, err)
+	}
+}

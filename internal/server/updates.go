@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,21 +42,24 @@ type updateStatus struct {
 	AutoApply bool   `json:"autoApply"`
 }
 
+const maxUpdateStatusBytes = 16 << 10
+
 func readUpdateStatus(path string) (updateStatus, error) {
 	var result updateStatus
-	info, err := os.Lstat(path)
+	file, err := openArchiveRegular(filepath.Dir(path), filepath.Base(path))
 	if os.IsNotExist(err) {
 		return updateStatus{State: "not_checked", Detail: "Служба проверки обновлений ещё не запускалась"}, nil
 	}
 	if err != nil {
 		return result, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > 16<<10 {
-		return result, errors.New("неверный размер или тип журнала обновлений")
-	}
-	b, err := os.ReadFile(path)
+	defer file.Close()
+	b, err := io.ReadAll(io.LimitReader(file, maxUpdateStatusBytes+1))
 	if err != nil {
 		return result, err
+	}
+	if len(b) > maxUpdateStatusBytes {
+		return result, errors.New("неверный размер журнала обновлений")
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
 		return updateStatus{}, errors.New("повреждён журнал обновлений")

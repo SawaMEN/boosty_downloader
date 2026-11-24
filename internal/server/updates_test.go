@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -115,5 +116,43 @@ func TestUpdateStatusRequiresAdmin(t *testing.T) {
 	handler.ServeHTTP(allowed, reqAs("GET", "/api/admin/updates", "", admin))
 	if allowed.Code != 200 || !strings.Contains(allowed.Body.String(), "not_checked") {
 		t.Fatalf("admin status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+}
+
+// A valid JSON document followed by whitespace must still respect the
+// byte limit, and symlinked parents must not bypass the no-follow open.
+func TestReadUpdateStatusBoundedAndNoFollow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "update-status.json")
+	payload := []byte(`{"state":"updated"}`)
+	exact := append(append([]byte(nil), payload...), []byte(strings.Repeat(" ", maxUpdateStatusBytes-len(payload)))...)
+	if err := os.WriteFile(path, exact, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := readUpdateStatus(path); err != nil || status.State != "updated" {
+		t.Fatalf("exact limit: %+v %v", status, err)
+	}
+	if err := os.WriteFile(path, append(exact, ' '), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUpdateStatus(path); err == nil {
+		t.Fatal("oversized valid JSON accepted")
+	}
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "linked-parent")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUpdateStatus(filepath.Join(link, "update-status.json")); err == nil {
+		t.Fatal("symlinked parent accepted")
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUpdateStatus(fifo); err == nil {
+		t.Fatal("FIFO accepted")
 	}
 }
