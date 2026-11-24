@@ -69,6 +69,8 @@ jobs:
         run: go test ./internal/server -run '^$' -bench '^BenchmarkImportPagePersistence$' -benchtime=1x -benchmem -count=1
       - name: JSON catalog allocation benchmark
         run: go test ./internal/server -run '^$' -bench '^BenchmarkCatalogJSONPage$' -benchtime=1x -benchmem -count=1
+      - name: SQL mirror validation benchmark
+        run: go test ./internal/server -run '^$' -bench '^BenchmarkSQLiteMirrorValidation$' -benchtime=1x -benchmem -count=1
       - name: SQL metadata scale benchmark
         run: go test ./internal/server -run '^$' -bench '^BenchmarkSQLPrimaryLibraryGuard$' -benchtime=1x -benchmem -count=1
       - name: Docker image build

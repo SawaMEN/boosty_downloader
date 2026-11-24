@@ -174,21 +174,17 @@ func publishSQLitePrimaryMirrors(root string, journal sqlitePrimaryTransaction, 
 		if err != nil {
 			return err
 		}
-		// The mirror must be one of two known lengths. Bound the read
-		// without allocating for a possibly unrelated, oversized file.
-		maxSize := max(len(target.image.Before), len(target.image.After))
-		raw, err := io.ReadAll(io.LimitReader(file, int64(maxSize)+1))
+		// Compare exact bytes in bounded chunks; neither mirror needs
+		// another full-sized buffer just to establish its generation.
+		current, err := matchSQLiteMirror(file, target.image.Before, target.image.After)
 		closeErr := file.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("SQL mirror %s: %w", target.name, err)
 		}
 		if closeErr != nil {
 			return closeErr
 		}
-		target.current = bytes.Equal(raw, target.image.After)
-		if !target.current && !bytes.Equal(raw, target.image.Before) {
-			return fmt.Errorf("SQL mirror diverged from transaction: %s", target.name)
-		}
+		target.current = current
 	}
 	for _, target := range targets {
 		if !target.current {

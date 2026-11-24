@@ -44,14 +44,19 @@ func sqlitePrimaryMakeDelta(img metadataImage) (sqlitePrimaryDeltaImage, bool) {
 	if !ok || !img.Existed {
 		return sqlitePrimaryDeltaImage{}, false
 	}
-	after, ok := sqlitePrimaryCanonicalRows(img.After)
-	if !ok {
-		return sqlitePrimaryDeltaImage{}, false
-	}
 	out := sqlitePrimaryDeltaImage{
 		OldHash: img.OldHash,
 		NewHash: img.NewHash,
 		Rows:    make(map[string]sqlitePrimaryRowDelta),
+	}
+	// Before is already proven canonical. An identical after-image
+	// needs neither a second decode/encode nor a row-by-row comparison.
+	if bytes.Equal(img.Before, img.After) {
+		return out, true
+	}
+	after, ok := sqlitePrimaryCanonicalRows(img.After)
+	if !ok {
+		return sqlitePrimaryDeltaImage{}, false
 	}
 	for id, old := range before {
 		next := after[id]
