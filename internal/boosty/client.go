@@ -73,44 +73,6 @@ func validateMediaURL(raw string) error {
 	}
 	return nil
 }
-func safeMediaClient() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = nil
-	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		dialer := &net.Dialer{Timeout: 12 * time.Second}
-		var last error
-		for _, ip := range ips {
-			if !permittedIP(ip.IP) {
-				continue
-			}
-			c, e := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
-			if e == nil {
-				return c, nil
-			}
-			last = e
-		}
-		if last != nil {
-			return nil, last
-		}
-		return nil, errors.New("сетевой адрес запрещён")
-	}
-	tr.ResponseHeaderTimeout = 25 * time.Second
-	tr.MaxIdleConnsPerHost = 4
-	return &http.Client{Transport: tr, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 4 {
-			return errors.New("слишком много переадресаций")
-		}
-		return validateMediaURL(req.URL.String())
-	}}
-}
 
 type Tokens struct {
 	AccessToken  string `json:"accessToken"`
@@ -250,6 +212,18 @@ var errCredentialsChanged = errors.New("учётные данные Boosty из�
 func New(tokens Tokens, save func(Tokens) error) *Client {
 	return &Client{tokens: tokens, save: save, api: safeMediaClient(), media: safeMediaClient(), apiBase: "https://api.boosty.to"}
 }
+
+// CloseIdleConnections releases both owner-local HTTP pools without
+// interrupting active requests or changing credentials.
+func (c *Client) CloseIdleConnections() {
+	if c.api != nil {
+		c.api.CloseIdleConnections()
+	}
+	if c.media != nil {
+		c.media.CloseIdleConnections()
+	}
+}
+
 func (c *Client) SetTokens(t Tokens) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
