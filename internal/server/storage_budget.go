@@ -41,12 +41,27 @@ func withStorageBudget(ctx context.Context, root, owner string, minFreeGiB, maxU
 }
 
 func userStoredBytes(root, owner string) (int64, error) {
-	if !safeArchivePart(owner) {
-		return 0, errors.New("неверный идентификатор владельца архива")
+	return ownerStorageTreeBytes(context.Background(), root, "library", owner)
+}
+
+// Count logical bytes by pathname, including hardlinks and staging files.
+// Do not traverse a symlink in the library/revisions parent hierarchy.
+func ownerStorageTreeBytes(ctx context.Context, root, tree, owner string) (int64, error) {
+	if !safeArchivePart(owner) || (tree != "library" && tree != "revisions") {
+		return 0, errors.New("неверный путь хранилища пользователя")
 	}
-	path := filepath.Join(root, "library", owner)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	path := filepath.Join(root, tree, owner)
+	if info, err := purgeSafePath(root, path); err != nil || info == nil {
+		return 0, err
+	}
 	var total int64
 	err := filepath.WalkDir(path, func(_ string, item os.DirEntry, err error) error {
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -193,9 +208,11 @@ func guardedCopy(ctx context.Context, dst io.Writer, src io.Reader) (int64, erro
 }
 
 type storageOwnerUsage struct {
-	Username string `json:"username"`
-	Bytes    int64  `json:"bytes"`
-	Error    string `json:"error,omitempty"`
+	Username      string `json:"username"`
+	Bytes         int64  `json:"bytes"`
+	Error         string `json:"error,omitempty"`
+	RevisionBytes int64  `json:"revisionBytes"`
+	RevisionError string `json:"revisionError,omitempty"`
 }
 
 // Admin-only inventory. Logical owner sizes include hardlink-shared files;
@@ -212,10 +229,18 @@ func (a *App) adminStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	owners := make([]storageOwnerUsage, 0)
 	for _, account := range a.accounts.listUsers() {
-		used, err := userStoredBytes(a.store.root, account.ID)
+		used, err := ownerStorageTreeBytes(r.Context(), a.store.root, "library", account.ID)
 		entry := storageOwnerUsage{Username: account.Username, Bytes: used}
 		if err != nil {
 			entry.Error = "ошибка чтения каталога"
+		}
+		revisionBytes, revisionErr := ownerStorageTreeBytes(r.Context(), a.store.root, "revisions", account.ID)
+		entry.RevisionBytes = revisionBytes
+		if revisionErr != nil {
+			entry.RevisionError = "ошибка чтения истории версий"
+		}
+		if r.Context().Err() != nil {
+			return
 		}
 		owners = append(owners, entry)
 	}

@@ -267,7 +267,10 @@ async function loadAdminStorage(){
     const data=await api('/api/admin/storage');
     const format=bytes=>Number.isFinite(Number(bytes))?(Number(bytes)/(1024**3)).toFixed(2)+' ГиБ':'—';
     target.replaceChildren(text('strong','Всего: '+format(data.totalBytes)+' · свободно: '+format(data.freeBytes)));
-    for(const u of data.users||[]){target.append(text('p',u.username+' · '+(u.error||format(u.bytes)),'muted small'))}
+    for(const u of data.users||[]){
+      const history=u.revisionError||((u.revisionBytes==null)?'—':format(u.revisionBytes));
+      target.append(text('p',u.username+' · библиотека: '+(u.error||format(u.bytes))+' · история: '+history,'muted small'))
+    }
     if(Number(data.freeBytes)<Number(data.minFreeGiB)*1024**3)target.append(text('p','Свободное место ниже заданного резерва. Новые загрузки будут приостановлены.','error'));
   }catch(e){target.replaceChildren(text('p',e.message,'error'))}
 }
