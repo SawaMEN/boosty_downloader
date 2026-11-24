@@ -133,7 +133,7 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 		b, metaErr := os.ReadFile(sidecar)
 		if metaErr != nil || json.Unmarshal(b, &state) != nil || state.Validator == "" || state.Total <= existing || existing < 0 || existing >= maxArchiveMediaSize {
 			existing = 0
-			if err := os.Remove(tmp); err != nil {
+			if err := discardMediaPartial(ctx, tmp); err != nil {
 				return 0, "", err
 			}
 			_ = os.Remove(sidecar)
@@ -200,7 +200,11 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 		return 0, "", errors.New("Boosty и CDN сообщили разные размеры медиа")
 	}
 	if existing == 0 {
-		// Never reuse the validator of a different HTTP representation.
+		// Never truncate a previously charged partial in place. Discard
+		// it first and credit only bytes charged by this recovery scope.
+		if err := discardMediaPartial(ctx, tmp); err != nil {
+			return 0, "", err
+		}
 		_ = os.Remove(sidecar)
 		state = partialMedia{Validator: usableValidator(res.Header), Total: total}
 		if state.Validator != "" && state.Total > 0 {
@@ -234,7 +238,7 @@ func downloadFile(ctx context.Context, clientMedia mediaFetcher, raw, dest strin
 	}
 	size := existing + n
 	if size > maxArchiveMediaSize {
-		_ = os.Remove(tmp)
+		_ = discardMediaPartial(ctx, tmp)
 		_ = os.Remove(sidecar)
 		return 0, "", errors.New("медиа превышает предел 10 ГиБ")
 	}

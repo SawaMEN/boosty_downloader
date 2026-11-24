@@ -225,7 +225,7 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 		}
 		name := prefix + ".mp4"
 		output := filepath.Join(dir, name)
-		if err := checkStorageBudget(ctx, stagedBytes+maxArchiveMediaSize-budget); err != nil {
+		if err := checkStorageBudget(ctx, maxArchiveMediaSize-budget); err != nil {
 			return 0, "", err
 		}
 		args = append(args, "-c", "copy", "-movflags", "+faststart", "-y", output)
@@ -235,6 +235,9 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 		info, err := os.Stat(output)
 		if err != nil || info.Size() <= 0 || info.Size() > maxArchiveMediaSize-stagedBytes {
 			return 0, "", errors.New("DASH: недопустимый размер периода")
+		}
+		if err := chargeIntermediateMediaOutput(ctx, info.Size()); err != nil {
+			return 0, "", err
 		}
 		stagedBytes += info.Size()
 		probeCtx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -255,7 +258,7 @@ func archiveDASHPeriods(ctx context.Context, fetch mediaFetcher, plans []dashPer
 	if err := os.WriteFile(listPath, []byte(list.String()), 0600); err != nil {
 		return 0, "", err
 	}
-	if err := checkStorageBudget(ctx, stagedBytes*2); err != nil {
+	if err := checkStorageBudget(ctx, stagedBytes); err != nil {
 		return 0, "", err
 	}
 	output := filepath.Join(dir, "remux.mp4")
