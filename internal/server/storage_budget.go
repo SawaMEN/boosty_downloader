@@ -160,6 +160,14 @@ func (w guardedWriter) Write(p []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
+	// The process-wide gate covers the physical free-space check and the
+	// actual write, including writers whose policy currently has no quota.
+	// Network reads happen outside this gate. Acquire it before budget.mu.
+	release, err := acquireMediaDiskWrite(w.ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	budget, _ := w.ctx.Value(storageBudgetKey{}).(*storageBudget)
 	if budget == nil {
 		return w.out.Write(p)

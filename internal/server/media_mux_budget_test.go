@@ -66,3 +66,30 @@ func TestBoundedMediaMuxCancellation(t *testing.T) {
 		t.Fatalf("cancellation lost: %v", err)
 	}
 }
+
+// The longer rendition runner shares the same logical quota and output
+// enforcement even when the encoder writes more than one polling interval
+// would normally observe.
+func TestBoundedRenditionRejectsQuotaOverflow(t *testing.T) {
+	root := t.TempDir()
+	ctx := withStorageBudget(context.Background(), root, "owner", 0, 1)
+	b := ctx.Value(storageBudgetKey{}).(*storageBudget)
+	b.initialized, b.used, b.maxUser = true, 7, 10
+	output := filepath.Join(root, "rendition.mp4")
+	err := runBoundedMediaMuxFor(ctx, "/bin/sh", []string{"-c", "printf 1234 > \"$1\"", "fixture", output}, output, maxArchiveMediaSize, time.Second)
+	if !errors.Is(err, errMediaMuxLimit) {
+		t.Fatalf("rendition exceeded remaining quota: %v", err)
+	}
+	if b.used != 7 {
+		t.Fatal("failed rendition charged logical quota")
+	}
+}
+
+func TestBoundedRenditionHonorsTimeout(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "rendition.mp4")
+	err := runBoundedMediaMuxFor(context.Background(), "/bin/sh",
+		[]string{"-c", "while :; do :; done"}, output, maxArchiveMediaSize, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("rendition timeout lost: %v", err)
+	}
+}

@@ -81,6 +81,12 @@ func checkMediaMuxOutput(ctx context.Context, path string, limit int64, finished
 // timeout. A final check catches a fast write between polling intervals.
 // Polling bounds detection latency, not the exact maximum bytes written.
 func runBoundedMediaMux(ctx context.Context, ffmpeg string, args []string, output string, maximum int64) error {
+	return runBoundedMediaMuxFor(ctx, ffmpeg, args, output, maximum, 30*time.Minute)
+}
+
+// Rendition encoding uses the same output checks as HLS/DASH remuxing,
+// but preserves its existing longer execution timeout.
+func runBoundedMediaMuxFor(ctx context.Context, ffmpeg string, args []string, output string, maximum int64, timeout time.Duration) error {
 	limit, err := mediaMuxOutputLimit(ctx, maximum)
 	if err != nil {
 		return err
@@ -88,7 +94,7 @@ func runBoundedMediaMux(ctx context.Context, ffmpeg string, args []string, outpu
 	if _, err := os.Lstat(output); !os.IsNotExist(err) {
 		return errors.New("FFmpeg: временный выход уже существует или недоступен")
 	}
-	muxCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	muxCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(muxCtx, ffmpeg, args...)
 	// Do not buffer arbitrary subprocess diagnostics in memory or expose
