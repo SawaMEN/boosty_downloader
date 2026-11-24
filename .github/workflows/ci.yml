@@ -135,7 +135,7 @@ jobs:
           cd internal/server
           TMPDIR="$scratch" BD_TEST_SQLITE_TMPFS="$scratch" \
             "$RUNNER_TEMP/boosty-sqlite-enospc.test" -test.v -test.timeout=2m \
-            -test.run '^(TestSQLiteShadowRestorePhysicalENOSPC|TestArchiveMediaPhysicalENOSPC)$'
+            -test.run '^(TestSQLiteShadowRestorePhysicalENOSPC|TestArchiveMediaPhysicalENOSPC|TestSQLPrimaryMirrorPhysicalENOSPC)$'
 
   debian-runtime-smoke:
     needs: tests
