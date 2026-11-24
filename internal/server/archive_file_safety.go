@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -110,5 +111,11 @@ func serveArchiveRegular(w http.ResponseWriter, r *http.Request, base, relative 
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, no-store")
+	if relative != "index.html" {
+		// Uploaded attachments are not trusted HTML, even if their names
+		// look like ordinary media. Never allow MIME sniffing to promote them.
+		setIsolatedMediaHeaders(w.Header(), filepath.Base(relative),
+			mime.TypeByExtension(strings.ToLower(filepath.Ext(relative))), "", true)
+	}
 	http.ServeContent(w, r, filepath.Base(relative), info.ModTime(), file)
 }
