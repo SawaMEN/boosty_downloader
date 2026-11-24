@@ -16,7 +16,7 @@ import (
 
 // An SQL-first commit must be recoverable even if SIGKILL happens after the
 // SQLite commit but before the JSON mirror is durably published. The journal
-// holds both full before/after images, not caller-controlled file paths.
+// holds exact before/after hashes with row deltas or full legacy images.
 // This transaction layer is not yet connected to live Storage writes.
 const sqlitePrimaryTransactionName = ".sqlite-primary-transaction.json"
 const sqlitePrimaryTransactionVersion = 1
@@ -92,7 +92,7 @@ func sqlitePrimaryCommitMetadataWithLimit(root string, m *sqliteMetadata, jobs m
 		return fmt.Errorf("SQL before-image does not match existing JSON: %w", err)
 	}
 	journal := sqlitePrimaryTransaction{Version: sqlitePrimaryTransactionVersion, Jobs: jobImage, Imports: importImage}
-	raw, err := encodeSQLitePrimaryJournal(journal, limit)
+	raw, err := encodeSQLitePrimaryBestJournal(journal, limit)
 	if err != nil {
 		return err
 	}
@@ -209,8 +209,8 @@ func recoverSQLitePrimaryCommitLocked(root string) error {
 	if err != nil {
 		return err
 	}
-	var journal sqlitePrimaryTransaction
-	if err := json.Unmarshal(before, &journal); err != nil {
+	journal, err := decodeSQLitePrimaryJournal(root, before)
+	if err != nil {
 		return fmt.Errorf("malformed SQL primary journal: %w", err)
 	}
 	if journal.Version != sqlitePrimaryTransactionVersion {
